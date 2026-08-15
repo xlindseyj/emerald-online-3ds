@@ -33,6 +33,33 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 10
+      initContainers:
+        - name: migrate
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:15e140d0690d597e738b673355c400459425843f155078ad51628635275fb9b6
+          imagePullPolicy: IfNotPresent
+          command: ["node", "server/tools/migrate.mjs"]
+          envFrom:
+            - secretRef:
+                name: emerald-runtime
+          env:
+            - name: DATABASE_CA_PATH
+              value: /etc/emerald-db/ca.crt
+          volumeMounts:
+            - name: database-ca
+              mountPath: /etc/emerald-db
+              readOnly: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -56,7 +83,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: presence
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:726b5954592d3de14b580176bab1b64a83b0fa30c601433ef6b7123ead258132
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:15e140d0690d597e738b673355c400459425843f155078ad51628635275fb9b6
           imagePullPolicy: IfNotPresent
           command: ["node", "server/src/server.mjs"]
           ports:
@@ -77,6 +104,15 @@ spec:
               value: "30000"
             - name: HELLO_TIMEOUT_MS
               value: "5000"
+            - name: DATABASE_CA_PATH
+              value: /etc/emerald-db/ca.crt
+          envFrom:
+            - secretRef:
+                name: emerald-runtime
+          volumeMounts:
+            - name: database-ca
+              mountPath: /etc/emerald-db
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -103,7 +139,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: public-web
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:726b5954592d3de14b580176bab1b64a83b0fa30c601433ef6b7123ead258132
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:15e140d0690d597e738b673355c400459425843f155078ad51628635275fb9b6
           imagePullPolicy: IfNotPresent
           command: ["node", "web/install-server.mjs"]
           ports:
@@ -112,9 +148,9 @@ spec:
               protocol: TCP
           env:
             - name: PUBLIC_BASE_URL
-              value: https://pokemon.lws-workspace.com
+              value: https://emeraldonline3ds.com
             - name: GAME_PUBLIC_URL
-              value: wss://pokemon-server.lws-workspace.com/game
+              value: wss://live.emeraldonline3ds.com/game
             - name: GAME_UPSTREAM_HOST
               value: 127.0.0.1
             - name: GAME_UPSTREAM_PORT
@@ -152,6 +188,10 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+      volumes:
+        - name: database-ca
+          secret:
+            secretName: emerald-pg-ca
 ---
 apiVersion: v1
 kind: Service
@@ -190,6 +230,46 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
+    - host: emeraldonline3ds.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emerald-online
+                port:
+                  name: web
+    - host: www.emeraldonline3ds.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emerald-online
+                port:
+                  name: web
+    - host: live.emeraldonline3ds.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emerald-online
+                port:
+                  name: web
+    - host: game.emeraldonline3ds.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emerald-online
+                port:
+                  name: web
     - host: pokemon.lws-workspace.com
       http:
         paths:
@@ -276,3 +356,65 @@ spec:
   egress:
     - to:
         - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-and-backups
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lindseywebsolutions
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-operator
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: emerald-pg
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-kubernetes-api
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: emerald-pg
+  policyTypes: [Egress]
+  # CNPG's instance manager must reach the host-network Kubernetes API. In this
+  # cluster's Cilium/Flannel chaining mode, host traffic cannot be represented
+  # by a portable Kubernetes ipBlock after DNAT. This exception is confined to
+  # CNPG-managed pods; application and maintenance pods retain explicit egress.
+  egress:
+    - {}

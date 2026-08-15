@@ -28,7 +28,7 @@ test('gpSP replacement retains saves, Emerald memory reads, and online protocol'
   assert.match(gpspSource, /trainer-name-from-save/);
   assert.match(gpspSource, /\\"type\\":\\"hello\\"/);
   assert.match(gpspSource, /\\"type\\":\\"state\\"/);
-  assert.match(gpspSource, /\\"type\\":\\"snapshot\\"/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "snapshot"\)/);
   assert.match(gpspSource, /sendEmote/);
   assert.match(gpspSource, /openChat/);
   assert.match(gpspSource, /getaddrinfo\(serverHost/);
@@ -36,13 +36,16 @@ test('gpSP replacement retains saves, Emerald memory reads, and online protocol'
 });
 
 test('gpSP runtime uses authenticated WebSockets for the public Cloudflare endpoint', () => {
-  assert.match(gpspSource, /DEFAULT_HOST "pokemon-server\.lws-workspace\.com"/);
+  assert.match(gpspSource, /DEFAULT_HOST "live\.emeraldonline3ds\.com"/);
   assert.match(gpspSource, /DEFAULT_PORT 443/);
   assert.match(gpspSource, /MBEDTLS_SSL_VERIFY_REQUIRED/);
   assert.match(gpspSource, /mbedtls_ssl_set_hostname\(&tlsContext, serverHost\)/);
   assert.match(gpspSource, /Sec-WebSocket-Key/);
   assert.match(gpspSource, /Sec-WebSocket-Accept/);
   assert.match(gpspSource, /webSocketWriteFrame/);
+  assert.match(gpspSource, /parseJsonString/);
+  assert.match(gpspSource, /findJsonObjectEnd/);
+  assert.doesNotMatch(gpspSource, /strstr\(line, "\\\"type/);
   assert.match(gpspSource, /transport.*tcp/s);
   assert.match(gpspSource, /!strcmp\(serverHost, "192\.168\.0\.25"\).*serverPort == 3210/s);
 });

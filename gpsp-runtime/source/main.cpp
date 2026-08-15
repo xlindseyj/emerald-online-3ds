@@ -37,7 +37,9 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define ROM_PATH "sdmc:/3ds/emerald-online-3ds/emerald.gba"
 #define SAVE_PATH "sdmc:/3ds/emerald-online-3ds/emerald.sav"
 #define CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/online.cfg"
-#define DEFAULT_HOST "pokemon-server.lws-workspace.com"
+#define IDENTITY_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg"
+#define IDENTITY_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg.tmp"
+#define DEFAULT_HOST "live.emeraldonline3ds.com"
 #define DEFAULT_PORT 443
 #define DEFAULT_WEBSOCKET_PATH "/game"
 #define SOC_BUFFER_SIZE 0x100000
@@ -45,7 +47,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.3.2"
+#define APP_VERSION "0.4.0"
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -106,7 +108,11 @@ static char webSocketPath[128] = DEFAULT_WEBSOCKET_PATH;
 static char trainerName[13] = "Trainer";
 static bool trainerNameFromSave;
 static bool trainerIsGirl;
-static char sessionToken[33];
+static char identityId[37];
+static char identityToken[65];
+static char credentialId[37];
+static char identityFingerprint[11];
+static char recoveryCode[25];
 static char receiveBuffer[4097];
 static size_t receiveLength;
 static unsigned char webSocketBuffer[8192];
@@ -574,20 +580,51 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "session") && strlen(equals) == 32) strcpy(sessionToken, equals);
         else if (!strcmp(line, "page")) partyPage = !strcmp(equals, "party");
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
     }
     fclose(file);
-    // Packages created before the public deployment wrote this exact LAN
-    // endpoint without a transport field. Migrate only that historical
-    // default; deliberate custom LAN endpoints remain raw TCP compatible.
-    if (!transportConfigured && !strcmp(serverHost, "192.168.0.25") && serverPort == 3210) {
-        strcpy(serverHost, DEFAULT_HOST);
-        serverPort = DEFAULT_PORT;
-        strcpy(webSocketPath, DEFAULT_WEBSOCKET_PATH);
-        secureWebSocket = true;
-    } else if (!transportConfigured) secureWebSocket = serverPort == 443;
+    // Old/custom files without an explicit transport use TLS only on 443.
+    // Release packages always overwrite online.cfg with the public WSS route.
+    if (!transportConfigured) secureWebSocket = serverPort == 443;
+}
+
+static bool isHexString(const char* value, size_t length) {
+    if (strlen(value) != length) return false;
+    for (size_t i = 0; i < length; ++i)
+        if (!((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f') || (value[i] >= 'A' && value[i] <= 'F'))) return false;
+    return true;
+}
+
+static void loadIdentity(void) {
+    FILE* file = fopen(IDENTITY_PATH, "r");
+    if (!file) return;
+    char line[160];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '=');
+        if (!equals) continue;
+        *equals++ = 0;
+        if (!strcmp(line, "id") && strlen(equals) == 36) strcpy(identityId, equals);
+        else if (!strcmp(line, "token") && isHexString(equals, 64)) strcpy(identityToken, equals);
+        else if (!strcmp(line, "credential") && strlen(equals) == 36) strcpy(credentialId, equals);
+        else if (!strcmp(line, "fingerprint") && strlen(equals) == 10) strcpy(identityFingerprint, equals);
+    }
+    fclose(file);
+    if (!identityId[0] || !identityToken[0] || !credentialId[0]) {
+        identityId[0] = identityToken[0] = credentialId[0] = identityFingerprint[0] = 0;
+    }
+}
+
+static bool saveIdentity(void) {
+    if (!identityId[0] || !identityToken[0] || !credentialId[0]) return false;
+    FILE* file = fopen(IDENTITY_TEMP_PATH, "w");
+    if (!file) return false;
+    bool ok = fprintf(file, "id=%s\ntoken=%s\ncredential=%s\nfingerprint=%s\n", identityId, identityToken, credentialId, identityFingerprint) > 0;
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    if (fclose(file)) ok = false;
+    if (!ok || rename(IDENTITY_TEMP_PATH, IDENTITY_PATH)) { remove(IDENTITY_TEMP_PATH); return false; }
+    return true;
 }
 
 static void onlineDisconnect(void) {
@@ -623,9 +660,11 @@ static void onlineConnected(void) {
     onlineMode = ONLINE_ACTIVE;
     onlineLastError = 0;
     lastPing = osGetTime();
-    char hello[192];
-    if (sessionToken[0]) snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"version\":1,\"name\":\"%s\",\"session\":\"%s\",\"avatar\":\"%s\"}\n", trainerName, sessionToken, trainerIsGirl ? "girl" : "boy");
-    else snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"version\":1,\"name\":\"%s\",\"avatar\":\"%s\"}\n", trainerName, trainerIsGirl ? "girl" : "boy");
+    char hello[320];
+    if (identityId[0] && identityToken[0])
+        snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"version\":2,\"name\":\"%s\",\"identity\":\"%s\",\"token\":\"%s\",\"avatar\":\"%s\"}\n", trainerName, identityId, identityToken, trainerIsGirl ? "girl" : "boy");
+    else
+        snprintf(hello, sizeof(hello), "{\"type\":\"enroll\",\"version\":2,\"name\":\"%s\",\"avatar\":\"%s\",\"recovery\":true}\n", trainerName, trainerIsGirl ? "girl" : "boy");
     onlineSend(hello);
 }
 
@@ -660,57 +699,160 @@ static void onlineConnect(void) {
     } else onlineFail(errno);
 }
 
+static const char* skipJsonSpace(const char* at, const char* end) {
+    while (at < end && (*at == ' ' || *at == '\t' || *at == '\r' || *at == '\n')) ++at;
+    return at;
+}
+
+// Decode a bounded JSON string, including escapes, without reading past the
+// current protocol line/object. Server fields are ASCII, so non-ASCII \u
+// escapes are represented as '?' rather than being copied as ambiguous bytes.
+static bool parseJsonString(const char** cursor, const char* end, char* output, size_t size) {
+    const char* at = *cursor;
+    if (at >= end || *at++ != '"' || !size) return false;
+    size_t written = 0;
+    while (at < end) {
+        unsigned char value = (unsigned char) *at++;
+        if (value == '"') { output[written] = 0; *cursor = at; return true; }
+        if (value < 0x20) return false;
+        if (value == '\\') {
+            if (at >= end) return false;
+            char escape = *at++;
+            if (escape == '"' || escape == '\\' || escape == '/') value = (unsigned char) escape;
+            else if (escape == 'b') value = '\b';
+            else if (escape == 'f') value = '\f';
+            else if (escape == 'n') value = '\n';
+            else if (escape == 'r') value = '\r';
+            else if (escape == 't') value = '\t';
+            else if (escape == 'u') {
+                if (end - at < 4) return false;
+                unsigned codepoint = 0;
+                for (int i = 0; i < 4; ++i) {
+                    char digit = *at++;
+                    codepoint <<= 4;
+                    if (digit >= '0' && digit <= '9') codepoint |= digit - '0';
+                    else if (digit >= 'a' && digit <= 'f') codepoint |= digit - 'a' + 10;
+                    else if (digit >= 'A' && digit <= 'F') codepoint |= digit - 'A' + 10;
+                    else return false;
+                }
+                value = codepoint >= 0x20 && codepoint <= 0x7e ? (unsigned char) codepoint : '?';
+            } else return false;
+        }
+        if (written + 1 >= size) return false;
+        output[written++] = (char) value;
+    }
+    return false;
+}
+
+static const char* findJsonValue(const char* json, const char* end, const char* key) {
+    const char* at = json;
+    while (at < end) {
+        if (*at != '"') { ++at; continue; }
+        // This scratch value is used while walking both keys and preceding
+        // string values. It must hold the protocol's longest allowed string
+        // (80-byte chat plus terminator) even when that value is not our key.
+        char candidate[96];
+        const char* after = at;
+        if (!parseJsonString(&after, end, candidate, sizeof(candidate))) return NULL;
+        const char* colon = skipJsonSpace(after, end);
+        if (colon < end && *colon == ':' && !strcmp(candidate, key)) return skipJsonSpace(colon + 1, end);
+        at = after;
+    }
+    return NULL;
+}
+
+static int jsonIntBounded(const char* json, const char* end, const char* key, int fallback) {
+    const char* value = findJsonValue(json, end, key);
+    if (!value || value >= end) return fallback;
+    char* parsedEnd = NULL;
+    long parsed = strtol(value, &parsedEnd, 10);
+    if (parsedEnd == value || parsedEnd > end) return fallback;
+    const char* delimiter = skipJsonSpace(parsedEnd, end);
+    if (delimiter < end && *delimiter != ',' && *delimiter != '}' && *delimiter != ']') return fallback;
+    return (int) parsed;
+}
+
 static int jsonInt(const char* line, const char* key, int fallback) {
-    char pattern[32];
-    snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-    const char* at = strstr(line, pattern);
-    return at ? strtol(at + strlen(pattern), NULL, 10) : fallback;
+    return jsonIntBounded(line, line + strlen(line), key, fallback);
+}
+
+static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size) {
+    const char* value = findJsonValue(json, end, key);
+    return value && parseJsonString(&value, end, output, size);
 }
 
 static bool jsonString(const char* line, const char* key, char* output, size_t size) {
-    char pattern[32];
-    snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-    const char* start = strstr(line, pattern);
-    if (!start) return false;
-    start += strlen(pattern);
-    const char* end = strchr(start, '"');
-    if (!end) return false;
-    size_t count = end - start;
-    if (count >= size) count = size - 1;
-    memcpy(output, start, count);
-    output[count] = 0;
-    return true;
+    return jsonStringBounded(line, line + strlen(line), key, output, size);
+}
+
+static bool jsonTypeIs(const char* line, const char* expected) {
+    char type[32] = {};
+    return jsonString(line, "type", type, sizeof(type)) && !strcmp(type, expected);
+}
+
+static const char* findJsonObjectEnd(const char* at, const char* end) {
+    if (at >= end || *at != '{') return NULL;
+    int depth = 0;
+    bool inString = false, escaped = false;
+    for (; at < end; ++at) {
+        char value = *at;
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (value == '\\') escaped = true;
+            else if (value == '"') inString = false;
+        } else if (value == '"') inString = true;
+        else if (value == '{') ++depth;
+        else if (value == '}' && --depth == 0) return at + 1;
+    }
+    return NULL;
 }
 
 static void parseOnlineLine(char* line) {
-    if (strstr(line, "\"type\":\"chat\"")) {
+    if (jsonTypeIs(line, "enrolled") || jsonTypeIs(line, "identity_recovered")) {
+        char id[37] = {}, token[65] = {}, credential[37] = {}, fingerprint[11] = {}, recovery[25] = {};
+        if (!jsonString(line, "id", id, sizeof(id)) || !jsonString(line, "token", token, sizeof(token)) ||
+            !jsonString(line, "credentialId", credential, sizeof(credential)) || !isHexString(token, 64)) return;
+        strcpy(identityId, id);
+        strcpy(identityToken, token);
+        strcpy(credentialId, credential);
+        if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
+        if (jsonString(line, "recoveryCode", recovery, sizeof(recovery))) strcpy(recoveryCode, recovery);
+        if (!saveIdentity()) onlineLastError = EIO;
+        return;
+    }
+    if (jsonTypeIs(line, "chat")) {
         jsonString(line, "name", lastChatName, sizeof(lastChatName));
         jsonString(line, "text", lastChatText, sizeof(lastChatText));
         return;
     }
-    if (strstr(line, "\"type\":\"leave\"")) {
+    if (jsonTypeIs(line, "leave")) {
         char id[37] = {};
         if (!jsonString(line, "id", id, sizeof(id))) return;
         for (int i = 0; i < remoteCount; ++i) if (!strcmp(remoteTrainers[i].id, id)) remoteTrainers[i] = remoteTrainers[--remoteCount];
         return;
     }
-    if (strstr(line, "\"type\":\"snapshot\"")) {
+    if (jsonTypeIs(line, "snapshot")) {
         RemoteTrainer updated[8] = {};
         int updatedCount = 0;
-        char* player = strstr(line, "\"players\":[");
-        while (player && updatedCount < 8 && (player = strstr(player, "\"id\":\""))) {
-            char* objectEnd = strchr(player, '}');
+        const char* lineEnd = line + strlen(line);
+        const char* player = findJsonValue(line, lineEnd, "players");
+        if (player && player < lineEnd && *player == '[') ++player;
+        while (player && updatedCount < 8) {
+            player = skipJsonSpace(player, lineEnd);
+            if (player >= lineEnd || *player == ']') break;
+            if (*player != '{') { player = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(player, lineEnd);
             if (!objectEnd) break;
             RemoteTrainer* trainer = &updated[updatedCount];
-            if (!jsonString(player, "id", trainer->id, sizeof(trainer->id)) ||
-                !jsonString(player, "name", trainer->name, sizeof(trainer->name))) break;
-            trainer->x = jsonInt(player, "x", 0);
-            trainer->y = jsonInt(player, "y", 0);
+            if (!jsonStringBounded(player, objectEnd, "id", trainer->id, sizeof(trainer->id)) ||
+                !jsonStringBounded(player, objectEnd, "name", trainer->name, sizeof(trainer->name))) break;
+            trainer->x = jsonIntBounded(player, objectEnd, "x", 0);
+            trainer->y = jsonIntBounded(player, objectEnd, "y", 0);
             char direction[8] = {};
-            jsonString(player, "facing", direction, sizeof(direction));
+            jsonStringBounded(player, objectEnd, "facing", direction, sizeof(direction));
             trainer->facing = !strcmp(direction, "up") ? 2 : !strcmp(direction, "left") ? 3 : !strcmp(direction, "right") ? 4 : 1;
             char avatar[8] = {};
-            if (jsonString(player, "avatar", avatar, sizeof(avatar))) trainer->isGirl = !strcmp(avatar, "girl");
+            if (jsonStringBounded(player, objectEnd, "avatar", avatar, sizeof(avatar))) trainer->isGirl = !strcmp(avatar, "girl");
             for (int old = 0; old < remoteCount; ++old) {
                 if (!strcmp(remoteTrainers[old].id, trainer->id)) {
                     trainer->emote = remoteTrainers[old].emote;
@@ -719,13 +861,15 @@ static void parseOnlineLine(char* line) {
                 }
             }
             ++updatedCount;
-            player = objectEnd + 1;
+            player = objectEnd;
+            player = skipJsonSpace(player, lineEnd);
+            if (player < lineEnd && *player == ',') ++player;
         }
         memcpy(remoteTrainers, updated, sizeof(updated));
         remoteCount = updatedCount;
         return;
     }
-    if (!strstr(line, "\"type\":\"presence\"") && !strstr(line, "\"type\":\"state\"") && !strstr(line, "\"type\":\"emote\"")) return;
+    if (!jsonTypeIs(line, "presence") && !jsonTypeIs(line, "state") && !jsonTypeIs(line, "emote")) return;
     char id[37] = {}, name[13] = {}, facing[8] = {};
     if (!jsonString(line, "id", id, sizeof(id))) return;
     int index = -1;
@@ -943,11 +1087,13 @@ static void drawBottom(void) {
     C2D_DrawRectSolid(205, 7, 0, 103, 24, statusColor);
     drawText(225, 12, .42f, C2D_Color32(255,255,255,255), "%s", status);
     C2D_DrawRectSolid(10, 46, 0, 300, 43, C2D_Color32(25,74,54,255));
-    drawText(20, 52, .43f, C2D_Color32(160,232,255,255), "%s", trainerName);
+        drawText(20, 52, .43f, C2D_Color32(160,232,255,255), "%s", trainerName);
+        if (identityFingerprint[0]) drawText(126, 52, .32f, C2D_Color32(185,215,205,255), "ID %s", identityFingerprint);
     drawText(250, 52, .43f, C2D_Color32(200,220,220,255), "%u FPS", measuredFps);
     if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), "MAP %u-%u   TILE %d,%d", presence.mapGroup, presence.mapNum, presence.x, presence.y);
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
-    if (onlineMode != ONLINE_ACTIVE) drawText(75, 91, .32f, C2D_Color32(180,205,200,255), "%s:%u  E%d", serverHost, serverPort, onlineLastError);
+        if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
+        else if (onlineMode != ONLINE_ACTIVE) drawText(75, 91, .32f, C2D_Color32(180,205,200,255), "%s:%u  E%d", serverHost, serverPort, onlineLastError);
     C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     drawText(20, 110, .38f, C2D_Color32(160,232,255,255), "NEARBY  %d", remoteCount);
@@ -1086,7 +1232,8 @@ static void uploadVideo(void) {
 int main(void) {
     remove(DEBUG_LOG_PATH);
     debugStage("main");
-    loadConfig();
+        loadConfig();
+        loadIdentity();
     debugStage("config-loaded");
     socBuffer = (uint32_t*) memalign(0x1000, SOC_BUFFER_SIZE);
     if (!socBuffer || R_FAILED(socInit(socBuffer, SOC_BUFFER_SIZE))) {

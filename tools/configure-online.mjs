@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 const root = path.resolve(import.meta.dirname, '..');
 const configPath = process.env.ONLINE_CONFIG_PATH ?? path.join(root, 'generated', 'sd-card', '3ds', 'emerald-online-3ds', 'online.cfg');
-const server = process.env.GAME_PUBLIC_HOST ?? 'pokemon-server.lws-workspace.com';
+const server = process.env.GAME_PUBLIC_HOST ?? 'live.emeraldonline3ds.com';
 const port = Number(process.env.GAME_PUBLIC_PORT ?? 443);
 const transport = process.env.GAME_TRANSPORT ?? 'wss';
 const webSocketPath = process.env.GAME_WEBSOCKET_PATH ?? '/game';
@@ -26,9 +25,9 @@ values.set('port', String(port));
 values.set('transport', transport);
 values.set('path', webSocketPath);
 if (!values.has('name')) values.set('name', 'Trainer');
-if (!/^[0-9a-f]{32}$/i.test(values.get('session') ?? '')) values.set('session', crypto.randomUUID().replaceAll('-', ''));
-
-const preferredOrder = ['server', 'port', 'transport', 'path', 'name', 'session', 'page', 'dynarec'];
+// v2 stores its server-issued credential in identity.cfg, never online.cfg.
+values.delete('session');
+const preferredOrder = ['server', 'port', 'transport', 'path', 'name', 'page', 'dynarec'];
 const lines = [];
 for (const key of preferredOrder) if (values.has(key)) lines.push(`${key}=${values.get(key)}`);
 for (const [key, value] of values) if (!preferredOrder.includes(key)) lines.push(`${key}=${value}`);

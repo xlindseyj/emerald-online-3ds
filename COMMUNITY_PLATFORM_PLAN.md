@@ -10,6 +10,12 @@ The revised plan avoids three major risks:
 - Pairing failures cannot lock users out of essential support.
 - The first forum release excludes file uploads and other high-risk features.
 
+## Execution status
+
+- Gate 0: complete and published to the LindseyWebSolutions Gitea organization.
+- Gate 1: implementation and automated/live acceptance complete on 2026-08-15; the final physical 3DS WSS and SD-identity check remains the hardware handoff test.
+- Gates 2-5: not started. Gate 2 is next after the Gate 1 hardware result is recorded.
+
 ## Gate 0: Repository, Build, and Licensing
 
 - Move the Git worktree to the project root and capture all first-party source.
@@ -34,7 +40,7 @@ Acceptance: a clean clone produces the ROM-free CIA and server image using docum
 
 ### Database
 
-Use the installed CNPG operator with two instances, Longhorn storage, External Secrets, migrations, scheduled encrypted backups, and restore testing.
+Use the installed CNPG operator with two instances, Longhorn storage, External Secrets, migrations, scheduled backups, and restore testing. Object-level backup encryption is a separate infrastructure gate: the current MinIO service has no KMS, so do not claim encryption at rest until one is configured and a restore is repeated.
 
 Store:
 

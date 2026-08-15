@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { startServers } from '../server/src/server.mjs';
+import { MemoryIdentityStore } from '../server/src/identity-store.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const isWindows = process.platform === 'win32';
@@ -24,16 +25,16 @@ fs.mkdirSync(virtualSd, { recursive: true });
 fs.copyFileSync(privateRom, path.join(virtualSd, 'emerald.gba'));
 const privateAvatar = path.join(root, 'generated', 'sd-card', '3ds', 'emerald-online-3ds', 'avatars.t3x');
 if (fs.existsSync(privateAvatar)) fs.copyFileSync(privateAvatar, path.join(virtualSd, 'avatars.t3x'));
-const configuredSession = fs.readFileSync(privateConfig, 'utf8').match(/^session=([0-9a-f]{32})$/m)?.[1];
-if (!configuredSession) throw new Error('generated online.cfg has no valid stable session token');
 // Keep emulator validation local and deterministic. Azahar does not implement
 // the Luma kernel backdoor used by the hardware dynarec, so use the interpreter.
 fs.writeFileSync(path.join(virtualSd, 'online.cfg'), [
   'server=127.0.0.1', 'port=3210', 'transport=tcp', 'path=/game',
-  'name=May', `session=${configuredSession}`, 'dynarec=disabled', ''
+  'name=May', 'dynarec=disabled', ''
 ].join('\n'));
+const virtualIdentity = path.join(virtualSd, 'identity.cfg');
+fs.rmSync(virtualIdentity, { force: true });
 
-const { presence, health } = await startServers();
+const { presence, health } = await startServers({ identityStore: new MemoryIdentityStore() });
 let display;
 if (!isWindows && !process.env.DISPLAY) {
   const xvfb = path.join(root, '.tools', 'xvfb', 'root', 'usr', 'bin', 'Xvfb');
@@ -66,6 +67,9 @@ try {
   if (!connections) throw new Error('runtime did not connect to the presence server within 15 seconds');
   if (!runtimeClient?.name) throw new Error('runtime connected but did not complete the hello handshake within 15 seconds');
   if (runtimeClient.name !== 'May') throw new Error(`runtime ignored configured trainer name (got ${runtimeClient.name})`);
+  if (!fs.existsSync(virtualIdentity)) throw new Error('runtime enrolled but did not persist its server-issued identity');
+  const identityConfig = fs.readFileSync(virtualIdentity, 'utf8');
+  if (!/^id=[0-9a-f-]{36}$/m.test(identityConfig) || !/^token=[0-9a-f]{64}$/m.test(identityConfig)) throw new Error('runtime persisted an invalid identity credential');
 
   const seenBeforeKeepalive = runtimeClient.seen;
   await new Promise(resolve => setTimeout(resolve, 11000));
@@ -96,7 +100,7 @@ try {
   ] })}\n`);
   await new Promise(resolve => setTimeout(resolve, 1500));
   if (child.exitCode !== null) throw new Error(`runtime exited after snapshot injection (${child.exitCode})`);
-  console.log(JSON.stringify({ ok: true, engine: isGpspRuntime ? 'gpSP-interpreter-smoke' : 'mGBA', emulatorPid: child.pid, connections, trainerName: runtimeClient.name, stableReconnectIdentity: true, stationaryKeepalive: true, automaticReconnect: true, stateRepublished: Boolean(runtimeClient.state), movementSnapshotsInjected: 2, chatInjected: true, emotesInjected: 4 }));
+  console.log(JSON.stringify({ ok: true, engine: isGpspRuntime ? 'gpSP-interpreter-smoke' : 'mGBA', emulatorPid: child.pid, connections, trainerName: runtimeClient.name, protocol: 2, serverIssuedIdentityPersisted: true, stableReconnectIdentity: true, stationaryKeepalive: true, automaticReconnect: true, stateRepublished: Boolean(runtimeClient.state), movementSnapshotsInjected: 2, chatInjected: true, emotesInjected: 4 }));
 } finally {
   child.kill();
   if (display) display.kill();

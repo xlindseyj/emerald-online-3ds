@@ -25,7 +25,9 @@
 - [x] Stationary-player keepalive, automatic reconnect, and state republish after transient drops
 - [x] Native lower-screen party summary with live nickname, level, and HP data
 - [x] Allowlisted, rate-limited same-map touch emotes with transient overworld indicators
-- [x] Private per-device reconnect tokens with stable opaque trainer IDs and duplicate-session replacement
+- [x] Server-issued protocol-v2 device credentials, one-time recovery, export, revocation, deletion, stable opaque IDs, and duplicate-session replacement
+- [x] Two-instance CNPG PostgreSQL with Longhorn, TLS, External Secrets, migrations, retention cleanup, and encrypted scheduled MinIO backups
+- [x] Production Cloudflare routes for `emeraldonline3ds.com` and `wss://live.emeraldonline3ds.com/game`
 - [x] Original HOME Menu icon/banner and full-resolution emerald-themed dual-screen presentation
 - [x] Hardware-oriented sparse OAM capture, 10 Hz network polling, retained lower UI, and direct one-pass top rendering
 - [x] Non-root container, Kubernetes TCP load-balancer manifest, health probes, resource limits, and graceful shutdown
@@ -37,9 +39,9 @@
 - [x] Local battle, party, inventory, progression, save, and audio through gpSP
 - [ ] Bottom-screen production UI expansion (bag and map; party, chat, and emotes are implemented)
 - [x] Remote trainer rendering foundation, interpolation, emotes, and rate-limited map chat
-- [ ] Authoritative battles/trades and durable authenticated session handling
-- [ ] Accounts, secure authentication, persistence database, moderation, TLS gateway
-- [ ] Operate the NAT-friendly Kubernetes deployment; add persistence, dashboards, backups, load tests, and abuse protection
+- [ ] Link battles/trades (feasibility spike must pass before invitations are exposed); durable device authentication is implemented
+- [ ] Browser pairing, forum authorization, reports, sanctions, and moderation UI; device identity, PostgreSQL, and TLS are implemented
+- [ ] Add service dashboards, load tests, and a MinIO KMS; the NAT-friendly Kubernetes deployment, persistence, tested compressed backups, and connection/rate limits are operating, but backup encryption at rest is not yet claimed
 - [ ] Confirm May plus authentic avatars in a physical two-client test, test New 3DS, and finalize release packaging (Brendan is confirmed on Old 3DS XL with a synthetic peer)
 
 The networking protocol should evolve additively with explicit version negotiation. Never upload ROM-derived content to the server.

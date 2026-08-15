@@ -4,12 +4,19 @@
 !server/
 !server/src/
 !server/src/**
+!server/migrations/
+!server/migrations/**
+!server/tools/
+!server/tools/**
 !web/
 !web/**
+!assets/
+!assets/emerald-online-3ds-icon.png
+!assets/emerald-online-3ds-web-logo.png
 !release/
 !release/emerald-online-3ds.cia
 !release/emerald-online-3ds.3dsx
-!release/emerald-online-3ds-source-0.3.2.tar.gz
+!release/emerald-online-3ds-source-0.4.0.tar.gz
 !release/SHA256SUMS
 
 # Defense in depth: private/legal-copy inputs must never enter an image layer.

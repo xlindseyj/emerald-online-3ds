@@ -1,13 +1,13 @@
 # Hardware smoke test
 
-The current actual-game runtime defaults to `wss://pokemon-server.lws-workspace.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data.
+The current 0.4.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data.
 
-- 3DSX SHA-256: `468f3adea0fd898acc9566c75eeaff850328018892cdb9a635ae4c4587dfcac2`
-- CIA SHA-256: `985dc44cf13215c06204f556b9202e326c13131e509ec2a717a85e1a1442c4d8`
-- Corresponding-source SHA-256: `848247d4dc4d2ced7f4136b3f59450ed81c1c7940c286930bc2d4ebc3879deb9`
+- 3DSX SHA-256: `6ebf8e82828d2b5a7966a78be80e59af60d486ccdd0ec6bb94049fdaf5a4b44a`
+- CIA SHA-256: `24686aece224a865ce5e88d2403c5e6d1bd07f37399ea91a0733b82bb8ead8e8`
+- Corresponding-source SHA-256: `a257a3f67fd2f725df56dd125669a921800fa550f364772083d1cf5c84cae429`
 - Private avatar atlas SHA-256: `ab3f08aec7b8598f383e5032e22d3ea2a5234522230d460b908a2e3517d753d8`
 
-## Latest physical result (2026-08-14)
+## Latest physical result (2026-08-14, pre-v2 build)
 
 - Console: blue Old Nintendo 3DS XL.
 - Boot/dynarec: pass. The CIA reaches Emerald through gpSP without the earlier ARM11 stack dump.
@@ -16,13 +16,13 @@ The current actual-game runtime defaults to `wss://pokemon-server.lws-workspace.
 - Bottom screen: pass. The 320x240 emerald dashboard renders correctly.
 - Top screen: full 400x240 coverage and vertical orientation are confirmed. The latest uploaded build removes the remaining horizontal mirror; normal left-to-right orientation still needs one final confirmation.
 - LAN network: pass. The Old 3DS XL reports `ONLINE`; server telemetry confirms one connected client, one authenticated client, and one accepted protocol `hello`.
-- Public WSS network: pending the next physical-3DS run. Automated and live edge tests complete a real `hello`/`welcome` exchange through `wss://pokemon-server.lws-workspace.com/game`, but hardware remains authoritative for the new mbedTLS path.
+- Public WSS network: pending the next physical-3DS run with 0.4.0. Automated and live edge tests complete v2 enrollment, reconnect, export, revocation, recovery, and deletion through `wss://live.emeraldonline3ds.com/game`, but hardware remains authoritative for the mbedTLS and SD credential path.
 - Overworld RAM bridge: pass. The dashboard reports map/tile data and the server confirms one positioned trainer, one active room, and multiple accepted state updates.
 - Authentic remote avatars: Brendan rendering is confirmed on the physical Old 3DS XL using a synthetic same-map peer. The private build found Brendan graphics/palette at ROM offsets `0x4975F8`/`0x4987F8` and May at `0x4A3078`/`0x4A4278`, then produced an SD-only 18-frame atlas. SaveBlock2 also correctly published the test save's selected boy avatar. May and a two-physical-client exchange remain to be confirmed.
-- Automated suite: 16/16 tests pass. Three obsolete tests for the superseded mGBA frontend were removed after the gpSP migration.
-- Headless emulator: pass with official Azahar 2126.0 on Linux. The automated smoke observed boot, a stable reconnect identity, stationary keepalive, automatic reconnect/state republish, movement snapshots, chat, and all four emotes.
+- Automated suite: 19 passing, one PostgreSQL test skipped unless `TEST_DATABASE_URL` is supplied. The same lifecycle has also passed against the live PostgreSQL database over public WSS.
+- Headless emulator: pass with official Azahar 2126.0 on Linux. The 0.4.0 smoke persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, and republished state. Physical hardware remains authoritative for the mbedTLS/SD path.
 
-Current artifacts are `990144` bytes (CIA), `1245432` bytes (3DSX), `2135605` bytes (corresponding source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
+Current artifacts are `992704` bytes (CIA), `1249996` bytes (3DSX), `2231455` bytes (corresponding source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
 
 ## Automated Linux verification
 
@@ -42,7 +42,7 @@ Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. W
 3. Confirm Emerald boots directly on the top screen, including audio, and the bottom screen shows the native trainer panel.
 4. Confirm the top image fills the complete 400x240 display and the lower emerald dashboard fills 320x240 without blue gaps, clipping, or flicker. Record the dashboard FPS after the intro and again in the overworld.
 5. Start or continue a save and enter the overworld. Confirm the lower screen changes from `Waiting for the overworld` to plausible map and tile values, which update as you walk.
-6. With Wi-Fi connected, confirm the mode automatically reaches `ONLINE` through `pokemon-server.lws-workspace.com:443`. Press `X` to disconnect (`OFFLINE`) and again to reconnect.
+6. With Wi-Fi connected, confirm the mode automatically reaches `ONLINE` through `live.emeraldonline3ds.com:443`. On first enrollment, write down the one-time recovery code and confirm `identity.cfg` appears beside `online.cfg`. Press `X` to disconnect (`OFFLINE`) and again to reconnect with the same displayed fingerprint.
 7. Tap the lower screen, enter a short message in the 3DS keyboard, and press Send. Confirm the keyboard closes and the message appears on the lower panel.
 8. With another client in the same map, tap each lower-edge emote button: `WAVE`, `BATTLE`, `TRADE`, and `GG`. Confirm the matching colored indicator appears briefly above your trainer on the other client. Confirm rapidly repeated taps are rate-limited without interrupting play.
 9. Leave the player stationary online for at least 45 seconds and confirm the status remains `ONLINE`.
@@ -53,10 +53,10 @@ Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. W
 ## CIA QR installation
 
 1. Copy the private ROM and `online.cfg` from `generated/sd-card/3ds/emerald-online-3ds/` to the same path on the SD card first.
-2. Open `https://pokemon.lws-workspace.com` on a phone or workstation.
+2. Open `https://emeraldonline3ds.com` on a phone or workstation.
 3. On FBI, choose **Remote Install**, then **Scan QR Code**, and scan the page's QR code.
 4. Confirm installation, launch the HOME Menu title, and repeat the gameplay/network checks above.
-5. If using the public page, verify `https://pokemon.lws-workspace.com/health` reports `ok: true`. For the optional local page, verify both devices are on the same LAN and allow Node.js or TCP 8080 on the Windows private-network firewall profile.
+5. If using the public page, verify `https://emeraldonline3ds.com/health` reports `ok: true`, protocol `2`, and database `ready`. For the optional local page, verify both devices are on the same LAN and allow Node.js or TCP 8080 on the Windows private-network firewall profile.
 
 ## Two-client presence test
 
@@ -67,7 +67,7 @@ Record console model, system version, Homebrew Launcher version, each pass/fail 
 ## Container and Kubernetes server
 
 `docker build -t emerald-online-3ds:test .` must send only the Node application
-and the ROM-free CIA. No ROM, save, session-bearing config, private avatar atlas,
+and the ROM-free CIA. No ROM, save, identity/config file, private avatar atlas,
 or private 3DSX may appear in an image layer. Start the presence and web commands
 in one network namespace, verify `/health`, complete a WebSocket `hello`/`welcome`
 exchange, and confirm the served CIA hash. Validate `deploy/kubernetes.yaml`
@@ -79,4 +79,4 @@ before applying it to the cluster.
 .\scripts\build-runtime.ps1 -RomPath ".\Pokemon - Emerald Version.gba" -TrainerName May
 ```
 
-The generated `online.cfg` holds the server hostname, port, transport, path, and trainer identity and can be edited without rebuilding. For a trusted LAN override, pass `-ServerHost`, `-ServerPort`, and `-Transport tcp`.
+The generated `online.cfg` holds the server hostname, port, transport, path, and trainer-name fallback and can be edited without rebuilding. The server-issued credential is created separately in `identity.cfg`. For a trusted LAN override, pass `-ServerHost`, `-ServerPort`, and `-Transport tcp`.

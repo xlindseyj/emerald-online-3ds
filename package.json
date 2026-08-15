@@ -1,11 +1,12 @@
 {
   "name": "emerald-online-3ds",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server/src/server.mjs",
     "install-page": "node web/install-server.mjs",
+    "db:migrate": "node server/tools/migrate.mjs",
     "build:public": "bash scripts/build-public.sh",
     "build:private": "bash scripts/build-runtime.sh",
     "audit:release": "bash scripts/audit-release.sh",
@@ -13,6 +14,7 @@
     "test": "node --test server/test/*.test.mjs web/*.test.mjs"
   },
   "dependencies": {
+    "pg": "^8.16.3",
     "pngjs": "^7.0.0",
     "qrcode": "1.5.4",
     "ws": "^8.21.3"

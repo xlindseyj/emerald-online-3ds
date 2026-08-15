@@ -38,8 +38,8 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
       INSTALL_PORT: String(installPort),
       GAME_UPSTREAM_PORT: String(gamePort),
       STATUS_UPSTREAM_PORT: String(statusPort),
-      PUBLIC_BASE_URL: 'https://pokemon.lws-workspace.com',
-      GAME_PUBLIC_URL: 'wss://pokemon-server.lws-workspace.com/game'
+      PUBLIC_BASE_URL: 'https://emeraldonline3ds.com',
+      GAME_PUBLIC_URL: 'wss://live.emeraldonline3ds.com/game'
     }
   });
   t.after(() => { web.kill(); presence.kill(); });
@@ -47,15 +47,29 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   const base = `http://127.0.0.1:${installPort}`;
   const health = await waitFor(`${base}/health`);
   const healthBody = await health.json();
-  assert.equal(healthBody.ciaUrl, 'https://pokemon.lws-workspace.com/emerald-online-3ds.cia');
-  assert.equal(healthBody.gameUrl, 'wss://pokemon-server.lws-workspace.com/game');
+  assert.equal(healthBody.ciaUrl, 'https://emeraldonline3ds.com/emerald-online-3ds.cia');
+  assert.equal(healthBody.gameUrl, 'wss://live.emeraldonline3ds.com/game');
 
   const page = await fetch(base);
   const pageBody = await page.text();
   assert.match(pageBody, /Remote Install/);
-  assert.match(pageBody, /pokemon-server\.lws-workspace\.com/);
+  assert.match(pageBody, /live\.emeraldonline3ds\.com/);
   assert.match(pageBody, /Corresponding source/);
+  assert.match(pageBody, /not affiliated with, endorsed by, or sponsored by Nintendo/);
+  assert.match(pageBody, /does not host, provide, sell, or distribute ROMs/);
+  assert.match(pageBody, /Back up your save before use/);
+  assert.match(pageBody, /src="\/logo\.png"/);
+  assert.doesNotMatch(pageBody, /Lindsey Web Solutions|LindseyWebSolutions/);
   assert.match(page.headers.get('content-security-policy'), /default-src/);
+
+  const logo = await fetch(`${base}/logo.png`);
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers.get('content-type'), 'image/png');
+  assert.ok(Number(logo.headers.get('content-length')) > 10000);
+
+  const favicon = await fetch(`${base}/favicon.png`);
+  assert.equal(favicon.status, 200);
+  assert.equal(favicon.headers.get('content-type'), 'image/png');
 
   const qr = await fetch(`${base}/qr.svg`);
   assert.match(qr.headers.get('content-type'), /image\/svg\+xml/);

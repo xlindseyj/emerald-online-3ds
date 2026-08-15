@@ -1,6 +1,6 @@
 # Phase 0 handoff: reproducible and ROM-safe baseline
 
-Status: automated gate passed on 2026-08-15; physical retest remains with the tester.
+Status: historical 0.3.2 gate passed on 2026-08-15; current release details are in `GATE_1_HANDOFF.md` and `TESTING.md`.
 
 ## Build outputs
 

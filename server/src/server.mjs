@@ -1,12 +1,15 @@
 import net from 'node:net';
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { VERSION, MAX_LINE, validateHello, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
+import pg from 'pg';
+import { PostgresIdentityStore } from './identity-store.mjs';
+import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
 
-export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000 } = {}) {
+export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null } = {}) {
   const clients = new Map();
-  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, hellos: 0, states: 0, chats: 0, emotes: 0, reconnectReplacements: 0, disconnects: 0 };
+  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, enrollments: 0, recoveries: 0, authenticationFailures: 0, hellos: 0, states: 0, chats: 0, emotes: 0, reconnectReplacements: 0, disconnects: 0 };
   const send = (socket, msg) => { if (!socket.destroyed) socket.write(encode(msg)); };
   const fail = (socket, code) => { send(socket, { type: 'error', code }); socket.end(); };
   const stableId = session => {
@@ -19,21 +22,119 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       .map(c => ({ id: c.id, name: c.name, ...c.state }));
     send(client.socket, { type: 'snapshot', map: client.state.map, players });
   };
+  const replaceCredentialConnection = client => {
+    for (const peer of clients.values()) {
+      const sameLegacy = client.session && peer.session === client.session;
+      const sameCredential = client.credentialId && peer.credentialId === client.credentialId;
+      if (peer !== client && (sameLegacy || sameCredential)) {
+        send(peer.socket, { type: 'error', code: 'session_replaced' });
+        peer.socket.end();
+        metrics.reconnectReplacements++;
+      }
+    }
+  };
+  const finishAuthentication = (client, msg, auth = {}) => {
+    client.id = auth.identity_id ?? client.id;
+    client.identityId = auth.identity_id ?? null;
+    client.credentialId = auth.credential_id ?? null;
+    client.fingerprint = auth.fingerprint ?? null;
+    client.protocolVersion = msg.version;
+    client.name = msg.name;
+    client.avatar = msg.avatar === 'girl' ? 'girl' : 'boy';
+    if (client.helloTimer) clearTimeout(client.helloTimer);
+    client.helloTimer = null;
+    metrics.hellos++;
+    replaceCredentialConnection(client);
+  };
+  const handleMessage = async (client, msg) => {
+    const { socket } = client;
+    if (!client.name) {
+      if (validateEnroll(msg)) {
+        if (!identityStore) return fail(socket, 'identity_unavailable');
+        const enrollment = await identityStore.enroll({ withRecovery: msg.recovery === true });
+        finishAuthentication(client, msg, { identity_id: enrollment.identityId, credential_id: enrollment.credentialId, fingerprint: enrollment.fingerprint });
+        metrics.enrollments++;
+        send(socket, { type: 'enrolled', version: VERSION, id: enrollment.identityId, credentialId: enrollment.credentialId, token: enrollment.token, fingerprint: enrollment.fingerprint, ...(enrollment.recoveryCode ? { recoveryCode: enrollment.recoveryCode } : {}) });
+        return;
+      }
+      if (validateRecover(msg)) {
+        if (!identityStore) return fail(socket, 'identity_unavailable');
+        const recovered = await identityStore.recover(msg.identity, msg.recoveryCode);
+        if (!recovered) { metrics.authenticationFailures++; return fail(socket, 'recovery_failed'); }
+        finishAuthentication(client, msg, { identity_id: recovered.identityId, credential_id: recovered.credentialId, fingerprint: recovered.fingerprint });
+        metrics.recoveries++;
+        send(socket, { type: 'identity_recovered', version: VERSION, id: recovered.identityId, credentialId: recovered.credentialId, token: recovered.token, fingerprint: recovered.fingerprint });
+        return;
+      }
+      if (!validateHello(msg)) return fail(socket, 'invalid_hello');
+      if (msg.version === VERSION) {
+        if (!identityStore) return fail(socket, 'identity_unavailable');
+        const auth = await identityStore.authenticate(msg.identity, msg.token);
+        if (!auth) { metrics.authenticationFailures++; return fail(socket, 'authentication_failed'); }
+        finishAuthentication(client, msg, auth);
+        send(socket, { type: 'welcome', version: VERSION, id: client.id, fingerprint: client.fingerprint });
+        return;
+      }
+      if (msg.version !== LEGACY_VERSION) return fail(socket, 'unsupported_version');
+      if (msg.session) {
+        client.session = msg.session.toLowerCase();
+        client.id = stableId(client.session);
+      }
+      finishAuthentication(client, msg);
+      send(socket, { type: 'welcome', version: LEGACY_VERSION, latestVersion: VERSION, id: client.id });
+      return;
+    }
+    if (msg.type === 'revoke_session') {
+      if (!client.identityId || !client.credentialId || !identityStore) return fail(socket, 'identity_required');
+      await identityStore.revoke(client.identityId, client.credentialId);
+      send(socket, { type: 'session_revoked' });
+      socket.end();
+      return;
+    }
+    if (msg.type === 'export_identity') {
+      if (!client.identityId || !identityStore) return send(socket, { type: 'error', code: 'identity_required' });
+      send(socket, { type: 'identity_export', data: await identityStore.exportIdentity(client.identityId) });
+      return;
+    }
+    if (msg.type === 'delete_identity') {
+      if (!client.identityId || !identityStore || msg.confirm !== 'DELETE') return send(socket, { type: 'error', code: 'deletion_confirmation_required' });
+      await identityStore.deleteIdentity(client.identityId);
+      send(socket, { type: 'identity_deleted' });
+      socket.end();
+      return;
+    }
+    if (msg.type === 'ping') { send(socket, { type: 'pong', at: msg.at }); return; }
+    if (msg.type === 'chat') {
+      if (!client.state || !validateChat(msg)) return send(socket, { type: 'error', code: 'invalid_chat' });
+      if (Date.now() - client.lastChat < 1000) return send(socket, { type: 'error', code: 'chat_rate_limited' });
+      client.lastChat = Date.now();
+      metrics.chats++;
+      const chat = { type: 'chat', id: client.id, name: client.name, map: client.state.map, text: msg.text };
+      for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, chat);
+      return;
+    }
+    if (msg.type === 'emote') {
+      if (!client.state || !validateEmote(msg)) return send(socket, { type: 'error', code: 'invalid_emote' });
+      if (Date.now() - client.lastEmote < 2000) return send(socket, { type: 'error', code: 'emote_rate_limited' });
+      client.lastEmote = Date.now();
+      metrics.emotes++;
+      const emote = { type: 'emote', id: client.id, name: client.name, map: client.state.map, emote: msg.emote };
+      for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, emote);
+      return;
+    }
+    if (!validateState(msg, client.seq)) return fail(socket, 'invalid_state');
+    client.seq = msg.seq;
+    client.state = { map: msg.map, x: msg.x, y: msg.y, facing: msg.facing, avatar: msg.avatar === 'girl' ? 'girl' : client.avatar };
+    metrics.states++;
+    for (const peer of clients.values()) if (peer.name) snapshot(peer);
+  };
   const server = net.createServer(socket => {
-		metrics.totalConnections++;
-		if (clients.size >= maxConnections) {
-			metrics.rejectedConnections++;
-			fail(socket, 'server_full');
-			return;
-		}
-		const remoteAddress = socket.remoteAddress ?? 'unknown';
-		const sameIp = [...clients.values()].filter(existing => existing.remoteAddress === remoteAddress).length;
-		if (sameIp >= maxConnectionsPerIp) {
-			metrics.ipRejectedConnections++;
-			fail(socket, 'ip_connection_limit');
-			return;
-		}
-		const client = { id: crypto.randomUUID(), session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, helloTimer: null };
+    metrics.totalConnections++;
+    if (clients.size >= maxConnections) { metrics.rejectedConnections++; fail(socket, 'server_full'); return; }
+    const remoteAddress = socket.remoteAddress ?? 'unknown';
+    const sameIp = [...clients.values()].filter(existing => existing.remoteAddress === remoteAddress).length;
+    if (sameIp >= maxConnectionsPerIp) { metrics.ipRejectedConnections++; fail(socket, 'ip_connection_limit'); return; }
+    const client = { id: crypto.randomUUID(), identityId: null, credentialId: null, fingerprint: null, protocolVersion: null, session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, helloTimer: null, processing: Promise.resolve() };
     clients.set(socket, client);
     client.helloTimer = setTimeout(() => {
       if (!client.name) {
@@ -50,50 +151,8 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       while ((newline = client.buffer.indexOf('\n')) >= 0) {
         const line = client.buffer.slice(0, newline); client.buffer = client.buffer.slice(newline + 1);
         if (Buffer.byteLength(line) > MAX_LINE) return fail(socket, 'line_too_long');
-        let msg; try { msg = JSON.parse(line); } catch { return fail(socket, 'invalid_json'); }
-        if (!client.name) {
-          if (!validateHello(msg)) return fail(socket, 'invalid_hello');
-          if (msg.session) {
-            client.session = msg.session.toLowerCase();
-            client.id = stableId(client.session);
-            for (const peer of clients.values()) {
-              if (peer !== client && peer.session === client.session) {
-                send(peer.socket, { type: 'error', code: 'session_replaced' });
-                peer.socket.end();
-				metrics.reconnectReplacements++;
-              }
-            }
-          }
-			metrics.hellos++;
-          client.name = msg.name;
-          clearTimeout(client.helloTimer);
-          client.helloTimer = null;
-          client.avatar = msg.avatar === 'girl' ? 'girl' : 'boy';
-          send(socket, { type: 'welcome', version: VERSION, id: client.id }); continue;
-        }
-        if (msg.type === 'ping') { send(socket, { type: 'pong', at: msg.at }); continue; }
-				if (msg.type === 'chat') {
-          if (!client.state || !validateChat(msg)) { send(socket, { type: 'error', code: 'invalid_chat' }); continue; }
-          if (Date.now() - client.lastChat < 1000) { send(socket, { type: 'error', code: 'chat_rate_limited' }); continue; }
-          client.lastChat = Date.now();
-			metrics.chats++;
-          const chat = { type: 'chat', id: client.id, name: client.name, map: client.state.map, text: msg.text };
-          for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, chat);
-					continue;
-				}
-				if (msg.type === 'emote') {
-					if (!client.state || !validateEmote(msg)) { send(socket, { type: 'error', code: 'invalid_emote' }); continue; }
-					if (Date.now() - client.lastEmote < 2000) { send(socket, { type: 'error', code: 'emote_rate_limited' }); continue; }
-					client.lastEmote = Date.now();
-					metrics.emotes++;
-					const emote = { type: 'emote', id: client.id, name: client.name, map: client.state.map, emote: msg.emote };
-					for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, emote);
-					continue;
-				}
-        if (!validateState(msg, client.seq)) return fail(socket, 'invalid_state');
-        client.seq = msg.seq; client.state = { map: msg.map, x: msg.x, y: msg.y, facing: msg.facing, avatar: msg.avatar === 'girl' ? 'girl' : client.avatar };
-		metrics.states++;
-        for (const peer of clients.values()) if (peer.name) snapshot(peer);
+        let msg; try { msg = JSON.parse(line); } catch { fail(socket, 'invalid_json'); return; }
+        client.processing = client.processing.then(() => handleMessage(client, msg)).catch(() => fail(socket, 'internal_error'));
       }
     });
     socket.on('error', () => {});
@@ -112,7 +171,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
   return { server, clients, metrics, status };
 }
 
-export async function startServers() {
+export async function startServers({ identityStore: identityStoreOverride = null } = {}) {
   const host = process.env.GAME_HOST ?? '0.0.0.0';
   const port = Number(process.env.GAME_PORT ?? 3210);
   const healthPort = Number(process.env.HEALTH_PORT ?? 3211);
@@ -123,12 +182,27 @@ export async function startServers() {
   if (![port, healthPort, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs].every(Number.isSafeInteger) ||
       port < 1 || port > 65535 || healthPort < 1 || healthPort > 65535 ||
       idleMs < 5000 || maxConnections < 1 || maxConnectionsPerIp < 1 || helloTimeoutMs < 1000) throw new Error('invalid server configuration');
-  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs });
+  let pool = null;
+  let identityStore = identityStoreOverride;
+  const databaseConfig = process.env.DATABASE_URL
+    ? { connectionString: process.env.DATABASE_URL }
+    : process.env.PGHOST
+      ? { host: process.env.PGHOST, port: Number(process.env.PGPORT ?? 5432), database: process.env.PGDATABASE, user: process.env.PGUSER, password: process.env.PGPASSWORD }
+      : null;
+  if (databaseConfig) {
+    const ssl = process.env.DATABASE_CA_PATH
+      ? { ca: fs.readFileSync(process.env.DATABASE_CA_PATH, 'utf8'), rejectUnauthorized: true }
+      : undefined;
+    pool = new pg.Pool({ ...databaseConfig, max: Number(process.env.DATABASE_POOL_SIZE ?? 10), ssl });
+    await pool.query('SELECT 1');
+    identityStore = new PostgresIdentityStore(pool, process.env.IDENTITY_PEPPER);
+  }
+  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore });
   await new Promise(resolve => presence.server.listen(port, host, resolve));
   const health = http.createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, protocol: VERSION, ...presence.status() }));
+      res.end(JSON.stringify({ ok: true, protocol: VERSION, database: pool ? 'ready' : 'disabled', ...presence.status() }));
       return;
     }
     if (req.url === '/debug/clients' && (req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::1' || req.socket.remoteAddress === '::ffff:127.0.0.1')) {
@@ -149,8 +223,9 @@ export async function startServers() {
       client.socket.end();
     }
     await Promise.all([closeServer(presence.server), closeServer(health)]);
+    if (pool) await pool.end();
   };
-  return { presence, health, shutdown };
+  return { presence, health, pool, shutdown };
 }
 
 function sendShutdown(socket) {
