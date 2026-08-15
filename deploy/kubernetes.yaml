@@ -1,0 +1,278 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-online
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emerald-online
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-online
+    app.kubernetes.io/part-of: emerald-online-3ds
+spec:
+  # Presence is in memory. Keep the TCP server and WebSocket bridge in one pod
+  # until room state is moved to a shared backend.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: emerald-online
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: emerald-online
+        app.kubernetes.io/part-of: emerald-online-3ds
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 10
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: [lws-desktop, lws-homelab]
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: [lws-homelab]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: presence
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:726b5954592d3de14b580176bab1b64a83b0fa30c601433ef6b7123ead258132
+          imagePullPolicy: IfNotPresent
+          command: ["node", "server/src/server.mjs"]
+          ports:
+            - name: game
+              containerPort: 3210
+              protocol: TCP
+            - name: status
+              containerPort: 3211
+              protocol: TCP
+          env:
+            - name: MAX_CONNECTIONS
+              value: "64"
+            # WebSocket ingress enforces the real CF-Connecting-IP limit. All
+            # bridge connections reach this sidecar over pod loopback.
+            - name: MAX_CONNECTIONS_PER_IP
+              value: "64"
+            - name: IDLE_MS
+              value: "30000"
+            - name: HELLO_TIMEOUT_MS
+              value: "5000"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: status
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: status
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+        - name: public-web
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:726b5954592d3de14b580176bab1b64a83b0fa30c601433ef6b7123ead258132
+          imagePullPolicy: IfNotPresent
+          command: ["node", "web/install-server.mjs"]
+          ports:
+            - name: web
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PUBLIC_BASE_URL
+              value: https://pokemon.lws-workspace.com
+            - name: GAME_PUBLIC_URL
+              value: wss://pokemon-server.lws-workspace.com/game
+            - name: GAME_UPSTREAM_HOST
+              value: 127.0.0.1
+            - name: GAME_UPSTREAM_PORT
+              value: "3210"
+            - name: STATUS_UPSTREAM_HOST
+              value: 127.0.0.1
+            - name: STATUS_UPSTREAM_PORT
+              value: "3211"
+            - name: MAX_CONNECTIONS
+              value: "64"
+            - name: MAX_CONNECTIONS_PER_IP
+              value: "8"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: web
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: emerald-online
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-online
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: emerald-online
+  ports:
+    - name: web
+      port: 8080
+      targetPort: web
+      protocol: TCP
+    - name: game
+      port: 3210
+      targetPort: game
+      protocol: TCP
+    - name: status
+      port: 3211
+      targetPort: status
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: emerald-online
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-online
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: pokemon.lws-workspace.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emerald-online
+                port:
+                  name: web
+    - host: pokemon-server.lws-workspace.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emerald-online
+                port:
+                  name: web
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-web
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: emerald-online
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lindseywebsolutions
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-node-health-probes
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 192.168.0.31/32
+        - ipBlock:
+            cidr: 192.168.15.5/32
+        - ipBlock:
+            cidr: 10.42.0.0/32
+        - ipBlock:
+            cidr: 10.42.0.1/32
+        - ipBlock:
+            cidr: 10.42.1.0/32
+        - ipBlock:
+            cidr: 10.42.1.1/32
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}

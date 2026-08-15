@@ -1,0 +1,21 @@
+*
+!package.json
+!package-lock.json
+!server/
+!server/src/
+!server/src/**
+!web/
+!web/**
+!release/
+!release/emerald-online-3ds.cia
+!release/emerald-online-3ds.3dsx
+!release/emerald-online-3ds-source-0.3.2.tar.gz
+!release/SHA256SUMS
+
+# Defense in depth: private/legal-copy inputs must never enter an image layer.
+*.gba
+generated/
+client/
+gpsp-runtime/
+third_party/
+node_modules/

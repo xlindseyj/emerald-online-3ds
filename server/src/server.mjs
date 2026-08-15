@@ -1,0 +1,176 @@
+import net from 'node:net';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { VERSION, MAX_LINE, validateHello, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
+
+export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000 } = {}) {
+  const clients = new Map();
+  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, hellos: 0, states: 0, chats: 0, emotes: 0, reconnectReplacements: 0, disconnects: 0 };
+  const send = (socket, msg) => { if (!socket.destroyed) socket.write(encode(msg)); };
+  const fail = (socket, code) => { send(socket, { type: 'error', code }); socket.end(); };
+  const stableId = session => {
+    const hex = crypto.createHash('sha256').update(`emerald-online-3ds:${session}`).digest('hex').slice(0, 32);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+  const snapshot = (client) => {
+    if (!client.state) return;
+    const players = [...clients.values()].filter(c => c !== client && c.state?.map === client.state.map)
+      .map(c => ({ id: c.id, name: c.name, ...c.state }));
+    send(client.socket, { type: 'snapshot', map: client.state.map, players });
+  };
+  const server = net.createServer(socket => {
+		metrics.totalConnections++;
+		if (clients.size >= maxConnections) {
+			metrics.rejectedConnections++;
+			fail(socket, 'server_full');
+			return;
+		}
+		const remoteAddress = socket.remoteAddress ?? 'unknown';
+		const sameIp = [...clients.values()].filter(existing => existing.remoteAddress === remoteAddress).length;
+		if (sameIp >= maxConnectionsPerIp) {
+			metrics.ipRejectedConnections++;
+			fail(socket, 'ip_connection_limit');
+			return;
+		}
+		const client = { id: crypto.randomUUID(), session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, helloTimer: null };
+    clients.set(socket, client);
+    client.helloTimer = setTimeout(() => {
+      if (!client.name) {
+        metrics.helloTimeouts++;
+        fail(socket, 'hello_timeout');
+      }
+    }, helloTimeoutMs);
+    client.helloTimer.unref();
+    socket.setNoDelay(true);
+    socket.on('data', chunk => {
+      client.seen = Date.now(); client.buffer += chunk.toString('utf8');
+      if (Buffer.byteLength(client.buffer) > MAX_LINE && !client.buffer.includes('\n')) return fail(socket, 'line_too_long');
+      let newline;
+      while ((newline = client.buffer.indexOf('\n')) >= 0) {
+        const line = client.buffer.slice(0, newline); client.buffer = client.buffer.slice(newline + 1);
+        if (Buffer.byteLength(line) > MAX_LINE) return fail(socket, 'line_too_long');
+        let msg; try { msg = JSON.parse(line); } catch { return fail(socket, 'invalid_json'); }
+        if (!client.name) {
+          if (!validateHello(msg)) return fail(socket, 'invalid_hello');
+          if (msg.session) {
+            client.session = msg.session.toLowerCase();
+            client.id = stableId(client.session);
+            for (const peer of clients.values()) {
+              if (peer !== client && peer.session === client.session) {
+                send(peer.socket, { type: 'error', code: 'session_replaced' });
+                peer.socket.end();
+				metrics.reconnectReplacements++;
+              }
+            }
+          }
+			metrics.hellos++;
+          client.name = msg.name;
+          clearTimeout(client.helloTimer);
+          client.helloTimer = null;
+          client.avatar = msg.avatar === 'girl' ? 'girl' : 'boy';
+          send(socket, { type: 'welcome', version: VERSION, id: client.id }); continue;
+        }
+        if (msg.type === 'ping') { send(socket, { type: 'pong', at: msg.at }); continue; }
+				if (msg.type === 'chat') {
+          if (!client.state || !validateChat(msg)) { send(socket, { type: 'error', code: 'invalid_chat' }); continue; }
+          if (Date.now() - client.lastChat < 1000) { send(socket, { type: 'error', code: 'chat_rate_limited' }); continue; }
+          client.lastChat = Date.now();
+			metrics.chats++;
+          const chat = { type: 'chat', id: client.id, name: client.name, map: client.state.map, text: msg.text };
+          for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, chat);
+					continue;
+				}
+				if (msg.type === 'emote') {
+					if (!client.state || !validateEmote(msg)) { send(socket, { type: 'error', code: 'invalid_emote' }); continue; }
+					if (Date.now() - client.lastEmote < 2000) { send(socket, { type: 'error', code: 'emote_rate_limited' }); continue; }
+					client.lastEmote = Date.now();
+					metrics.emotes++;
+					const emote = { type: 'emote', id: client.id, name: client.name, map: client.state.map, emote: msg.emote };
+					for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, emote);
+					continue;
+				}
+        if (!validateState(msg, client.seq)) return fail(socket, 'invalid_state');
+        client.seq = msg.seq; client.state = { map: msg.map, x: msg.x, y: msg.y, facing: msg.facing, avatar: msg.avatar === 'girl' ? 'girl' : client.avatar };
+		metrics.states++;
+        for (const peer of clients.values()) if (peer.name) snapshot(peer);
+      }
+    });
+    socket.on('error', () => {});
+    socket.on('close', () => { if (client.helloTimer) clearTimeout(client.helloTimer); if (clients.delete(socket)) metrics.disconnects++; for (const peer of clients.values()) snapshot(peer); });
+  });
+  const timer = setInterval(() => { const cutoff = Date.now() - idleMs; for (const c of clients.values()) if (c.seen < cutoff) c.socket.destroy(); }, Math.min(idleMs, 5000));
+  timer.unref(); server.on('close', () => clearInterval(timer));
+	const status = () => ({
+		uptimeSeconds: Math.floor((Date.now() - metrics.startedAt) / 1000),
+		connections: clients.size,
+		authenticated: [...clients.values()].filter(client => client.name).length,
+		positioned: [...clients.values()].filter(client => client.state).length,
+		rooms: new Set([...clients.values()].flatMap(client => client.state ? [client.state.map] : [])).size,
+		...metrics
+	});
+  return { server, clients, metrics, status };
+}
+
+export async function startServers() {
+  const host = process.env.GAME_HOST ?? '0.0.0.0';
+  const port = Number(process.env.GAME_PORT ?? 3210);
+  const healthPort = Number(process.env.HEALTH_PORT ?? 3211);
+  const idleMs = Number(process.env.IDLE_MS ?? 30000);
+  const maxConnections = Number(process.env.MAX_CONNECTIONS ?? 64);
+  const maxConnectionsPerIp = Number(process.env.MAX_CONNECTIONS_PER_IP ?? 8);
+  const helloTimeoutMs = Number(process.env.HELLO_TIMEOUT_MS ?? 5000);
+  if (![port, healthPort, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs].every(Number.isSafeInteger) ||
+      port < 1 || port > 65535 || healthPort < 1 || healthPort > 65535 ||
+      idleMs < 5000 || maxConnections < 1 || maxConnectionsPerIp < 1 || helloTimeoutMs < 1000) throw new Error('invalid server configuration');
+  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs });
+  await new Promise(resolve => presence.server.listen(port, host, resolve));
+  const health = http.createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, protocol: VERSION, ...presence.status() }));
+      return;
+    }
+    if (req.url === '/debug/clients' && (req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::1' || req.socket.remoteAddress === '::ffff:127.0.0.1')) {
+      const clients = [...presence.clients.values()].filter(client => client.name)
+        .map(client => ({ name: client.name, state: client.state }));
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ clients }));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise(resolve => health.listen(healthPort, host, resolve));
+  console.log(`presence tcp://${host}:${port}; health http://${host}:${healthPort}/health`);
+  const closeServer = server => new Promise(resolve => server.close(resolve));
+  const shutdown = async () => {
+    for (const client of presence.clients.values()) {
+      sendShutdown(client.socket);
+      client.socket.end();
+    }
+    await Promise.all([closeServer(presence.server), closeServer(health)]);
+  };
+  return { presence, health, shutdown };
+}
+
+function sendShutdown(socket) {
+  if (!socket.destroyed) socket.write(encode({ type: 'error', code: 'server_restarting' }));
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const running = await startServers();
+  let stopping = false;
+  const stop = signal => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`${signal}: draining clients and stopping`);
+    const force = setTimeout(() => process.exit(1), 8000);
+    force.unref();
+    running.shutdown().then(() => process.exit(0), error => {
+      console.error(error);
+      process.exit(1);
+    });
+  };
+  process.on('SIGTERM', () => stop('SIGTERM'));
+  process.on('SIGINT', () => stop('SIGINT'));
+}

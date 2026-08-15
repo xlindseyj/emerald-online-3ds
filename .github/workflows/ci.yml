@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:public
+      - run: npm run audit:release
+      - run: docker build -t emerald-online-3ds:ci .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emerald-online-3ds-${{ github.sha }}
+          path: |
+            release/emerald-online-3ds.cia
+            release/emerald-online-3ds.3dsx
+            release/emerald-online-3ds-source-*.tar.gz
+            release/SHA256SUMS
+          if-no-files-found: error
