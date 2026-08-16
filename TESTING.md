@@ -29,6 +29,8 @@ Production verification on 2026-08-16 passed with multi-architecture image `sha2
 
 The follow-up privacy/known-issue rollout uses multi-architecture image `sha256:0178c8daa9ef85164d8bdfc750b920c714818dd43280afd8d036ea4182b21520`. Migrations 004 and 005 and the release publisher exited 0, both application containers had zero restarts, and production remained database-ready on protocol 2. The homepage displayed `v0.8.0`; its source link served code-only archive SHA-256 `bc0e645335246e706962dc6f86d1715b584d8464280c8205a53155789c8b3c67`, matching the live manifest and containing no Markdown or excluded first-party directories. Anonymous API verification found the official confirmed FPS issue at topic `b3570148-29d7-44e8-b60c-944f9874bf17` with no player attribution and the complete Online-toggle workaround. At the same checkpoint, production observed one authenticated, positioned physical client in one room.
 
+The Gate 4 handoff rebuild and rollout uses multi-architecture image `sha256:d46a3f064b31a493e4a9e4dabb6d34abd287cc1ba9ba36c7cc12ae2db98193ee`. Both init containers exited 0, both application containers had zero restarts, and the connected physical client automatically returned authenticated and positioned. The public CIA and manifest matched SHA-256 `500169bf7579fe118b39bd79d307c1b95a21ea5b2fcffb201ddf21bad7c94a45`; the existing pinned 0.8.0 release topic retained ID `cfe84b4d-4826-46d3-a5be-d277b3f79e64` and was updated in place with the new artifact checksum.
+
 ## Latest physical result (2026-08-15, protocol-v2 WSS test)
 
 - Console: blue Old Nintendo 3DS XL.
@@ -51,6 +53,8 @@ The release directory contains the CIA, 3DSX, and code-only 3DS-runtime/correspo
 ## Gate 4 experimental link smoke
 
 Automated evidence: two isolated Azahar 2126.0 profiles passed four startup/hard-interruption cycles and retained exactly the newest three save backups per profile. A production-WSS test delivered 53 bounded synthetic packets, recovered from a hard guest disconnect, and measured 164-186 ms round trip (171 ms average) with 4.5 ms mean absolute jitter. Because the available emulator state remained at the title screen and emitted zero Cable Club packets, this is transport evidence only; the battle, trade, save-integrity, real packet-loss, and physical-performance steps below remain required.
+
+The 0.8.0 rerun passed all 45 tests with zero skips against disposable PostgreSQL 16, the normal Azahar online smoke, and four two-instance link cycles. A fresh production-WSS run delivered 53 synthetic packets, recovered the guest, measured 173.6-200.9 ms round trip (182.9 ms average) with 5.6 ms mean absolute jitter, and deleted both synthetic identities. `npm run prepare:link-test` now builds a shared-room physical SD handoff and isolated Azahar profile under ignored `generated/`; its tests verify strict room/save validation and that no ROM, save, identity, preference, or avatar file enters the physical bundle. See `GATE_4_PHYSICAL_TEST.md`.
 
 1. Preserve an independent copy of both saves. Use release 0.8.0 on both clients.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.

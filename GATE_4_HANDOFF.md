@@ -19,6 +19,8 @@ Gate 4 is an evidence-gathering spike, not a released promise of working battles
 
 Under the documented go/no-go rule, the present result is still `spike in progress`; it is not sufficient to expose public trade invitations or enable battle/trade rankings.
 
+Release 0.8.0 repeated the normal Azahar online smoke, four two-instance link startup/interruption cycles, and the production-WSS synthetic relay. The repository now includes `npm run prepare:link-test`, which produces an ignored physical SD tree and isolated Azahar profile with a shared unpredictable room while keeping ROMs, saves, identities, preferences, and avatar assets out of the physical handoff. See `GATE_4_PHYSICAL_TEST.md` for the current hashes and exact acceptance steps. A progressed private save is still required before the emulator can navigate to the Cable Club and emit real packets.
+
 ## Physical test configuration
 
 Use the same private room code on both clients, for example:
