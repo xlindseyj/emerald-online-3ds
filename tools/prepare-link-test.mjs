@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { inspectEmeraldSave } from './emerald-save.mjs';
 
 const ROOM = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
-const SAVE_BYTES = new Set([128 * 1024, 128 * 1024 + 512]);
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 export function generateRoom() {
@@ -23,13 +23,14 @@ function requireFile(filename, label) {
   if (!fs.statSync(filename, { throwIfNoEntry: false })?.isFile()) throw new Error(`missing ${label}: ${filename}`);
 }
 
-function config({ name, room }) {
+function config({ name, room, emulator = false }) {
   return [
     'server=live.emeraldonline3ds.com',
     'port=443',
     'transport=wss',
     'path=/game',
     `name=${name}`,
+    ...(emulator ? ['dynarec=disabled'] : []),
     `link_room=${room}`,
     ''
   ].join('\n');
@@ -52,11 +53,12 @@ export function prepareLinkTest({ projectRoot, outputDirectory, room, savePath =
   requireFile(rom, 'private Emerald ROM');
 
   let resolvedSave = null;
+  let saveInspection = null;
   if (savePath) {
     resolvedSave = path.resolve(savePath);
     requireFile(resolvedSave, 'private Emerald save');
-    const bytes = fs.statSync(resolvedSave).size;
-    if (!SAVE_BYTES.has(bytes)) throw new Error(`private Emerald save must be 131072 or 131584 bytes, received ${bytes}`);
+    saveInspection = inspectEmeraldSave(fs.readFileSync(resolvedSave));
+    if (!saveInspection.progressed) throw new Error('private Emerald save is valid but is not progressed enough for Cable Club testing');
   }
 
   const physicalApp = path.join(output, 'physical-sd', '3ds', 'emerald-online-3ds');
@@ -71,7 +73,7 @@ export function prepareLinkTest({ projectRoot, outputDirectory, room, savePath =
   fs.writeFileSync(path.join(physicalApp, 'online.cfg'), config({ name: 'Physical', room: validatedRoom }), { mode: 0o600 });
 
   fs.copyFileSync(rom, path.join(emulatorApp, 'emerald.gba'));
-  fs.writeFileSync(path.join(emulatorApp, 'online.cfg'), config({ name: 'Azahar', room: validatedRoom }), { mode: 0o600 });
+  fs.writeFileSync(path.join(emulatorApp, 'online.cfg'), config({ name: 'Azahar', room: validatedRoom, emulator: true }), { mode: 0o600 });
   if (fs.existsSync(avatar)) fs.copyFileSync(avatar, path.join(emulatorApp, 'avatars.t3x'));
   if (resolvedSave) fs.copyFileSync(resolvedSave, path.join(emulatorApp, 'emerald.sav'));
 
@@ -82,6 +84,14 @@ export function prepareLinkTest({ projectRoot, outputDirectory, room, savePath =
     ciaSha256: crypto.createHash('sha256').update(fs.readFileSync(cia)).digest('hex'),
     threeDsxSha256: crypto.createHash('sha256').update(fs.readFileSync(threeDsx)).digest('hex'),
     emulatorSaveIncluded: Boolean(resolvedSave),
+    emulatorSaveValidated: Boolean(saveInspection),
+    saveProgress: saveInspection ? {
+      validSlotCount: saveInspection.validSlotCount,
+      playTimeMinutes: saveInspection.playTimeMinutes,
+      partyCount: saveInspection.partyCount,
+      mapGroup: saveInspection.mapGroup,
+      mapNumber: saveInspection.mapNumber
+    } : null,
     privateFilesExcludedFromPhysicalBundle: ['emerald.gba', 'emerald.sav', 'identity.cfg', 'stats.cfg', 'avatars.t3x']
   };
   fs.writeFileSync(path.join(output, 'test-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });

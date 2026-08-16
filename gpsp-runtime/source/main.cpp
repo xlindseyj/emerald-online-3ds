@@ -1045,9 +1045,11 @@ static void onlineConnected(void) {
 
 static void onlineConnect(void) {
     if (!onlineEnabled || onlineMode != ONLINE_OFFLINE) return;
+    debugStage("connect-begin");
     nextReconnect = 0;
     onlineSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (onlineSocket < 0) return onlineFail(errno);
+    debugStage("connect-socket-ready");
     fcntl(onlineSocket, F_SETFL, fcntl(onlineSocket, F_GETFL, 0) | O_NONBLOCK);
     sockaddr_in address = {};
     address.sin_family = AF_INET;
@@ -1064,14 +1066,17 @@ static void onlineConnect(void) {
             freeaddrinfo(resolved);
         }
         serverAddressResolvedAt = now;
+        debugStage("connect-address-resolved");
     }
     address.sin_addr = serverAddress;
+    debugStage("connect-call");
     int result = connect(onlineSocket, (sockaddr*) &address, sizeof(address));
-    if (!result) onlineConnected();
+    if (!result) { debugStage("connect-immediate"); onlineConnected(); }
     else if (errno == EINPROGRESS || errno == EWOULDBLOCK) {
+        debugStage("connect-in-progress");
         onlineMode = ONLINE_CONNECTING;
         connectStarted = osGetTime();
-    } else onlineFail(errno);
+    } else { debugStage("connect-failed"); onlineFail(errno); }
 }
 
 static const char* skipJsonSpace(const char* at, const char* end) {
@@ -1468,10 +1473,14 @@ static void onlineUpdate(void) {
     if (onlineMode == ONLINE_CONNECTING) {
         // ctrulib's socket service can accept a nonblocking TCP connection
         // without subsequently marking it writable through select(). Polling
-        // the peer state detects that completed connection reliably.
+        // the peer state detects that completed connection reliably. Azahar
+        // validates the guest sockaddr family before servicing getpeername(),
+        // even though the call writes this output structure, so seed AF_INET.
         sockaddr_in peer = {};
+        peer.sin_family = AF_INET;
         socklen_t peerSize = sizeof(peer);
         if (!getpeername(onlineSocket, (sockaddr*)&peer, &peerSize)) {
+            debugStage("connect-peer-ready");
             int error = 0;
             socklen_t size = sizeof(error);
             if (!getsockopt(onlineSocket, SOL_SOCKET, SO_ERROR, &error, &size) && !error) onlineConnected();

@@ -112,8 +112,15 @@ void init_main(void)
   video_count = 960;
 
 #ifdef HAVE_DYNAREC
-  init_dynarec_caches();
-  init_emitter(gamepak_must_swap());
+  /* The 3DS interpreter path deliberately leaves the fixed-address JIT
+   * caches unmapped (notably under Azahar). Touching those addresses here
+   * corrupts emulation state even though retro_run() never enters the
+   * translator, so initialise the emitter only when DRC is truly active. */
+  if (dynarec_enable)
+  {
+    init_dynarec_caches();
+    init_emitter(gamepak_must_swap());
+  }
 #endif
 }
 

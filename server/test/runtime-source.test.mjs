@@ -5,6 +5,7 @@ import path from 'node:path';
 
 const gpspSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/main.cpp'), 'utf8');
 const svchaxSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ctr_svchax.c'), 'utf8');
+const gpspMainSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/main.c'), 'utf8');
 
 test('gpSP replacement is a dedicated direct-boot dynarec frontend', () => {
   assert.match(gpspSource, /ROM_PATH "sdmc:\/3ds\/emerald-online-3ds\/emerald\.gba"/);
@@ -64,6 +65,10 @@ test('gpSP runtime uses authenticated WebSockets for the public Cloudflare endpo
   assert.doesNotMatch(gpspSource, /strstr\(line, "\\\"type/);
   assert.match(gpspSource, /transport.*tcp/s);
   assert.doesNotMatch(gpspSource, /192\.168\./);
+});
+
+test('gpSP nonblocking connect polling initializes sockaddr for Azahar', () => {
+  assert.match(gpspSource, /sockaddr_in peer = \{\};\s*peer\.sin_family = AF_INET;\s*socklen_t peerSize = sizeof\(peer\);\s*if \(!getpeername/s);
 });
 
 test('gpSP audio rate is applied after content options load', () => {
@@ -141,4 +146,8 @@ test('gpSP experimental link mode registers netpacket callbacks and gates startu
   const backup = gpspSource.indexOf('backupSaveForLink()', start);
   assert.ok(start >= 0 && backup > start && callback > backup, 'save backup must complete before the core netpacket session starts');
   assert.match(gpspSource, /LINK %s ACTIVE - BACKUP OK/);
+});
+
+test('gpSP does not touch unmapped 3DS translation caches in interpreter mode', () => {
+  assert.match(gpspMainSource, /if \(dynarec_enable\)\s*\{\s*init_dynarec_caches\(\);\s*init_emitter\(gamepak_must_swap\(\)\);\s*\}/s);
 });
