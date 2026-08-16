@@ -1,0 +1,34 @@
+[
+  {
+    "key": "fluctuating-fps-after-scenes",
+    "title": "FPS can fluctuate by device and scene",
+    "severity": "medium",
+    "runtimeVersion": "0.8.0",
+    "artifactHash": "33cf8ccda02205ab352b08811ae059cf86b81794c0101481788dc8d49d083b80",
+    "consoleModel": "old-3ds-xl",
+    "installMethod": "3dsx",
+    "transport": "wss",
+    "summary": "Frame rate can fluctuate during or after some scenes and cutscenes. The amount of slowdown appears to vary by console model, device condition, and the specific scene, so we are tracking this as a confirmed performance defect rather than assuming one universal cause.",
+    "observations": [
+      "FPS may be stable in normal play and then drop or fluctuate during or after a cutscene or scene transition.",
+      "The severity and duration vary between devices and scenes.",
+      "Online activity appears to be one contributing factor, but the root cause has not yet been isolated."
+    ],
+    "workaround": [
+      "Wait until the scene or cutscene has finished.",
+      "Press X once to turn Online mode off and wait for the lower screen to show OFFLINE.",
+      "Press X again to re-enable Online mode. This usually improves or restores FPS after the scene.",
+      "If FPS does not recover, save normally when safe and restart the application."
+    ],
+    "requestedEvidence": [
+      "Console model and whether you launched the CIA or 3DSX.",
+      "Scene, map, battle, or cutscene where fluctuation began.",
+      "Displayed FPS before, during, and after the event.",
+      "Whether toggling Online off and back on restored FPS, and how long recovery took.",
+      "Whether audio also stuttered and whether the issue returned in the same scene."
+    ],
+    "expectedBehavior": "The runtime should maintain stable frame pacing through normal gameplay, scene transitions, and cutscenes while Online mode remains enabled.",
+    "actualBehavior": "FPS sometimes drops or fluctuates during or after particular scenes or cutscenes, with different severity across devices. Toggling Online mode off and back on after the scene usually improves FPS.",
+    "diagnosticText": "Confirmed community known issue. Root cause under investigation; collect device, scene, FPS, audio, install-method, and Online-toggle recovery observations."
+  }
+]

@@ -36,18 +36,22 @@ export class PostgresCommunityStore {
       `SELECT t.id, t.category_slug, c.name AS category_name, t.title, t.pinned, t.locked,
         t.created_at, t.updated_at, i.fingerprint AS author_fingerprint,
         count(p.id) FILTER (WHERE p.deleted_at IS NULL)::int AS reply_count,
-        d.id AS defect_id, d.severity, d.status AS defect_status
+        d.id AS defect_id, d.severity, d.status AS defect_status,
+        rp.release_version, rp.released_at, (rp.topic_id IS NOT NULL) AS official_release,
+        kip.issue_key AS known_issue_key, (kip.topic_id IS NOT NULL) AS official_known_issue
        FROM forum_topics t
        JOIN forum_categories c ON c.slug=t.category_slug
        LEFT JOIN identities i ON i.id=t.author_identity_id
        LEFT JOIN forum_posts p ON p.topic_id=t.id
        LEFT JOIN defects d ON d.topic_id=t.id
+       LEFT JOIN release_publications rp ON rp.topic_id=t.id
+       LEFT JOIN known_issue_publications kip ON kip.topic_id=t.id
        WHERE t.deleted_at IS NULL
          AND ($1::text IS NULL OR t.category_slug=$1)
          AND ($2::text='' OR to_tsvector('simple', t.title || ' ' || t.body_markdown) @@ plainto_tsquery('simple', $2))
          AND (c.visibility='public' OR ($3::uuid IS NOT NULL AND c.visibility='paired') OR $4::boolean
               OR (t.category_slug='bugs-defects' AND d.status IN ('confirmed','fixed','closed')))
-       GROUP BY t.id, c.name, i.fingerprint, d.id, d.severity, d.status
+       GROUP BY t.id, c.name, i.fingerprint, d.id, d.severity, d.status, rp.topic_id, rp.release_version, rp.released_at, kip.topic_id, kip.issue_key
        ORDER BY t.pinned DESC, t.updated_at DESC
        LIMIT $5 OFFSET $6`,
       [category, search, identityId, moderator, bounds.pageSize, bounds.offset]
@@ -62,10 +66,14 @@ export class PostgresCommunityStore {
         d.id AS defect_id, d.severity, d.reproduction_steps, d.expected_behavior, d.actual_behavior,
         d.runtime_version, d.artifact_hash, d.console_model, d.install_method, d.transport,
         d.diagnostic_text, d.status AS defect_status, d.target_release, d.related_change, d.duplicate_of,
+        rp.release_version, rp.released_at, rp.source_commit, (rp.topic_id IS NOT NULL) AS official_release,
+        kip.issue_key AS known_issue_key, (kip.topic_id IS NOT NULL) AS official_known_issue,
         EXISTS (SELECT 1 FROM forum_subscriptions s WHERE s.topic_id=t.id AND s.identity_id=$2) AS subscribed
        FROM forum_topics t JOIN forum_categories c ON c.slug=t.category_slug
        LEFT JOIN identities i ON i.id=t.author_identity_id
        LEFT JOIN defects d ON d.topic_id=t.id
+       LEFT JOIN release_publications rp ON rp.topic_id=t.id
+       LEFT JOIN known_issue_publications kip ON kip.topic_id=t.id
        WHERE t.id=$1 AND (t.deleted_at IS NULL OR $3::boolean)
          AND (c.visibility='public' OR ($2::uuid IS NOT NULL AND c.visibility='paired') OR $3::boolean
               OR (t.category_slug='bugs-defects' AND d.status IN ('confirmed','fixed','closed')))`,
@@ -113,6 +121,98 @@ export class PostgresCommunityStore {
       await client.query('INSERT INTO forum_subscriptions(identity_id,topic_id) VALUES($1,$2)', [identityId, topic.rows[0].id]);
       await client.query('COMMIT');
       return { id: topic.rows[0].id };
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async upsertOfficialRelease({ version, releasedAt, sourceCommit, contentHash, title, body }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('emerald-official-releases'))");
+      const existing = await client.query('SELECT topic_id FROM release_publications WHERE release_version=$1 FOR UPDATE', [version]);
+      let topicId = existing.rows[0]?.topic_id;
+      if (topicId) {
+        await client.query(
+          `UPDATE forum_topics SET category_slug='releases', title=$2, body_markdown=$3,
+             created_at=$4, updated_at=$4, deleted_at=NULL, purge_after=NULL WHERE id=$1`,
+          [topicId, title, body, releasedAt]
+        );
+        await client.query(
+          `UPDATE release_publications SET released_at=$2,source_commit=$3,content_sha256=$4,updated_at=now()
+           WHERE release_version=$1`, [version, releasedAt, sourceCommit, contentHash]
+        );
+      } else {
+        const topic = await client.query(
+          `INSERT INTO forum_topics(category_slug,author_identity_id,title,body_markdown,created_at,updated_at)
+           VALUES('releases',NULL,$1,$2,$3,$3) RETURNING id`, [title, body, releasedAt]
+        );
+        topicId = topic.rows[0].id;
+        await client.query(
+          `INSERT INTO release_publications(release_version,topic_id,released_at,source_commit,content_sha256)
+           VALUES($1,$2,$3,$4,$5)`, [version, topicId, releasedAt, sourceCommit, contentHash]
+        );
+      }
+      await client.query('COMMIT');
+      return { topicId };
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async pinLatestOfficialRelease(version) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('emerald-official-releases'))");
+      await client.query(
+        `UPDATE forum_topics t SET pinned=(rp.release_version=$1)
+         FROM release_publications rp WHERE rp.topic_id=t.id`, [version]
+      );
+      const result = await client.query('SELECT topic_id FROM release_publications WHERE release_version=$1', [version]);
+      await client.query('COMMIT');
+      return result.rowCount === 1;
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async upsertOfficialKnownIssue({ key, contentHash, title, body, severity, runtimeVersion, artifactHash, consoleModel, installMethod, transport, expectedBehavior, actualBehavior, diagnosticText }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('emerald-official-known-issues'))");
+      const existing = await client.query('SELECT topic_id FROM known_issue_publications WHERE issue_key=$1 FOR UPDATE', [key]);
+      let topicId = existing.rows[0]?.topic_id;
+      if (topicId) {
+        await client.query(
+          `UPDATE forum_topics SET category_slug='bugs-defects',title=$2,body_markdown=$3,updated_at=now(),deleted_at=NULL,purge_after=NULL WHERE id=$1`,
+          [topicId, title, body]
+        );
+      } else {
+        const topic = await client.query(
+          `INSERT INTO forum_topics(category_slug,author_identity_id,title,body_markdown)
+           VALUES('bugs-defects',NULL,$1,$2) RETURNING id`, [title, body]
+        );
+        topicId = topic.rows[0].id;
+        await client.query(
+          'INSERT INTO known_issue_publications(issue_key,topic_id,content_sha256) VALUES($1,$2,$3)',
+          [key, topicId, contentHash]
+        );
+      }
+      await client.query(
+        `INSERT INTO defects(topic_id,severity,reproduction_steps,expected_behavior,actual_behavior,runtime_version,
+           artifact_hash,console_model,install_method,transport,diagnostic_text,status)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'confirmed')
+         ON CONFLICT(topic_id) DO UPDATE SET severity=EXCLUDED.severity,reproduction_steps=EXCLUDED.reproduction_steps,
+           expected_behavior=EXCLUDED.expected_behavior,actual_behavior=EXCLUDED.actual_behavior,
+           runtime_version=EXCLUDED.runtime_version,artifact_hash=EXCLUDED.artifact_hash,
+           console_model=EXCLUDED.console_model,install_method=EXCLUDED.install_method,transport=EXCLUDED.transport,
+           diagnostic_text=EXCLUDED.diagnostic_text,status='confirmed',updated_at=now()`,
+        [topicId, severity, 'Observe FPS during and after scene transitions or cutscenes while Online mode is enabled.', expectedBehavior,
+          actualBehavior, runtimeVersion, artifactHash, consoleModel, installMethod, transport, diagnosticText]
+      );
+      await client.query(
+        'UPDATE known_issue_publications SET content_sha256=$2,updated_at=now() WHERE issue_key=$1',
+        [key, contentHash]
+      );
+      await client.query('COMMIT');
+      return { topicId };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
 
@@ -386,6 +486,9 @@ export class MemoryCommunityStore {
   async listTopics({ category=null, query='', page=1, pageSize=20, viewer=null }={}) { const bounds=pageBounds(page,pageSize), q=query.toLowerCase(); const rows=[...this.topics.values()].filter(t=>!t.deleted_at&&(!category||t.category_slug===category)&&(!q||`${t.title} ${t.body_markdown}`.toLowerCase().includes(q))&&this.canRead(t,viewer)).sort((a,b)=>Number(b.pinned)-Number(a.pinned)||b.updated_at-a.updated_at).slice(bounds.offset,bounds.offset+bounds.pageSize).map(t=>({ ...t, reply_count:[...this.posts.values()].filter(p=>p.topic_id===t.id&&!p.deleted_at).length, defect_id:t.defect?.id, severity:t.defect?.severity, defect_status:t.defect?.status })); return {...bounds,topics:rows}; }
   async getTopic(id,viewer) { const t=this.topics.get(id); if(!t||(!this.canRead(t,viewer))||(t.deleted_at&&!viewer?.is_moderator))return null; return {...t, defect_id:t.defect?.id, ...(t.defect??{}), defect_status:t.defect?.status, subscribed:this.subscriptions.has(`${viewer?.identity_id}:${id}`), posts:[...this.posts.values()].filter(p=>p.topic_id===id&&(!p.deleted_at||viewer?.is_moderator)).sort((a,b)=>a.created_at-b.created_at)}; }
   async createTopic({category,title,body,defect=null},viewer){if(!viewer?.identity_id||!this.canWrite(viewer))return null;const c=this.categoriesData.find(x=>x.slug===category),staffOnly=['announcements','releases','service-status'].includes(category);if(!c||(c.visibility==='moderator'&&!viewer.is_moderator)||(staffOnly&&!viewer.is_moderator)||(category==='bugs-defects')!==Boolean(defect))return null;const now=Date.now(),id=crypto.randomUUID();this.topics.set(id,{id,category_slug:category,category_name:c.name,author_identity_id:viewer.identity_id,author_fingerprint:viewer.fingerprint,title,body_markdown:body,pinned:false,locked:false,created_at:now,updated_at:now,deleted_at:null,defect:defect?{id:crypto.randomUUID(),status:'new',severity:defect.severity,reproduction_steps:defect.reproductionSteps,expected_behavior:defect.expectedBehavior,actual_behavior:defect.actualBehavior,runtime_version:defect.runtimeVersion,artifact_hash:defect.artifactHash,console_model:defect.consoleModel,install_method:defect.installMethod,transport:defect.transport,diagnostic_text:defect.diagnosticText,target_release:null,related_change:null,duplicate_of:null}:null});this.subscriptions.add(`${viewer.identity_id}:${id}`);return{id};}
+  async upsertOfficialRelease({version,releasedAt,sourceCommit,contentHash,title,body}){let topic=[...this.topics.values()].find(item=>item.release_version===version),id=topic?.id??crypto.randomUUID();topic={...(topic??{}),id,category_slug:'releases',category_name:'Releases',author_identity_id:null,author_fingerprint:null,title,body_markdown:body,pinned:topic?.pinned??false,locked:false,created_at:new Date(releasedAt).getTime(),updated_at:new Date(releasedAt).getTime(),deleted_at:null,release_version:version,released_at:releasedAt,source_commit:sourceCommit,content_sha256:contentHash,official_release:true};this.topics.set(id,topic);return{topicId:id};}
+  async pinLatestOfficialRelease(version){let found=false;for(const topic of this.topics.values()){if(topic.official_release){topic.pinned=topic.release_version===version;if(topic.pinned)found=true;}}return found;}
+  async upsertOfficialKnownIssue({key,contentHash,title,body,severity,runtimeVersion,artifactHash,consoleModel,installMethod,transport,expectedBehavior,actualBehavior,diagnosticText}){let topic=[...this.topics.values()].find(item=>item.known_issue_key===key),id=topic?.id??crypto.randomUUID();topic={...(topic??{}),id,category_slug:'bugs-defects',category_name:'Bugs and Defects',author_identity_id:null,author_fingerprint:null,title,body_markdown:body,pinned:false,locked:false,created_at:topic?.created_at??Date.now(),updated_at:Date.now(),deleted_at:null,known_issue_key:key,content_sha256:contentHash,official_known_issue:true,defect:{id:topic?.defect?.id??crypto.randomUUID(),status:'confirmed',severity,reproduction_steps:'Observe FPS during and after scene transitions or cutscenes while Online mode is enabled.',expected_behavior:expectedBehavior,actual_behavior:actualBehavior,runtime_version:runtimeVersion,artifact_hash:artifactHash,console_model:consoleModel,install_method:installMethod,transport,diagnostic_text:diagnosticText,target_release:null,related_change:null,duplicate_of:null}};this.topics.set(id,topic);return{topicId:id};}
   async updateTopic(id,{title,body},viewer){const t=this.topics.get(id);if(!t||!this.canWrite(viewer)||(t.author_identity_id!==viewer?.identity_id&&!viewer?.is_moderator))return false;if(title)t.title=title;if(body)t.body_markdown=body;t.updated_at=Date.now();return true;}
   async deleteTopic(id,viewer){const t=this.topics.get(id);if(!t||(t.author_identity_id!==viewer?.identity_id&&!viewer?.is_moderator))return false;t.deleted_at=Date.now();return true;}
   async createReply(topicId,body,viewer){const t=this.topics.get(topicId);if(!viewer?.identity_id||!this.canWrite(viewer)||!t||!this.canRead(t,viewer)||(t.locked&&!viewer.is_moderator))return null;const id=crypto.randomUUID();this.posts.set(id,{id,topic_id:topicId,author_identity_id:viewer.identity_id,author_fingerprint:viewer.fingerprint,body_markdown:body,created_at:Date.now(),updated_at:Date.now(),deleted_at:null});t.updated_at=Date.now();return{id};}

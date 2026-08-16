@@ -41,7 +41,7 @@ kubectl -n pokemonemeraldonline3ds rollout status deployment/emerald-online
 curl -fsS https://live.emeraldonline3ds.com/health
 ```
 
-The Deployment init container runs idempotent, advisory-locked migrations over verified database TLS before either application container starts. The application is non-root, read-only, capability-free, has no service-account token, and uses an immutable multi-architecture image digest. Presence remains one replica because room state is in memory.
+The Deployment runs idempotent, advisory-locked migrations over verified database TLS, then a second init container validates `release/release-catalog.json` and `release/known-issues.json` and upserts official Releases and confirmed known-issue topics before either application container starts. Publication is keyed by semantic version or stable issue key, so restarts and deployment retries update the same topics instead of creating duplicates; only the newest release is pinned. The homepage reads the same package version. The application is non-root, read-only, capability-free, has no service-account token, and uses an immutable multi-architecture image digest. Presence remains one replica because room state is in memory.
 
 After a release build, push both `linux/amd64` and `linux/arm64`, update every image reference in `deploy/kubernetes.yaml` and `deploy/maintenance.yaml`, and verify the public CIA checksum matches `release/SHA256SUMS`.
 

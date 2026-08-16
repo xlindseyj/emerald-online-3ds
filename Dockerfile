@@ -19,10 +19,13 @@ COPY server/tools ./server/tools
 COPY web ./web
 COPY assets/emerald-online-3ds-icon.png ./assets/emerald-online-3ds-icon.png
 COPY assets/emerald-online-3ds-web-logo.png ./assets/emerald-online-3ds-web-logo.png
+COPY assets/release-media ./assets/release-media
 COPY release/emerald-online-3ds.cia ./release/emerald-online-3ds.cia
 COPY release/emerald-online-3ds.3dsx ./release/emerald-online-3ds.3dsx
 COPY release/emerald-online-3ds-source-0.8.0.tar.gz ./release/emerald-online-3ds-source-0.8.0.tar.gz
 COPY release/SHA256SUMS ./release/SHA256SUMS
+COPY release/release-catalog.json ./release/release-catalog.json
+COPY release/known-issues.json ./release/known-issues.json
 
 USER node
 EXPOSE 3210/tcp 3211/tcp 8080/tcp

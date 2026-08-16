@@ -34,7 +34,9 @@ export OFILES := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 export LD := $(CXX)
+ifneq ($(wildcard $(TOPDIR)/$(ICON)),)
 export APP_ICON := $(TOPDIR)/$(ICON)
+endif
 export _3DSXFLAGS += --smdh=$(CURDIR)/$(TARGET).smdh
 .PHONY: all clean
 all: $(BUILD)

@@ -8,7 +8,7 @@ Clean-room homebrew framework for a dual-screen, online-capable monster-RPG on N
 - The native lower screen provides online status, same-map trainers, chat, touch emotes, a local-only party summary, and an explicit-consent statistics page.
 - Online presence includes interpolated trainer overlays, stationary keepalives, and automatic reconnect; offline gameplay remains uninterrupted.
 - Protocol v2 silently enrolls each installation with a server-issued UUID and 256-bit device credential, stores it separately in private `identity.cfg`, and offers a one-time recovery code plus export, revocation, recovery, and deletion.
-- The server provides validated map rooms, snapshots, rate-limited chat, idle cleanup, health reporting, automated tests, durable identity storage, a paired community forum, private player profiles, and consented leaderboards in a two-instance PostgreSQL cluster.
+- The server provides validated map rooms, snapshots, rate-limited chat, idle cleanup, health reporting, automated tests, durable identity storage, a paired community forum, private player profiles, consented leaderboards, and idempotent official release publishing in a two-instance PostgreSQL cluster.
 - The dedicated renderer uses the full 400x240 top screen and full 320x240 touch screen, with a retained emerald-themed dashboard and live FPS telemetry.
 - CIA/3DSX metadata uses the original project icon and custom HOME Menu banner under `assets/`.
 - Authentic Brendan/May walking frames and palettes are located and extracted from the user's validated ROM into an ignored SD-only atlas. SaveBlock2 gender selects the avatar; no sprite pixels are embedded in the CIA or sent to the server.
@@ -53,7 +53,7 @@ The inspector reads only the GBA header and computes a hash. A later importer wi
 
 ## Build the 3DS runtime
 
-The actual-game runtime statically links the GPL-2.0-only gpSP 3DS dynarec but never embeds the ROM. Its exact corresponding source is vendored under `third_party/gpsp` and included in each release source archive. On Linux, build it and prepare an ignored, private SD-card directory with:
+The actual-game runtime statically links the GPL-2.0-only gpSP 3DS dynarec but never embeds the ROM. Its exact corresponding code is vendored under `third_party/gpsp` and included in each release source archive. The public archive is allow-listed to the 3DS runtime, gpSP source, Makefiles, version, and GPL text: it contains no Markdown, server/deployment configuration, private addresses, operational tooling, screenshots, or branding assets. On Linux, build it and prepare an ignored, private SD-card directory with:
 
 ```sh
 npm run build:private
@@ -78,6 +78,10 @@ On the 3DS, open FBI and choose **Remote Install → Scan QR Code**. The QR poin
 Emerald uses the normal GBA controls. `X` toggles online/offline and `Y` cycles the lower screen through Online, Party, Bag, Map/Radar, and Player Stats. Party and Bag data stay local to the console. The Bag page has touch tabs for Items, Key Items, Poké Balls, TM/HM, and Berries plus page navigation; the Map page shows current coordinates, facing, a short movement trail, and same-map nearby trainers. Tapping the Online trainer profile card opens browser-pairing entry, tapping its chat panel opens same-map chat, and the four bottom touch zones send Wave, Battle, Trade, or GG emotes. The Stats page uploads nothing by default: enabling it requires typing `YES` after all four fields are named, each field can be disabled independently, and deleting server history requires typing `DELETE`. Gameplay is permanently locked to the native 400x240 top screen. When offline, the dashboard shows the configured endpoint and latest socket error number. HOME exits. Online failure never stops local gameplay. Set `page=online`, `page=party`, `page=bag`, `page=map`, or `page=stats` in `online.cfg` to choose the initial lower page.
 
 See [TESTING.md](TESTING.md) for emulator and physical-3DS smoke tests.
+
+## Publish a release
+
+Release notes are structured in `release/release-catalog.json`, and confirmed official defects in `release/known-issues.json`. `npm run build:public` synchronizes current CIA, 3DSX, and source hashes, while `npm run audit:release` validates forum content, media, and the privacy-minimized source package. The homepage version comes from `package.json`, which must match the newest release entry. Deployment idempotently publishes official release and known-issue topics and pins only the newest release. See [RELEASE_PUBLISHING.md](RELEASE_PUBLISHING.md).
 
 ## Architecture
 

@@ -8,11 +8,26 @@ Verify every public artifact against `release/SHA256SUMS`; it is the authoritati
 
 - Bottom pages: source tests pass for Online, Party, Bag, Map/Radar, and Player Stats; Bag/Map configuration aliases and touch regions are covered.
 - Bag privacy and decoding: source tests cover each pocket's Emerald save offset/capacity, quantity decryption, local money decryption, and private-ROM item-name lookup. No inventory field was added to the protocol, server, database, or browser profile.
-- PostgreSQL suite: 38 passed, 0 failed, 0 skipped against a disposable PostgreSQL 16 container, including all identity, community, consent, leaderboard, compatibility, and deletion lifecycles. The disposable container was removed afterward.
+- PostgreSQL suite: 42 passed, 0 failed, 0 skipped against disposable PostgreSQL 16 after release automation was added, including all identity, community, consent, leaderboard, compatibility, official-publication, and deletion lifecycles. The disposable containers were removed afterward.
 - Headless emulator: official Azahar 2126.0 passed the 0.8.0 network smoke with both the default page and `page=map`. It persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, republished state, received movement/chat/emotes, and exited without orphaned processes. The harness isolates D-Bus so the emulator UI thread cannot stall while requesting a desktop wake lock.
 - Visual emulator checks: Bag tabs and the `BAG - LOCAL ONLY` label render cleanly; Map/Radar renders its grid, player marker, coordinates, facing, nearby count, and trail. The isolated emulator profile had no playable save, so real Bag item rows and decrypted values remain unverified visually.
 - Hardware status: physical acceptance remains pending. Follow `BOTTOM_SCREEN_HANDOFF.md`; emulator results do not validate the Old 3DS touch, private save/ROM memory, SD, or performance paths.
 - Production: the amd64/arm64 image at immutable digest `sha256:ff5f05a947397164dc4d4a64ebf9c542c1d91a753f1d3a0060da4ecf83f824c1` rolled out successfully. Public health reported protocol 2/database ready, release downloads matched `release/SHA256SUMS`, the connected physical client automatically reauthenticated and republished its positioned state, and the complete synthetic 0.8.0 WSS lifecycle passed before deleting its test identity.
+
+## Official release publishing
+
+1. Run `npm run release:validate`; confirm the latest catalog version equals `package.json`, the homepage renders that version, every current artifact matches `release/SHA256SUMS`, and the known-issue catalog validates.
+2. Against disposable PostgreSQL, run migrations and `npm run release:publish` twice. Confirm the second run keeps the same topic IDs, the number of publication rows equals the number of catalog versions, and exactly the newest version is pinned.
+3. Fetch `/api/community/topics?category=releases` anonymously. Confirm each entry is public, has `official_release: true`, exposes no player identity, and the current release is first and pinned.
+4. Open the current topic. Confirm headings, lists, internal download links, project/setup images, checksums, limitations, and upgrade notes render correctly. Remote images, scripts, raw HTML, and unsafe URLs must remain inert.
+5. Pair a browser and reply to the official release. Confirm discussion remains available while ordinary paired users cannot create or impersonate a Releases topic.
+6. Fetch the confirmed FPS topic anonymously. Confirm `official_known_issue: true`, `defect_status: confirmed`, no player identity, the device/scene variability description, and the Online off/on workaround after the scene.
+7. List and extract the public source archive. Confirm it contains `LICENSE.txt`, `VERSION.txt`, the runtime frontend, and gpSP source, while containing no `.md`, assets, server/web/deploy directories, private IPs, infrastructure identifiers, or secret-like files.
+8. See `RELEASE_PUBLISHING.md` for the catalog, media, source-package, deployment, and failure-handling contract.
+
+Production verification on 2026-08-16 passed with multi-architecture image `sha256:823f92c4753c7d43b74f13d70816a9663e71edbc24214862558f9edc3b5945b2`. Migration 004 and both init containers completed with exit code 0. Anonymous API verification found five official versions (`0.3.2`, `0.5.0`, `0.6.1`, `0.7.1`, `0.8.0`), exactly one pinned topic, two rendered same-origin images on 0.8.0, and no player attribution. A live second publication kept the same 0.8.0 topic ID.
+
+The follow-up privacy/known-issue rollout uses multi-architecture image `sha256:0178c8daa9ef85164d8bdfc750b920c714818dd43280afd8d036ea4182b21520`. Migrations 004 and 005 and the release publisher exited 0, both application containers had zero restarts, and production remained database-ready on protocol 2. The homepage displayed `v0.8.0`; its source link served code-only archive SHA-256 `bc0e645335246e706962dc6f86d1715b584d8464280c8205a53155789c8b3c67`, matching the live manifest and containing no Markdown or excluded first-party directories. Anonymous API verification found the official confirmed FPS issue at topic `b3570148-29d7-44e8-b60c-944f9874bf17` with no player attribution and the complete Online-toggle workaround. At the same checkpoint, production observed one authenticated, positioned physical client in one room.
 
 ## Latest physical result (2026-08-15, protocol-v2 WSS test)
 
@@ -31,7 +46,7 @@ Verify every public artifact against `release/SHA256SUMS`; it is the authoritati
 - Gate 3 live lifecycle: pass. A synthetic WSS device consented and uploaded aggregate stats, paired a browser, appeared on a per-release board, confirmed disabled battle/trade rankings, submitted a Server-observed compatibility result, opted one field out, deleted all history, and deleted its identity. Direct database verification then found zero synthetic identities, scores, history, or compatibility reports.
 - Headless emulator: Gate 3 passed with official Azahar 2126.0 on Linux. See the current 0.8.0 verification section above for the latest release result. Physical hardware remains authoritative for the mbedTLS, SD, touch, and performance paths.
 
-The release directory contains the CIA, 3DSX, and complete first-party/corresponding-gpSP source archive; verify their current sizes and hashes from the files and `release/SHA256SUMS`. The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
+The release directory contains the CIA, 3DSX, and code-only 3DS-runtime/corresponding-gpSP source archive; verify their current sizes and hashes from the files and `release/SHA256SUMS`. Documentation, infrastructure, release media, branding assets, the private ROM, and the atlas are not part of that source download. The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
 
 ## Gate 4 experimental link smoke
 

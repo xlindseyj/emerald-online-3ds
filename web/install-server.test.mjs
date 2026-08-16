@@ -56,7 +56,10 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   const pageBody = await page.text();
   assert.match(pageBody, /Remote Install/);
   assert.match(pageBody, /live\.emeraldonline3ds\.com/);
-  assert.match(pageBody, /Corresponding source/);
+  assert.match(pageBody, /Public multiplayer presence service · v0\.8\.0/);
+  assert.match(pageBody, /3DS runtime source \(code only\)/);
+  assert.match(pageBody, /Verify downloads/);
+  assert.doesNotMatch(pageBody, /Corresponding source|SHA-256 checksums/);
   assert.match(pageBody, /not affiliated with, endorsed by, or sponsored by Nintendo/);
   assert.match(pageBody, /does not host, provide, sell, or distribute ROMs/);
   assert.match(pageBody, /Back up your save before use/);

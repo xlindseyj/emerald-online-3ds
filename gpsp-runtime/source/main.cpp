@@ -583,8 +583,8 @@ static const char* facingName(uint8_t facing) {
     return "down";
 }
 
-// Cloudflare currently serves lws-workspace.com through Google Trust Services.
-// Trust the long-lived issuing root, not the rotating leaf or intermediate.
+// The production endpoint uses Google Trust Services.
+// Trust the long-lived issuing root, not a rotating leaf or intermediate.
 // Source: https://pki.goog/repo/certs/gtsr4.pem
 static const char GOOGLE_TRUST_SERVICES_ROOT_R4[] =
     "-----BEGIN CERTIFICATE-----\n"
@@ -729,8 +729,8 @@ static bool asciiCaseEqual(const char* left, size_t leftSize, const char* right)
     return true;
 }
 
-// HTTP field names are case-insensitive. Cloudflare currently emits
-// "Sec-Websocket-Accept", while Node and other edges may emit
+// HTTP field names are case-insensitive. Some edge proxies emit
+// "Sec-Websocket-Accept", while other servers may emit
 // "Sec-WebSocket-Accept". Compare the name case-insensitively but preserve the
 // case-sensitive base64 accept value.
 static bool webSocketHeaderEquals(const char* response, const char* name, const char* expected) {

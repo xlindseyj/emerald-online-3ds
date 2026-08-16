@@ -1,0 +1,234 @@
+[
+  {
+    "version": "0.3.2",
+    "releasedAt": "2026-08-15T12:00:00Z",
+    "title": "ROM-safe reproducible baseline",
+    "status": "Historical beta — superseded",
+    "summary": "Established the reproducible, redistributable baseline: a ROM-free CIA and 3DSX, deterministic corresponding source, private SD packaging, and automated emulator/network verification.",
+    "highlights": [
+      "Native Emerald execution through the pinned gpSP 3DS core.",
+      "ROM validation and ignored private SD-card packaging.",
+      "Online presence, chat, emotes, reconnect, and original project branding."
+    ],
+    "verification": [
+      "16 protocol, runtime, and web tests passed.",
+      "Azahar headless boot, reconnect, keepalive, movement, chat, and emote smoke passed.",
+      "Release audit confirmed no ROM, save, identity, configuration, or avatar atlas in public artifacts."
+    ],
+    "knownIssues": [
+      "Historical build; use the current release for testing.",
+      "Physical May/two-client coverage and final display-orientation acceptance were still open."
+    ],
+    "upgradeNotes": [
+      "Preserve the private ROM, save, avatar atlas, and configuration files.",
+      "Install the current CIA through FBI; copying a CIA alone does not update an installed title."
+    ],
+    "artifacts": [],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Original project artwork used by the HOME Menu and website."
+      }
+    ],
+    "sourceCommit": "a178e10"
+  },
+  {
+    "version": "0.5.0",
+    "releasedAt": "2026-08-15T20:00:00Z",
+    "title": "Paired community and defect tracking",
+    "status": "Historical beta — superseded",
+    "summary": "Added secure browser pairing, public and paired forum boards, structured defect reporting, moderation, and production WSS enrollment while keeping player identity opaque.",
+    "highlights": [
+      "Five-minute pairing approved from an authenticated 3DS.",
+      "Public release/help/status boards and paired beta, defect, code, feature, multiplayer, and general boards.",
+      "Moderation reports, sanctions, audit history, soft deletion, search, subscriptions, and rate limits."
+    ],
+    "verification": [
+      "25 normal tests and both PostgreSQL lifecycle tests passed.",
+      "A live synthetic identity paired, posted privately, stayed anonymous publicly, and was completely deleted.",
+      "Production WSS enrollment passed in Azahar."
+    ],
+    "knownIssues": [
+      "Physical Old 3DS WSS and browser-pairing acceptance remained pending.",
+      "This build is superseded; do not use it for new testing."
+    ],
+    "upgradeNotes": [
+      "Keep identity.cfg to retain the same server identity.",
+      "Use live.emeraldonline3ds.com on port 443 with WSS path /game."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "d4b32e28b8bf79360897208a660b7f8b9e68d1255c062603890219125d7c0ced"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "cf41213268f190603f6616c1fcb79f56790537f00a2dd4e48c334361083d68d6"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "0a2a1113444d5591bb6ae7bc25bf42af4c917c96321187718f23035790367806"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "The community and installer use the same anonymous project identity as the 3DS application."
+      }
+    ],
+    "sourceCommit": "05a2dff"
+  },
+  {
+    "version": "0.6.1",
+    "releasedAt": "2026-08-15T23:00:00Z",
+    "title": "Profiles, consent, and readable diagnostics",
+    "status": "Historical beta — superseded",
+    "summary": "Added explicit opt-in aggregate stats, paired profiles and leaderboards, compatibility reports, deletion controls, and complete on-screen TLS diagnostics for physical-console investigation.",
+    "highlights": [
+      "Default-off, per-field consent for Seen, Caught, Badges, and Frontier scores.",
+      "Paired profiles, integrity-labelled leaderboards, anomaly review, and complete stats deletion.",
+      "Readable E71 stage, TLS result, certificate flags, clock skew, and log-path diagnostics."
+    ],
+    "verification": [
+      "PostgreSQL consent, leaderboard, compatibility, opt-out, and deletion lifecycle passed.",
+      "Production WSS enrollment passed in Azahar after the bounded 3DS clock-skew correction.",
+      "Synthetic production identities and stats were deleted after testing."
+    ],
+    "knownIssues": [
+      "Physical WSS and lower-screen consent rendering still needed authoritative confirmation.",
+      "Battle and trade rankings remained disabled."
+    ],
+    "upgradeNotes": [
+      "Confirm the lower screen reports v0.6.1 before using its TLS diagnostics.",
+      "Never post identity tokens, recovery codes, ROM data, saves, or inventory."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "2050e8c42e49f952a5489afefa6c6c2059a2046fb809423a9ffa280ee5ce1e92"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "92d315f50d2e8a7ce93d9407f4cbe6eb465bf848d484cc39a0263fdcb3914f18"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "2b6ac88b17a29679c96b8ae927d0803cdc1c46455835b36327e51c88dd973ada"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Release 0.6.1 focused on consent, privacy, and physical-console diagnostics."
+      }
+    ],
+    "sourceCommit": "9827b4c"
+  },
+  {
+    "version": "0.7.1",
+    "releasedAt": "2026-08-16T04:00:00Z",
+    "title": "Experimental link transport",
+    "status": "Experimental beta — superseded",
+    "summary": "Introduced the opt-in, two-player Serial-Poke feasibility transport with bounded relay rooms and automatic rotating save backups. It remains transport evidence, not a claim that battles or trades are ready.",
+    "highlights": [
+      "Strictly opt-in link_room configuration and two-authenticated-player room limit.",
+      "Save backup must be flushed and fsynced before gpSP link mode starts.",
+      "Newest-three backup retention and hard-disconnect recovery testing."
+    ],
+    "verification": [
+      "Two isolated Azahar profiles passed startup and hard-interruption cycles.",
+      "Production WSS relayed 53 bounded synthetic packets and recovered after a guest disconnect.",
+      "Measured average round trip was 171 ms with 4.5 ms mean absolute jitter."
+    ],
+    "knownIssues": [
+      "No Cable Club packet was observed from the available title-screen state.",
+      "Battles, trades, save integrity under interruption, and physical performance remain unaccepted.",
+      "Public battle/trade invitations and rankings remain disabled."
+    ],
+    "upgradeNotes": [
+      "Use a fresh unpredictable room code and independent save backups for any link experiment.",
+      "Do not continue unless both clients show ACTIVE - BACKUP OK."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "a348571370c5abc37a92f0fc1763856b4c6f3913c6a742906decc4e75f6c100e"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "84f9a601839ae6b428eac060dd1b1892db91a2846965e52fc49d9d613f9f7588"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "a9751a767116ad01b04e90017f988fbf1477ebbcaeab3f071b0f8a68aefd0089"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Experimental link testing uses the normal private-ROM runtime and never uploads ROM or save contents."
+      }
+    ],
+    "sourceCommit": "5b7a5b1"
+  },
+  {
+    "version": "0.8.0",
+    "releasedAt": "2026-08-16T14:00:00Z",
+    "title": "Local Bag and trainer radar",
+    "status": "Current beta",
+    "summary": "Expands the lower screen with a private, local-only Bag browser and a Map/Radar page while retaining profiles, community tools, diagnostics, presence, chat, and emotes.",
+    "highlights": [
+      "Five Bag pockets with local item names, decrypted quantities and money, touch tabs, and paging.",
+      "Map/Radar with current coordinates, facing, a 16-position trail, and same-map trainer markers.",
+      "Bag, inventory, money, ROM, and save data remain entirely on the console."
+    ],
+    "verification": [
+      "38 of 38 tests passed with disposable PostgreSQL, including all durable identity/community/stat lifecycles.",
+      "Official Azahar 2126.0 passed identity persistence, stationary keepalive, reconnect, state republish, movement, chat, and emotes.",
+      "Production WSS lifecycle and public artifact checksum verification passed after deployment."
+    ],
+    "knownIssues": [
+      "Physical Old 3DS touch controls and real-save Bag values still require authoritative acceptance.",
+      "Experimental link battles/trades remain disabled outside explicit feasibility testing."
+    ],
+    "upgradeNotes": [
+      "Preserve emerald.gba, saves, identity.cfg, stats.cfg, and avatars.t3x.",
+      "Replace the 3DSX or reinstall the CIA through FBI; copying a CIA does not update an installed title.",
+      "Press Y to cycle Online, Party, Bag, Map/Radar, and Player Stats."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "acd9ed8ee44c9545cfa1d10f42b576bb55adadc87d1a75c4c2730bcd433dc90d",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "33cf8ccda02205ab352b08811ae059cf86b81794c0101481788dc8d49d083b80",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "bc0e645335246e706962dc6f86d1715b584d8464280c8205a53155789c8b3c67",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Original Emerald Online 3DS project artwork."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Setup image: after placing your own private ROM and configuration on the SD card, scan this code from FBI Remote Install."
+      }
+    ],
+    "sourceCommit": "4ce4b4e"
+  }
+]

@@ -6,6 +6,9 @@ import { MemoryCommunityStore } from '../server/src/community-store.mjs';
 import { MemoryStatsStore } from '../server/src/stats-store.mjs';
 import { createCommunityApp } from './community-app.mjs';
 import { communityPage } from './community-page.mjs';
+import { formatReleaseTopic, releaseContentHash, validateReleaseCatalog } from '../server/src/release-catalog.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
 
 async function startApp(t) {
   const identityStore = new MemoryIdentityStore();
@@ -127,6 +130,24 @@ test('pairing gates private boards and forum writes while public help remains re
   assert.equal((await request(base, `/api/community/posts/${replyId}`, auth, { method: 'PATCH', body: JSON.stringify({ body: '' }) })).status, 400);
   assert.equal((await request(base, `/api/community/topics/${privateId}/subscription`, auth, { method: 'PUT', body: JSON.stringify({ subscribed: false }) })).status, 200);
   assert.equal((await request(base, '/api/community/reports', auth, { method: 'POST', body: JSON.stringify({ postId: replyId, reason: 'Contains private information' }) })).status, 201);
+});
+
+test('official releases are public, visibly attributed, and keep replies available', async t => {
+  const { base, identityStore, communityStore } = await startApp(t);
+  const catalog = validateReleaseCatalog(JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'release', 'release-catalog.json'), 'utf8')));
+  const release = catalog.at(-1), topic = formatReleaseTopic(release);
+  const published = await communityStore.upsertOfficialRelease({ ...release, ...topic, contentHash: releaseContentHash(release, topic) });
+  await communityStore.pinLatestOfficialRelease(release.version);
+  const anonymous = await (await request(base, '/api/community/topics?category=releases')).json();
+  const summary = anonymous.topics.find(item => item.id === published.topicId);
+  assert.equal(summary.official_release, true);
+  assert.equal(summary.release_version, '0.8.0');
+  assert.equal(summary.author_fingerprint, null);
+  const detail = await (await request(base, `/api/community/topics/${published.topicId}`)).json();
+  assert.match(detail.topic.body_html, /<img src="\/qr\.svg"/);
+  assert.equal(detail.topic.source_commit, '4ce4b4e');
+  const enrollment = await identityStore.enroll(), auth = await pair(base, identityStore, enrollment);
+  assert.equal((await request(base, `/api/community/topics/${published.topicId}/replies`, auth, { method: 'POST', body: JSON.stringify({ body: 'Physical test result.' }) })).status, 201);
 });
 
 test('new defects stay paired-only until a moderator confirms them', async t => {

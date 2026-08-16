@@ -12,7 +12,8 @@ test('PostgreSQL pairing, visibility, forum, defect, report, and recovery lifecy
   const community = new PostgresCommunityStore(pool);
   const enrollment = await identities.enroll();
   const cleanupIdentities = [enrollment.identityId];
-  t.after(async () => { for (const identityId of cleanupIdentities) await identities.deleteIdentity(identityId); await pool.end(); });
+  const officialTopicIds = [];
+  t.after(async () => { for (const topicId of officialTopicIds) await pool.query('DELETE FROM forum_topics WHERE id=$1', [topicId]); for (const identityId of cleanupIdentities) await identities.deleteIdentity(identityId); await pool.end(); });
 
   const pairing = await identities.startPairing();
   assert.ok(await identities.approvePairing(enrollment.identityId, enrollment.credentialId, pairing.code));
@@ -28,6 +29,39 @@ test('PostgreSQL pairing, visibility, forum, defect, report, and recovery lifecy
   assert.equal(await community.createTopic({ category: 'releases', title: 'Unauthorized release', body: 'No.' }, viewer), null);
 
   const suffix = enrollment.identityId.slice(0, 8);
+  const publication = { version: `9.9.9-${enrollment.identityId.slice(0, 8)}`, releasedAt: '2026-08-16T12:00:00.000Z',
+    sourceCommit: '4ce4b4e', contentHash: 'c'.repeat(64), title: `Automated release ${suffix}`, body: '## Verified\n\n- Durable publication.' };
+  const official = await community.upsertOfficialRelease(publication);
+  officialTopicIds.push(official.topicId);
+  const repeatedOfficial = await community.upsertOfficialRelease({ ...publication, body: '## Verified\n\n- Updated without duplication.' });
+  assert.equal(repeatedOfficial.topicId, official.topicId);
+  assert.equal(await community.pinLatestOfficialRelease(publication.version), true);
+  const publicRelease = await community.getTopic(official.topicId, null);
+  assert.equal(publicRelease.official_release, true);
+  assert.equal(publicRelease.release_version, publication.version);
+  assert.equal(publicRelease.author_fingerprint, null);
+
+  const knownIssue = await community.upsertOfficialKnownIssue({
+    key: `fps-${suffix}`, contentHash: 'd'.repeat(64), title: `Known FPS issue ${suffix}`,
+    body: '## Temporary workaround\n\n- Toggle Online off and back on after the scene.', severity: 'medium',
+    runtimeVersion: '9.9.9', artifactHash: 'b'.repeat(64), consoleModel: 'old-3ds-xl',
+    installMethod: '3dsx', transport: 'wss', expectedBehavior: 'Stable FPS.',
+    actualBehavior: 'FPS fluctuates by device and scene.', diagnosticText: 'Sanitized test record.'
+  });
+  officialTopicIds.push(knownIssue.topicId);
+  const repeatedKnownIssue = await community.upsertOfficialKnownIssue({
+    key: `fps-${suffix}`, contentHash: 'e'.repeat(64), title: `Known FPS issue ${suffix}`,
+    body: '## Temporary workaround\n\n- Updated without duplication.', severity: 'medium',
+    runtimeVersion: '9.9.9', artifactHash: 'b'.repeat(64), consoleModel: 'old-3ds-xl',
+    installMethod: '3dsx', transport: 'wss', expectedBehavior: 'Stable FPS.',
+    actualBehavior: 'FPS fluctuates.', diagnosticText: 'Sanitized test record.'
+  });
+  assert.equal(repeatedKnownIssue.topicId, knownIssue.topicId);
+  const publicKnownIssue = await community.getTopic(knownIssue.topicId, null);
+  assert.equal(publicKnownIssue.official_known_issue, true);
+  assert.equal(publicKnownIssue.defect_status, 'confirmed');
+  assert.equal(publicKnownIssue.author_fingerprint, null);
+
   const help = await community.createTopic({ category: 'installation-help', title: `Install help ${suffix}`, body: 'Public recovery instructions.' }, viewer);
   const beta = await community.createTopic({ category: 'beta-testing', title: `Private beta ${suffix}`, body: 'Paired-only result.' }, viewer);
   const defect = await community.createTopic({

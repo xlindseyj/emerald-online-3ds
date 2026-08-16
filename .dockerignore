@@ -13,11 +13,15 @@
 !assets/
 !assets/emerald-online-3ds-icon.png
 !assets/emerald-online-3ds-web-logo.png
+!assets/release-media/
+!assets/release-media/**
 !release/
 !release/emerald-online-3ds.cia
 !release/emerald-online-3ds.3dsx
 !release/emerald-online-3ds-source-*.tar.gz
 !release/SHA256SUMS
+!release/release-catalog.json
+!release/known-issues.json
 
 # Defense in depth: private/legal-copy inputs must never enter an image layer.
 *.gba

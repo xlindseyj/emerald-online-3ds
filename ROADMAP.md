@@ -30,6 +30,7 @@
 - [x] Server-issued protocol-v2 device credentials, one-time recovery, export, revocation, deletion, stable opaque IDs, and duplicate-session replacement
 - [x] Two-instance CNPG PostgreSQL with Longhorn, TLS, External Secrets, migrations, retention cleanup, and encrypted scheduled MinIO backups
 - [x] Production Cloudflare routes for `emeraldonline3ds.com` and `wss://live.emeraldonline3ds.com/game`
+- [x] Idempotent official release forum publishing with structured notes, checksums, safe same-origin media, historical backfill, and deployment gating
 - [x] Original HOME Menu icon/banner and full-resolution emerald-themed dual-screen presentation
 - [x] Hardware-oriented sparse OAM capture, 10 Hz network polling, retained lower UI, and direct one-pass top rendering
 - [x] Non-root container, Kubernetes TCP load-balancer manifest, health probes, resource limits, and graceful shutdown
