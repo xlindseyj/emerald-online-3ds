@@ -4,9 +4,9 @@ Gate 4 remains an experimental feasibility test. Public battle/trade invitations
 
 ## Current artifacts
 
-- Release: `0.8.2`
-- CIA SHA-256: `28b27c96227fae1c596e85b711787d56597b6a7b2063c74cb0378109e3b85ac0`
-- 3DSX SHA-256: `e58b33b02f5b9119596c19ada1870276c1fa2dd80594c68933d43f6a5a132abc`
+- Release: `0.8.3`
+- CIA SHA-256: `5dd5253ba52dd88968693096387af84a546aaf93ca15790879f324af6448cb47`
+- 3DSX SHA-256: `732cd07521f205ee0e7da8f80f313afe454d2e32c21495bc6cea901959eac049`
 - Azahar: official 2126.0 AppImage under the ignored `.tools/azahar/` directory
 
 Create a fresh ignored bundle for each session. Its `physical-sd/` tree contains only the current release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.
@@ -36,14 +36,15 @@ The tool accepts only a 128 KiB Emerald save (or a 128 KiB save with a 512-byte 
 5. Complete one battle and one trade through public WSS. Record FPS/audio, packet counters, both save hashes after clean exit and restart, and the result of interrupting one later session.
 6. If either save differs unexpectedly, stop testing and restore the independent backups. Do not proceed to Gate 5.
 
-## Current 0.8.2 preflight evidence
+## Current 0.8.3 preflight evidence
 
 - The physical save has two complete checksum-valid slots. Its active slot has 49 minutes played, one party member, and a Route 102 position, which is sufficient to walk to Oldale's Cable Club. These facts contain no Trainer ID, Pokémon, inventory, ROM, or save bytes.
 - The exact release 3DSX loaded that save in Azahar 2126.0, authenticated through production WSS, entered its isolated link room, and remained alive beyond the former crash point at about 29 FPS in interpreter mode.
 - The interpreter no longer initializes unmapped 3DS translation caches, and nonblocking peer polling supplies the address-family metadata Azahar requires.
-- All 53 automated tests passed against disposable PostgreSQL 16 with zero skips. Normal local-TCP and production-WSS Azahar smokes also passed, and every synthetic production identity was deleted.
-- v0.8.2 is staged on the physical SD card with matching re-downloaded hashes. The prior v0.8.1 3DSX, CIA, and non-link configuration have separate recoverable backups. The existing ROM, save, identity, statistics preferences, and avatar atlas were preserved; the save hash still matches its pre-test hash.
-- The copied 3DSX is ready to launch from Homebrew Launcher. The staged CIA does not replace the installed HOME Menu title until it is selected in FBI and installed.
+- A production-WSS peer was visibly present beside the Azahar player in the overworld, absent throughout a real wild battle while still connected, and visible again after fleeing. This verifies the v0.8.3 overworld callback and battle-flag guard in Azahar.
+- All 54 automated tests passed against disposable PostgreSQL 16 with zero skips. Normal local-TCP and production-WSS Azahar smokes also passed, and every synthetic production identity was deleted.
+- The v0.8.2 physical run exposed the remote-overlay-in-battle defect and was stopped before Cable Club acceptance. v0.8.3 must be staged, installed, hash-verified, and physically rechecked before the remaining battle/trade work.
+- The copied 3DSX is ready to launch from Homebrew Launcher after staging. A staged CIA does not replace the installed HOME Menu title until it is selected in FBI and installed.
 
 ## Earlier transport evidence
 

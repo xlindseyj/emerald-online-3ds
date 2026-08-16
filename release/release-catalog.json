@@ -235,7 +235,7 @@
     "version": "0.8.1",
     "releasedAt": "2026-08-16T15:45:00Z",
     "title": "Service observability and capacity guardrails",
-    "status": "Current beta",
+    "status": "Historical beta — superseded",
     "summary": "Adds privacy-safe production telemetry, a maintained Grafana dashboard, and deliberately bounded concurrent load testing while leaving the game protocol and private player data unchanged.",
     "highlights": [
       "Cluster-internal Prometheus metrics for aggregate players, rooms, protocol activity, capacity, database readiness, memory, and uptime.",
@@ -300,7 +300,7 @@
     "version": "0.8.2",
     "releasedAt": "2026-08-16T16:35:00Z",
     "title": "Gate 4 emulator stability and verified save handoff",
-    "status": "Current beta",
+    "status": "Historical beta — superseded",
     "summary": "Stabilizes the Azahar interpreter and nonblocking network paths used by physical-to-emulator Cable Club testing, and validates progressed Emerald saves before creating a private test bundle.",
     "highlights": [
       "Interpreter mode no longer touches unmapped 3DS dynarec caches, preventing the Azahar preflight crash.",
@@ -314,7 +314,8 @@
     ],
     "knownIssues": [
       "A real physical-to-Azahar Cable Club battle, trade, interruption, save comparison, audio check, and Old 3DS performance check are still required before Gate 5.",
-      "Azahar intentionally uses the slower gpSP interpreter because its 3DS emulation does not provide the physical console's Luma dynarec bootstrap."
+      "Azahar intentionally uses the slower gpSP interpreter because its 3DS emulation does not provide the physical console's Luma dynarec bootstrap.",
+      "Remote trainer overlays can remain visible during battles because stale map coordinates were treated as overworld state; fixed in 0.8.3."
     ],
     "upgradeNotes": [
       "Preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, and any link-backups before copying the new 3DSX or reinstalling the CIA.",
@@ -355,5 +356,61 @@
       }
     ],
     "sourceCommit": "2501b95"
+  },
+  {
+    "version": "0.8.3",
+    "releasedAt": "2026-08-16T17:15:00Z",
+    "title": "Overworld-only trainer overlay hotfix",
+    "status": "Current beta",
+    "summary": "Prevents online trainer sprites, names, and emotes from appearing over battles, menus, transitions, or any other non-overworld scene by validating Emerald's active engine callback before reading or drawing presence.",
+    "highlights": [
+      "Requires the exact supported Emerald US CB2_Overworld callback before accepting map coordinates.",
+      "Checks Emerald's in-battle flag as a second independent guard.",
+      "Revalidates the game context at draw time so stale presence cannot cross a scene transition."
+    ],
+    "verification": [
+      "Runtime regression coverage asserts the supported gMain layout, Thumb callback address, battle flag, presence gate, and draw-time gate.",
+      "The complete automated suite passes after the hotfix.",
+      "The ROM-free CIA, 3DSX, and corresponding-source archive rebuild and pass the release privacy audit."
+    ],
+    "knownIssues": [
+      "Gate 4 still requires a complete physical-to-Azahar Cable Club battle, trade, interruption, save comparison, audio check, and Old 3DS performance check.",
+      "Azahar intentionally uses the slower gpSP interpreter because its 3DS emulation does not provide the physical console's Luma dynarec bootstrap."
+    ],
+    "upgradeNotes": [
+      "Stop link testing on 0.8.2 and update both clients before continuing.",
+      "Preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, and link-backups when replacing the 3DSX or reinstalling the CIA.",
+      "Merely copying the CIA to /cias/ does not update the installed HOME Menu title; select it in FBI and choose Install and delete CIA."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "5dd5253ba52dd88968693096387af84a546aaf93ca15790879f324af6448cb47",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "732cd07521f205ee0e7da8f80f313afe454d2e32c21495bc6cea901959eac049",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "68f9c63dca0f05b6db7900ddcfe87475842ecd7453d8c58213eaddff9d38f030",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.3 keeps online trainer overlays inside the verified Emerald overworld."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Update both Gate 4 clients before resuming physical Cable Club testing."
+      }
+    ],
+    "sourceCommit": "1701bec"
   }
 ]

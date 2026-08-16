@@ -15,10 +15,10 @@ const rawCommunityPublications = JSON.parse(fs.readFileSync(path.join(root, 'rel
 
 test('release catalog produces structured, image-safe official posts', () => {
   const catalog = validateReleaseCatalog(rawCatalog);
-  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2']);
+  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
   const current = catalog.at(-1);
   const topic = formatReleaseTopic(current);
-  assert.match(topic.title, /v0\.8\.2/);
+  assert.match(topic.title, /v0\.8\.3/);
   assert.match(topic.body, /## Highlights/);
   assert.match(topic.body, /\[CIA\]\(\/emerald-online-3ds\.cia\)/);
   const rendered = renderMarkdown(topic.body);
@@ -47,16 +47,16 @@ test('official release publishing is idempotent and pins only the latest release
   for (const release of catalog) {
     const topic = formatReleaseTopic(release);
     const result = await store.upsertOfficialRelease({ ...release, ...topic, contentHash: releaseContentHash(release, topic) });
-    if (release.version === '0.8.2') firstTopicId = result.topicId;
+    if (release.version === catalog.at(-1).version) firstTopicId = result.topicId;
   }
   const current = catalog.at(-1), topic = formatReleaseTopic(current);
   const repeated = await store.upsertOfficialRelease({ ...current, ...topic, contentHash: releaseContentHash(current, topic) });
   assert.equal(repeated.topicId, firstTopicId);
-  assert.equal(await store.pinLatestOfficialRelease('0.8.2'), true);
+  assert.equal(await store.pinLatestOfficialRelease(current.version), true);
   const listed = await store.listTopics({ category: 'releases', viewer: null });
-  assert.equal(listed.topics.length, 7);
+  assert.equal(listed.topics.length, catalog.length);
   assert.equal(listed.topics.filter(item => item.pinned).length, 1);
-  assert.equal(listed.topics[0].release_version, '0.8.2');
+  assert.equal(listed.topics[0].release_version, current.version);
   assert.equal(listed.topics[0].official_release, true);
   assert.equal(listed.topics[0].author_identity_id, null);
 });

@@ -1,8 +1,17 @@
 # Hardware smoke test
 
-The current 0.8.2 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
+The current 0.8.3 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
+
+## Release 0.8.3 battle-overlay hotfix (2026-08-16)
+
+- Build and release audit: the ROM-free CIA, 3DSX, and code-only corresponding-source archive rebuilt successfully. SHA-256 values are `5dd5253ba52dd88968693096387af84a546aaf93ca15790879f324af6448cb47`, `732cd07521f205ee0e7da8f80f313afe454d2e32c21495bc6cea901959eac049`, and `68f9c63dca0f05b6db7900ddcfe87475842ecd7453d8c58213eaddff9d38f030` respectively.
+- Regression: remote trainers now render only while Emerald's active main callback is the verified original-US-ROM `CB2_Overworld` callback and the battle flag is clear. The runtime rechecks that context when reading presence and again when drawing, so stale map coordinates fail closed during scene transitions.
+- Azahar: with a production-WSS peer connected on Route 102, the peer was visible beside the player, disappeared throughout a real wild Poochyena battle, and returned immediately after fleeing. The battle screen contained no remote sprite, name, or emote; the lower screen reported that it was waiting for the overworld.
+- Automated verification: all 54 tests passed against disposable PostgreSQL 16 with zero skips, and the release audit passed.
+- Production: multi-architecture image `sha256:3f185c8c132cfe3481dd9ec13b2e286862a8b09a2eb654b678d0127a3c3fb1c8` rolled out with both init containers successful and zero application restarts. The publisher reported eight release topics, one known issue, and nine maintained community pages with v0.8.3 current; all four public services are operational and live artifact hashes match the manifest.
+- Physical acceptance: v0.8.2 exposed the overlay defect during a real wild battle. Install v0.8.3 before resuming Gate 4, then repeat the overworld-to-battle-to-overworld check on the physical 3DS before entering the Cable Club.
 
 ## Release 0.8.2 Gate 4 preflight (2026-08-16)
 
@@ -85,7 +94,7 @@ Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abf
 
 ## Gate 4 Cable Club acceptance
 
-1. Preserve an independent copy of both saves. Use release 0.8.2 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
+1. Preserve an independent copy of both saves. Use release 0.8.3 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.
