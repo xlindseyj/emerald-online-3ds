@@ -31,6 +31,8 @@ The initial backfill contains factual posts for 0.3.2, 0.5.0, 0.6.1, 0.7.1, and 
 
 The first production publication completed on 2026-08-16. Migration 004 and the publisher init container exited successfully, anonymous reads returned all five official topics, 0.8.0 was the sole pinned version, and a deliberate second run preserved the same 0.8.0 topic ID. The follow-up rollout applied migration 005 and published the confirmed FPS issue under stable topic ID `b3570148-29d7-44e8-b60c-944f9874bf17`; anonymous reads showed official attribution, confirmed status, no player identity, and the documented workaround.
 
+The v0.8.1 rollout applied migration 006 and published six release topics, one known issue, and nine maintained community pages. A deliberate production rerun retained nine page rows and six release rows with exactly one pinned release. Anonymous reads confirmed the public status, 3DS installation, and Azahar guides carry official attribution without a player identity; board visibility continues to protect paired-only topics.
+
 ## Failure behavior
 
 If catalog validation or publication fails, the init container fails and the new application pod does not start. The previous production pod remains the rollback target. Do not bypass the publisher merely to obtain a Ready pod; correct the catalog, migration, database access, or content error and redeploy.

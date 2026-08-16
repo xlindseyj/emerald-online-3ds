@@ -67,6 +67,8 @@ The 0.8.0 rerun passed all 45 tests with zero skips against disposable PostgreSQ
 
 The v0.8.1 local release suite passed all 50 tests with zero skips against disposable PostgreSQL 17, including migration 006, official community-page idempotency, stable guide URLs, live public-status rendering, release-media serving, metrics privacy, and bounded-load behavior.
 
+Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abfd7ef9567fe9124b577d695834dd45304b07a0fed003637` with verified amd64 and arm64 manifests. Migration 006 and both publisher/application init paths completed with exit code 0; both application containers became Ready with zero restarts. Public verification returned four Operational services with their public URLs, six releases with exactly one pinned release, one confirmed known issue, and nine stable official community pages. The homepage rendered visibly separated Download CIA, Open community, and View live status buttons plus both project-owned screenshots. Public CIA, 3DSX, source, screenshot, and manifest hashes matched the repository. Prometheus reported the metrics target Up with database readiness `1`, Grafana dashboard UID `emerald-online-3ds` returned all 12 panels, and a fresh public WSS protocol-v1 client received `welcome`.
+
 ## Gate 4 Cable Club acceptance
 
 1. Preserve an independent copy of both saves. Use release 0.8.1 on both clients.

@@ -293,6 +293,7 @@
         "alt": "Emerald Online lower-screen dashboard running in Azahar",
         "caption": "Authentic Azahar capture of the project's original lower-screen interface; ROM-derived gameplay pixels and private save information are excluded."
       }
-    ]
+    ],
+    "sourceCommit": "12d30c5"
   }
 ]
