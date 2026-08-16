@@ -492,7 +492,7 @@ static uint32_t read32(const uint8_t* memory, size_t offset) {
 static constexpr size_t EMERALD_GMAIN_OFFSET = 0x22C0;
 static constexpr size_t EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET + 0x4;
 static constexpr size_t EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET + 0x439;
-static constexpr uint32_t EMERALD_CB2_OVERWORLD_THUMB = 0x080867F1;
+static constexpr uint32_t EMERALD_CB2_OVERWORLD_THUMB = 0x08085E5D;
 
 static bool isEmeraldOverworld(void) {
     if (!gbaIwram) return false;

@@ -96,7 +96,7 @@ test('gpSP frontend suppresses remote trainers outside the verified Emerald over
   assert.match(gpspSource, /EMERALD_GMAIN_OFFSET = 0x22C0/);
   assert.match(gpspSource, /EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET \+ 0x4/);
   assert.match(gpspSource, /EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET \+ 0x439/);
-  assert.match(gpspSource, /EMERALD_CB2_OVERWORLD_THUMB = 0x080867F1/);
+  assert.match(gpspSource, /EMERALD_CB2_OVERWORLD_THUMB = 0x08085E5D/);
   assert.match(gpspSource, /callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle/);
   assert.match(gpspSource, /if \(!gbaEwram \|\| !gbaIwram \|\| !isEmeraldOverworld\(\)\) return current/);
   assert.match(gpspSource, /if \(!isEmeraldOverworld\(\) \|\| !presence\.valid\) return/);
