@@ -47,7 +47,12 @@ test('gpSP runtime uses authenticated WebSockets for the public Cloudflare endpo
   assert.match(gpspSource, /MBEDTLS_X509_BADCERT_FUTURE/);
   assert.match(gpspSource, /skew <= 14 \* 60 \* 60/);
   assert.match(gpspSource, /\*flags &= ~MBEDTLS_X509_BADCERT_FUTURE/);
-  assert.match(gpspSource, /TLS%d V%08lx F%d/);
+  assert.match(gpspSource, /NETWORK DIAGNOSTIC/);
+  assert.match(gpspSource, /TLS RESULT  %d/);
+  assert.match(gpspSource, /VERIFY %08lX   CLOCK \+%ds/);
+  assert.match(gpspSource, /TLS HANDSHAKE/);
+  assert.match(gpspSource, /LOG \/3ds\/emerald-online-3ds\/gpsp-debug\.log/);
+  assert.doesNotMatch(gpspSource, /TLS%d V%08lx F%d/);
   assert.match(gpspSource, /Sec-WebSocket-Key/);
   assert.match(gpspSource, /Sec-WebSocket-Accept/);
   assert.match(gpspSource, /webSocketHeaderEquals/);

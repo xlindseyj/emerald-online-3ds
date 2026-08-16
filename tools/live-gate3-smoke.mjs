@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 
 const base=process.env.PUBLIC_BASE_URL??'https://emeraldonline3ds.com';
 const game=process.env.GAME_PUBLIC_URL??'wss://live.emeraldonline3ds.com/game';
-const release=process.env.RELEASE_VERSION??'0.7.0';
+const release=process.env.RELEASE_VERSION??'0.7.1';
 let socket,identity,token,fingerprint;
 const queue=[];let wake;
 function send(message){socket.send(`${JSON.stringify(message)}\n`)}

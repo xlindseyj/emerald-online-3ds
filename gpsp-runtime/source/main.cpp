@@ -54,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.7.0"
+#define APP_VERSION "0.7.1"
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -1673,23 +1673,31 @@ static void drawBottom(void) {
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
         if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
         else if (browserPairingStatus[0] && osGetTime() < browserPairingStatusUntil) drawText(75, 91, .32f, C2D_Color32(255,220,130,255), "%s", browserPairingStatus);
-        else if (onlineMode != ONLINE_ACTIVE) {
+        else if (onlineMode != ONLINE_ACTIVE)
             drawText(18, 91, .27f, C2D_Color32(180,205,200,255), "v%s %s:%u", APP_VERSION, serverHost, serverPort);
-            drawText(18, 178, .27f, C2D_Color32(255,220,130,255), "E%d S%d TLS%d V%08lx F%d", onlineLastError, onlineProtocolStage,
-                onlineTlsResult, (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
-        }
         else drawText(80, 91, .30f, C2D_Color32(180,205,200,255), "TAP PROFILE TO PAIR BROWSER");
-    C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
-    C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
-    drawText(20, 110, .38f, C2D_Color32(160,232,255,255), "NEARBY  %d", remoteCount);
-    for (int i = 0; i < remoteCount && i < 3; ++i) drawText(20, 130 + i * 17, .36f, C2D_Color32(255,255,255,255), "%.12s  %d,%d", remoteTrainers[i].name, remoteTrainers[i].x, remoteTrainers[i].y);
-    if (!remoteCount) drawText(35, 145, .36f, C2D_Color32(180,205,200,255), "No trainers here");
-    drawText(175, 110, .38f, C2D_Color32(160,232,255,255), "MAP CHAT");
-    if (lastChatText[0]) {
-        drawText(175, 130, .34f, C2D_Color32(160,232,255,255), "%.12s", lastChatName);
-        drawText(175, 150, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText);
-        if (strlen(lastChatText) > 20) drawText(175, 168, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText + 20);
-    } else drawText(185, 145, .34f, C2D_Color32(180,205,200,255), "Tap to message");
+    if (onlineMode != ONLINE_ACTIVE) {
+        static const char* stages[] = {"SOCKET", "TLS INIT", "TLS SETUP", "TLS HANDSHAKE", "CERT VERIFY", "WS REQUEST", "WS RESPONSE", "WS ACCEPT"};
+        const char* stage = onlineProtocolStage >= 0 && onlineProtocolStage <= 7 ? stages[onlineProtocolStage] : "UNKNOWN";
+        C2D_DrawRectSolid(10, 104, 0, 300, 90, C2D_Color32(44,52,49,255));
+        drawText(20, 110, .40f, C2D_Color32(160,232,255,255), "NETWORK DIAGNOSTIC");
+        drawText(20, 130, .39f, C2D_Color32(255,220,130,255), "E%d  %s  (STAGE %d)", onlineLastError, stage, onlineProtocolStage);
+        drawText(20, 150, .38f, C2D_Color32(255,255,255,255), "TLS RESULT  %d", onlineTlsResult);
+        drawText(20, 169, .34f, C2D_Color32(255,255,255,255), "VERIFY %08lX   CLOCK +%ds", (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+        drawText(20, 186, .24f, C2D_Color32(180,205,200,255), "LOG /3ds/emerald-online-3ds/gpsp-debug.log");
+    } else {
+        C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
+        C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
+        drawText(20, 110, .38f, C2D_Color32(160,232,255,255), "NEARBY  %d", remoteCount);
+        for (int i = 0; i < remoteCount && i < 3; ++i) drawText(20, 130 + i * 17, .36f, C2D_Color32(255,255,255,255), "%.12s  %d,%d", remoteTrainers[i].name, remoteTrainers[i].x, remoteTrainers[i].y);
+        if (!remoteCount) drawText(35, 145, .36f, C2D_Color32(180,205,200,255), "No trainers here");
+        drawText(175, 110, .38f, C2D_Color32(160,232,255,255), "MAP CHAT");
+        if (lastChatText[0]) {
+            drawText(175, 130, .34f, C2D_Color32(160,232,255,255), "%.12s", lastChatName);
+            drawText(175, 150, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText);
+            if (strlen(lastChatText) > 20) drawText(175, 168, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText + 20);
+        } else drawText(185, 145, .34f, C2D_Color32(180,205,200,255), "Tap to message");
+    }
     const uint32_t colors[4] = {C2D_Color32(41,93,66,255),C2D_Color32(66,80,165,255),C2D_Color32(58,118,80,255),C2D_Color32(98,87,46,255)};
     const char* labels[4] = {"WAVE","BATTLE","TRADE","GG"};
     for (int i = 0; i < 4; ++i) {

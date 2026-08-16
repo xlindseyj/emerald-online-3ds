@@ -1,6 +1,6 @@
 # Gate 4 handoff: experimental link feasibility
 
-Gate 4 is an evidence-gathering spike, not a released promise of working battles or trades. Release 0.7.0 exposes gpSP Serial-Poke only when a private `online.cfg` contains a valid `link_room`. Ordinary installs remain unchanged and link invitations and battle/trade leaderboards remain disabled.
+Gate 4 is an evidence-gathering spike, not a released promise of working battles or trades. Release 0.7.1 exposes gpSP Serial-Poke only when a private `online.cfg` contains a valid `link_room`. Ordinary installs remain unchanged and link invitations and battle/trade leaderboards remain disabled.
 
 ## Implemented and proven
 
@@ -34,10 +34,10 @@ link_room=TEST-2345
 
 Use a fresh unpredictable code instead of the example on the public service. Confirm both screens show `LINK <room> ACTIVE - BACKUP OK` before entering the Cable Club. Back up the whole SD save directory separately, then record battle/trade outcome, both post-session save hashes, restart behavior, interruption behavior, FPS, audio, packet counters, and the complete WSS diagnostic if the connection fails.
 
-## Release 0.7.0
+## Release 0.7.1
 
-- CIA: `release/emerald-online-3ds.cia` — `a40799ebd3df8fae7f3a8661d4a8b509a1c997a07bb6569a0915966bcec17269`
-- 3DSX: `release/emerald-online-3ds.3dsx` — `520f8d28ce2e78f650e0a9371b07b855a4d8e00096b51273e082cca734b96f6d`
-- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.7.0.tar.gz` — `1c6028deaa191562d2f798c10effdd16f9a1ef8a649f5e16bb8c83088f2f6ccf`
+- CIA: `release/emerald-online-3ds.cia` — `a348571370c5abc37a92f0fc1763856b4c6f3913c6a742906decc4e75f6c100e`
+- 3DSX: `release/emerald-online-3ds.3dsx` — `84f9a601839ae6b428eac060dd1b1892db91a2846965e52fc49d9d613f9f7588`
+- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.7.1.tar.gz` — `a9751a767116ad01b04e90017f988fbf1477ebbcaeab3f071b0f8a68aefd0089`
 - Example opt-in configuration: `release/online-link-spike.example.cfg`
-- Production image: `sha256:a2fdab5ee2451d88ad6bf6f6810260b63f33a0ec01170d94ba4a94b27fbc8617`
+- Production image: `sha256:62de249266a43622b320d2a1867673ba23a6fe89de0f9246ea9b5d540abb8367`

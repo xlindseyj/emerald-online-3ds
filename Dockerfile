@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 
 ENV NODE_ENV=production \
@@ -11,7 +12,7 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev --no-audit --no-fund
 COPY server/src ./server/src
 COPY server/migrations ./server/migrations
 COPY server/tools ./server/tools
@@ -20,7 +21,7 @@ COPY assets/emerald-online-3ds-icon.png ./assets/emerald-online-3ds-icon.png
 COPY assets/emerald-online-3ds-web-logo.png ./assets/emerald-online-3ds-web-logo.png
 COPY release/emerald-online-3ds.cia ./release/emerald-online-3ds.cia
 COPY release/emerald-online-3ds.3dsx ./release/emerald-online-3ds.3dsx
-COPY release/emerald-online-3ds-source-0.7.0.tar.gz ./release/emerald-online-3ds-source-0.7.0.tar.gz
+COPY release/emerald-online-3ds-source-0.7.1.tar.gz ./release/emerald-online-3ds-source-0.7.1.tar.gz
 COPY release/SHA256SUMS ./release/SHA256SUMS
 
 USER node
