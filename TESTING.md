@@ -32,6 +32,10 @@ The follow-up privacy/known-issue rollout uses multi-architecture image `sha256:
 
 The Gate 4 handoff rebuild and rollout uses multi-architecture image `sha256:d46a3f064b31a493e4a9e4dabb6d34abd287cc1ba9ba36c7cc12ae2db98193ee`. Both init containers exited 0, both application containers had zero restarts, and the connected physical client automatically returned authenticated and positioned. The public CIA and manifest matched SHA-256 `500169bf7579fe118b39bd79d307c1b95a21ea5b2fcffb201ddf21bad7c94a45`; the existing pinned 0.8.0 release topic retained ID `cfe84b4d-4826-46d3-a5be-d277b3f79e64` and was updated in place with the new artifact checksum.
 
+## Physical device v0.8.1 staging (2026-08-16)
+
+The v0.8.1 3DSX and CIA were transferred through the console's private ftpd service. Re-downloading each file from the device produced the release-manifest hashes `33cf8ccda02205ab352b08811ae059cf86b81794c0101481788dc8d49d083b80` and `012da4236b2018d5e64faefcfedfe786fe207d0b925cf714cf755c534e385c37`. The existing `online.cfg` already selected `live.emeraldonline3ds.com:443`, WSS, and `/game`, so it was preserved along with `identity.cfg`, `stats.cfg`, the ROM/save area, and avatar data. The previous public 3DSX remains beside the application as a recoverable `.pre-v0.8.1.bak`. The CIA is staged under `/cias/`; physical HOME Menu execution still requires selecting it in FBI, and physical runtime acceptance is not claimed until the user launches and completes the checklist.
+
 ## Latest physical result (2026-08-15, protocol-v2 WSS test)
 
 - Console: blue Old Nintendo 3DS XL.
