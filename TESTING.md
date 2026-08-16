@@ -85,7 +85,7 @@ Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abf
 
 ## Gate 4 Cable Club acceptance
 
-1. Preserve an independent copy of both saves. Use release 0.8.1 on both clients.
+1. Preserve an independent copy of both saves. Use release 0.8.2 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.

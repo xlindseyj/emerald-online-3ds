@@ -1,6 +1,6 @@
 # Gate 2 handoff: paired community and defects
 
-Gate 2 implementation, release packaging, PostgreSQL migration, production deployment, and automated/live acceptance completed on 2026-08-15. Physical Old 3DS WSS and pairing confirmation remain the release handoff test.
+Gate 2 implementation, release packaging, PostgreSQL migration, production deployment, automated/live acceptance, and later physical Old 3DS WSS/pairing acceptance are complete. This document preserves the original 0.5.0 handoff evidence; current installation/testing must use the release and hashes in `GATE_4_PHYSICAL_TEST.md` rather than the superseded artifacts below.
 
 ## Shipped
 
@@ -23,7 +23,7 @@ Gate 2 implementation, release packaging, PostgreSQL migration, production deplo
 - Public `/community`, anonymous session/categories, legal footer, 0.5.0 downloads, and hashes were checked through Cloudflare.
 - A live synthetic 3DS identity approved browser pairing, created a paired-only topic and reply, returned 404 anonymously, returned 200 paired, and leaked no internal identity UUID. Its content and identity were removed; direct database verification found zero remaining synthetic rows.
 
-## Physical acceptance
+## Historical physical acceptance handoff
 
 The physical console still has the earlier header-only build, which explains its continuing `E71`. When ftpd is available, preserve the existing ROM, save, state, avatar atlas, debug log, and `identity.cfg`; replace only:
 

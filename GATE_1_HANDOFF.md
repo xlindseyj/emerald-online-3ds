@@ -1,6 +1,6 @@
 # Gate 1 handoff: anonymous identity and PostgreSQL
 
-Gate 1 implementation and automated/live acceptance completed on 2026-08-15. Physical Old 3DS confirmation is the remaining handoff test before Gate 2 begins.
+Gate 1 implementation and automated/live acceptance completed on 2026-08-15. This document preserves the original 0.5.0 handoff evidence; Gate 1's later physical WSS/SD identity acceptance is complete, and current installation/testing must use the release and hashes in `GATE_4_PHYSICAL_TEST.md` rather than the superseded artifacts below.
 
 ## Shipped
 
@@ -22,7 +22,7 @@ Gate 1 implementation and automated/live acceptance completed on 2026-08-15. Phy
 
 The cluster's MinIO service rejects S3 SSE because no KMS is configured. Backups are compressed and access is restricted to a dedicated bucket/prefix-scoped MinIO user, but encryption at rest is not claimed. Configure a MinIO KMS, re-enable CNPG object encryption, and repeat the restore drill before describing backups as encrypted.
 
-## Physical acceptance
+## Historical physical acceptance handoff
 
 The initial transfer exposed an `E71` WebSocket protocol error on physical hardware. A first HTTP header-capitalization fix did not resolve it. The new diagnostics reproduced the error against production in Azahar as mbedTLS `-0x2700` with `MBEDTLS_X509_BADCERT_FUTURE`: the 3DS local wall clock was interpreted as UTC and lagged real UTC by four hours. The current build applies a narrowly bounded timezone-skew exception while retaining every other certificate check, and the exact gpSP build has completed production WSS enrollment in Azahar. The last package copied to the device remains the header-only build. Gate 2 now supersedes the standalone Gate 1 package; transfer the following current 0.5.0 artifacts when ftpd is available:
 
