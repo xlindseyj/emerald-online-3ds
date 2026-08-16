@@ -3,6 +3,7 @@
 #include <citro3d.h>
 
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -13,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <mbedtls/base64.h>
@@ -124,8 +126,21 @@ static mbedtls_ssl_config tlsConfig;
 static mbedtls_ssl_context tlsContext;
 static bool tlsInitialized;
 static bool tlsActive;
+static int onlineProtocolStage;
+static int onlineTlsResult;
+static uint32_t onlineTlsVerify;
+static int onlineTlsFutureSkew;
 static char lastChatName[13];
 static char lastChatText[81];
+
+static void debugNetworkFailure(void) {
+    FILE* file = fopen(DEBUG_LOG_PATH, "a");
+    if (!file) return;
+    fprintf(file, "%llu wss-failed stage=%d tls=%d verify=%08lx skew=%d\n",
+        (unsigned long long) osGetTime(), onlineProtocolStage, onlineTlsResult,
+        (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+    fclose(file);
+}
 
 struct GamePresence {
     bool valid;
@@ -433,6 +448,37 @@ static int tlsSocketReceive(void* context, unsigned char* data, size_t size) {
     return MBEDTLS_ERR_NET_RECV_FAILED;
 }
 
+// The 3DS RTC stores the wall clock selected by the user, while this mbedTLS
+// port interprets that value as UTC. That makes a newly issued certificate
+// appear up to one timezone offset "from the future" (four hours in EDT).
+// Permit only that single flag and only within the full civil-timezone range;
+// hostname, signature, trust-chain, expiry, and every other check stay strict.
+static int64_t daysFromCivil(int year, unsigned month, unsigned day) {
+    year -= month <= 2;
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const unsigned yearOfEra = (unsigned) (year - era * 400);
+    const unsigned dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    const unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+    return (int64_t) era * 146097 + dayOfEra - 719468;
+}
+
+static int64_t x509TimeSeconds(const mbedtls_x509_time* value) {
+    return daysFromCivil(value->year, (unsigned) value->mon, (unsigned) value->day) * 86400 +
+        value->hour * 3600 + value->min * 60 + value->sec;
+}
+
+static int tlsVerifyCertificate(void*, mbedtls_x509_crt* certificate, int, uint32_t* flags) {
+    if (!certificate || !flags || !(*flags & MBEDTLS_X509_BADCERT_FUTURE)) return 0;
+    const int64_t now = (int64_t) time(NULL);
+    const int64_t notBefore = x509TimeSeconds(&certificate->valid_from);
+    const int64_t skew = notBefore - now;
+    if (now > 0 && skew >= 0 && skew <= 14 * 60 * 60) {
+        *flags &= ~MBEDTLS_X509_BADCERT_FUTURE;
+        if (skew > onlineTlsFutureSkew) onlineTlsFutureSkew = (int) skew;
+    }
+    return 0;
+}
+
 static bool tlsInitialize(void) {
     if (tlsInitialized) return true;
     mbedtls_entropy_init(&tlsEntropy);
@@ -446,6 +492,7 @@ static bool tlsInitialize(void) {
         mbedtls_ssl_config_defaults(&tlsConfig, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)) return false;
     mbedtls_ssl_conf_authmode(&tlsConfig, MBEDTLS_SSL_VERIFY_REQUIRED);
     mbedtls_ssl_conf_ca_chain(&tlsConfig, &tlsRoots, NULL);
+    mbedtls_ssl_conf_verify(&tlsConfig, tlsVerifyCertificate, NULL);
     mbedtls_ssl_conf_rng(&tlsConfig, mbedtls_ctr_drbg_random, &tlsRandom);
     if (mbedtls_ssl_setup(&tlsContext, &tlsConfig)) return false;
     tlsInitialized = true;
@@ -505,21 +552,71 @@ static bool webSocketWriteFrame(uint8_t opcode, const unsigned char* payload, si
     return onlineWriteBytes(frame, header + size) == (int) (header + size);
 }
 
+static bool asciiCaseEqual(const char* left, size_t leftSize, const char* right) {
+    size_t rightSize = strlen(right);
+    if (leftSize != rightSize) return false;
+    for (size_t index = 0; index < leftSize; ++index)
+        if (tolower((unsigned char) left[index]) != tolower((unsigned char) right[index])) return false;
+    return true;
+}
+
+// HTTP field names are case-insensitive. Cloudflare currently emits
+// "Sec-Websocket-Accept", while Node and other edges may emit
+// "Sec-WebSocket-Accept". Compare the name case-insensitively but preserve the
+// case-sensitive base64 accept value.
+static bool webSocketHeaderEquals(const char* response, const char* name, const char* expected) {
+    const char* line = strstr(response, "\r\n");
+    if (!line) return false;
+    line += 2;
+    while (*line) {
+        const char* end = strstr(line, "\r\n");
+        if (!end || end == line) break;
+        const char* colon = (const char*) memchr(line, ':', (size_t) (end - line));
+        if (colon && asciiCaseEqual(line, (size_t) (colon - line), name)) {
+            const char* value = colon + 1;
+            while (value < end && (*value == ' ' || *value == '\t')) ++value;
+            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) --end;
+            return (size_t) (end - value) == strlen(expected) && !memcmp(value, expected, strlen(expected));
+        }
+        line = end + 2;
+    }
+    return false;
+}
+
 static bool startSecureWebSocket(void) {
+    onlineProtocolStage = 1;
+    onlineTlsResult = 0;
+    onlineTlsVerify = 0;
+    onlineTlsFutureSkew = 0;
     if (!tlsInitialize()) return false;
-    if (mbedtls_ssl_session_reset(&tlsContext) || mbedtls_ssl_set_hostname(&tlsContext, serverHost)) return false;
+    onlineProtocolStage = 2;
+    if ((onlineTlsResult = mbedtls_ssl_session_reset(&tlsContext)) ||
+        (onlineTlsResult = mbedtls_ssl_set_hostname(&tlsContext, serverHost))) return false;
     mbedtls_ssl_set_bio(&tlsContext, &onlineSocket, tlsSocketSend, tlsSocketReceive, NULL);
 
+    onlineProtocolStage = 3;
     uint64_t deadline = osGetTime() + 8000;
     int result;
     while ((result = mbedtls_ssl_handshake(&tlsContext)) != 0) {
-        if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) return false;
-        if (osGetTime() >= deadline) return false;
+        onlineTlsResult = result;
+        if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            onlineTlsVerify = mbedtls_ssl_get_verify_result(&tlsContext);
+            return false;
+        }
+        if (osGetTime() >= deadline) {
+            onlineTlsResult = MBEDTLS_ERR_SSL_TIMEOUT;
+            onlineTlsVerify = mbedtls_ssl_get_verify_result(&tlsContext);
+            return false;
+        }
         svcSleepThread(1000000);
     }
-    if (mbedtls_ssl_get_verify_result(&tlsContext) != 0) return false;
+    onlineTlsResult = 0;
+    onlineProtocolStage = 4;
+    onlineTlsVerify = mbedtls_ssl_get_verify_result(&tlsContext);
+    if (onlineTlsVerify != 0) return false;
     tlsActive = true;
 
+    onlineProtocolStage = 5;
     unsigned char nonce[16];
     unsigned char key[32] = {};
     size_t keyLength = 0;
@@ -541,9 +638,7 @@ static bool startSecureWebSocket(void) {
     if (mbedtls_sha1_ret((const unsigned char*) acceptSource, strlen(acceptSource), digest) ||
         mbedtls_base64_encode(accept, sizeof(accept) - 1, &acceptLength, digest, sizeof(digest))) return false;
     accept[acceptLength] = 0;
-    char expectedHeader[80];
-    snprintf(expectedHeader, sizeof(expectedHeader), "Sec-WebSocket-Accept: %s", accept);
-
+    onlineProtocolStage = 6;
     char response[2048] = {};
     size_t responseLength = 0;
     deadline = osGetTime() + 8000;
@@ -558,7 +653,10 @@ static bool startSecureWebSocket(void) {
         responseLength += (size_t) result;
         response[responseLength] = 0;
     }
-    if (strncmp(response, "HTTP/1.1 101", 12) || !strstr(response, expectedHeader)) return false;
+    if (strncmp(response, "HTTP/1.1 101", 12)) return false;
+    onlineProtocolStage = 7;
+    if (!webSocketHeaderEquals(response, "Sec-WebSocket-Accept", (const char*) accept)) return false;
+    onlineProtocolStage = 0;
     return true;
 }
 
@@ -656,7 +754,7 @@ static bool onlineSend(const char* message) {
 }
 
 static void onlineConnected(void) {
-    if (secureWebSocket && !startSecureWebSocket()) return onlineFail(EPROTO);
+    if (secureWebSocket && !startSecureWebSocket()) { debugNetworkFailure(); return onlineFail(EPROTO); }
     onlineMode = ONLINE_ACTIVE;
     onlineLastError = 0;
     lastPing = osGetTime();
@@ -1093,7 +1191,7 @@ static void drawBottom(void) {
     if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), "MAP %u-%u   TILE %d,%d", presence.mapGroup, presence.mapNum, presence.x, presence.y);
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
         if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
-        else if (onlineMode != ONLINE_ACTIVE) drawText(75, 91, .32f, C2D_Color32(180,205,200,255), "%s:%u  E%d", serverHost, serverPort, onlineLastError);
+        else if (onlineMode != ONLINE_ACTIVE) drawText(68, 91, .30f, C2D_Color32(180,205,200,255), "%s:%u E%d S%d", serverHost, serverPort, onlineLastError, onlineProtocolStage);
     C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     drawText(20, 110, .38f, C2D_Color32(160,232,255,255), "NEARBY  %d", remoteCount);

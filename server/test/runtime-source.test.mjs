@@ -40,14 +40,20 @@ test('gpSP runtime uses authenticated WebSockets for the public Cloudflare endpo
   assert.match(gpspSource, /DEFAULT_PORT 443/);
   assert.match(gpspSource, /MBEDTLS_SSL_VERIFY_REQUIRED/);
   assert.match(gpspSource, /mbedtls_ssl_set_hostname\(&tlsContext, serverHost\)/);
+  assert.match(gpspSource, /MBEDTLS_X509_BADCERT_FUTURE/);
+  assert.match(gpspSource, /skew <= 14 \* 60 \* 60/);
+  assert.match(gpspSource, /\*flags &= ~MBEDTLS_X509_BADCERT_FUTURE/);
   assert.match(gpspSource, /Sec-WebSocket-Key/);
   assert.match(gpspSource, /Sec-WebSocket-Accept/);
+  assert.match(gpspSource, /webSocketHeaderEquals/);
+  assert.match(gpspSource, /tolower/);
+  assert.doesNotMatch(gpspSource, /strstr\(response, expectedHeader\)/);
   assert.match(gpspSource, /webSocketWriteFrame/);
   assert.match(gpspSource, /parseJsonString/);
   assert.match(gpspSource, /findJsonObjectEnd/);
   assert.doesNotMatch(gpspSource, /strstr\(line, "\\\"type/);
   assert.match(gpspSource, /transport.*tcp/s);
-  assert.match(gpspSource, /!strcmp\(serverHost, "192\.168\.0\.25"\).*serverPort == 3210/s);
+  assert.doesNotMatch(gpspSource, /192\.168\./);
 });
 
 test('gpSP audio rate is applied after content options load', () => {

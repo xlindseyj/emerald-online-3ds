@@ -24,13 +24,14 @@ The cluster's MinIO service rejects S3 SSE because no KMS is configured. Backups
 
 ## Physical acceptance
 
-The transfer package was copied over FTP on 2026-08-15:
+The initial transfer exposed an `E71` WebSocket protocol error on physical hardware. A first HTTP header-capitalization fix did not resolve it. The new diagnostics reproduced the error against production in Azahar as mbedTLS `-0x2700` with `MBEDTLS_X509_BADCERT_FUTURE`: the 3DS local wall clock was interpreted as UTC and lagged real UTC by four hours. The current build applies a narrowly bounded timezone-skew exception while retaining every other certificate check, and the exact gpSP build has completed production WSS enrollment in Azahar. The last package copied to the device remains the header-only build; transfer the following current artifacts when ftpd is available:
 
 - `/3ds/emerald-online-3ds/online.cfg` contains `live.emeraldonline3ds.com`, port `443`, `wss`, and `/game`.
-- `/3ds/emerald-online-3ds/emerald-online-3ds.3dsx` SHA-256 is `6ebf8e82828d2b5a7966a78be80e59af60d486ccdd0ec6bb94049fdaf5a4b44a`.
-- `/cias/emerald-online-3ds.cia` SHA-256 is `24686aece224a865ce5e88d2403c5e6d1bd07f37399ea91a0733b82bb8ead8e8`; install it with FBI to update the HOME Menu title.
+- `/3ds/emerald-online-3ds/emerald-online-3ds.3dsx` SHA-256 is `386e5a01b18b3d96e2f777de78b4c1961be1f5e286d10bcd9a0c9b679697c9f5`.
+- `/cias/emerald-online-3ds.cia` SHA-256 is `42c20d312d277627a969397b7c45fff94fe4dfdb6ecf1463568c5b298fe4b96d`; install it with FBI to update the HOME Menu title.
 - The existing ROM, save, save state, debug log, and avatar atlas were not changed. No prior `identity.cfg` existed.
 - The prior 3DSX and config are retained locally in ignored `generated/device-backups/physical-3ds-pre-gate1-20260815T2342Z/` for rollback.
+- The pre-hotfix 3DSX and config are retained in ignored `generated/device-backups/physical-3ds-pre-wss-header-fix-20260816T000007Z/`.
 
 On the Old 3DS XL, launch the transferred 0.4.0 build and verify:
 

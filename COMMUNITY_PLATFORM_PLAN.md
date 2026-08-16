@@ -13,7 +13,7 @@ The revised plan avoids three major risks:
 ## Execution status
 
 - Gate 0: complete and published to the LindseyWebSolutions Gitea organization.
-- Gate 1: implementation and automated/live acceptance complete on 2026-08-15; the final physical 3DS WSS and SD-identity check remains the hardware handoff test.
+- Gate 1: implementation and automated/live acceptance complete on 2026-08-15. Physical WSS exposed both header-capitalization and 3DS-local-clock certificate-validation issues. The exact clock-skew fix passes production WSS in Azahar; copying it and confirming WSS/SD identity on hardware remain the final handoff test.
 - Gates 2-5: not started. Gate 2 is next after the Gate 1 hardware result is recorded.
 
 ## Gate 0: Repository, Build, and Licensing

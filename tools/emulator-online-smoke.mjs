@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import WebSocket from 'ws';
 import { startServers } from '../server/src/server.mjs';
 import { MemoryIdentityStore } from '../server/src/identity-store.mjs';
 
@@ -14,6 +15,9 @@ const app = process.env.RUNTIME_3DSX
   ? path.resolve(root, process.env.RUNTIME_3DSX)
   : path.join(root, 'release', 'emerald-online-3ds.3dsx');
 const isGpspRuntime = path.basename(app) === 'emerald-online-3ds.3dsx';
+const networkMode = process.env.EMULATOR_NETWORK_MODE ?? 'local-tcp';
+if (!['local-tcp', 'production-wss'].includes(networkMode)) throw new Error('EMULATOR_NETWORK_MODE must be local-tcp or production-wss');
+const productionWss = networkMode === 'production-wss';
 const privateRom = path.join(root, 'Pokemon - Emerald Version.gba');
 const privateConfig = path.join(root, 'generated', 'sd-card', '3ds', 'emerald-online-3ds', 'online.cfg');
 const profile = path.join(root, '.tools', 'azahar-profile');
@@ -25,16 +29,21 @@ fs.mkdirSync(virtualSd, { recursive: true });
 fs.copyFileSync(privateRom, path.join(virtualSd, 'emerald.gba'));
 const privateAvatar = path.join(root, 'generated', 'sd-card', '3ds', 'emerald-online-3ds', 'avatars.t3x');
 if (fs.existsSync(privateAvatar)) fs.copyFileSync(privateAvatar, path.join(virtualSd, 'avatars.t3x'));
-// Keep emulator validation local and deterministic. Azahar does not implement
-// the Luma kernel backdoor used by the hardware dynarec, so use the interpreter.
+// Azahar does not implement the Luma kernel backdoor used by the hardware
+// dynarec, so all emulator modes use the interpreter. The default local mode
+// is deterministic; production-wss exercises the exact mbedTLS/Cloudflare path.
 fs.writeFileSync(path.join(virtualSd, 'online.cfg'), [
-  'server=127.0.0.1', 'port=3210', 'transport=tcp', 'path=/game',
+  productionWss ? 'server=live.emeraldonline3ds.com' : 'server=127.0.0.1',
+  productionWss ? 'port=443' : 'port=3210',
+  productionWss ? 'transport=wss' : 'transport=tcp', 'path=/game',
   'name=May', 'dynarec=disabled', ''
 ].join('\n'));
 const virtualIdentity = path.join(virtualSd, 'identity.cfg');
+const virtualLog = path.join(virtualSd, 'gpsp-debug.log');
 fs.rmSync(virtualIdentity, { force: true });
+fs.rmSync(virtualLog, { force: true });
 
-const { presence, health } = await startServers({ identityStore: new MemoryIdentityStore() });
+const local = productionWss ? null : await startServers({ identityStore: new MemoryIdentityStore() });
 let display;
 if (!isWindows && !process.env.DISPLAY) {
   const xvfb = path.join(root, '.tools', 'xvfb', 'root', 'usr', 'bin', 'Xvfb');
@@ -55,13 +64,38 @@ const child = spawn(emulator, emulatorArgs, {
   }
 });
 try {
+  if (productionWss) {
+    const deadline = Date.now() + 25000;
+    while (Date.now() < deadline && !fs.existsSync(virtualIdentity)) await new Promise(resolve => setTimeout(resolve, 500));
+    const diagnostic = fs.existsSync(virtualLog) ? fs.readFileSync(virtualLog, 'utf8') : '';
+    if (!fs.existsSync(virtualIdentity)) throw new Error(`runtime did not enroll through production WSS\n${diagnostic.slice(-2000)}`);
+    const identityConfig = fs.readFileSync(virtualIdentity, 'utf8');
+    const identity = identityConfig.match(/^id=([0-9a-f-]{36})$/m)?.[1];
+    const token = identityConfig.match(/^token=([0-9a-f]{64})$/m)?.[1];
+    if (!identity || !token) throw new Error('runtime persisted an invalid production identity credential');
+    await new Promise((resolve, reject) => {
+      const socket = new WebSocket('wss://live.emeraldonline3ds.com/game');
+      const timeout = setTimeout(() => { socket.terminate(); reject(new Error('production identity cleanup timeout')); }, 8000);
+      socket.on('open', () => socket.send(`${JSON.stringify({ type: 'hello', version: 2, name: 'Azahar', identity, token, avatar: 'girl' })}\n`));
+      socket.on('message', data => {
+        for (const line of data.toString().split('\n').filter(Boolean)) {
+          const message = JSON.parse(line);
+          if (message.type === 'welcome') socket.send('{"type":"delete_identity","confirm":"DELETE"}\n');
+          if (message.type === 'identity_deleted') { clearTimeout(timeout); socket.close(); resolve(); }
+        }
+      });
+      socket.on('error', reject);
+    });
+    console.log(JSON.stringify({ ok: true, engine: 'gpSP-interpreter-smoke', network: 'production-wss', endpoint: 'wss://live.emeraldonline3ds.com/game', serverIssuedIdentityPersisted: true, syntheticIdentityDeleted: true, diagnostic: diagnostic.trim().split('\n').slice(-3) }));
+    process.exitCode = 0;
+  } else {
   const deadline = Date.now() + 15000;
   let connections = 0;
   let runtimeClient;
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 500));
-    connections = presence.clients.size;
-    runtimeClient = [...presence.clients.values()][0];
+    connections = local.presence.clients.size;
+    runtimeClient = [...local.presence.clients.values()][0];
     if (runtimeClient?.name) break;
   }
   if (!connections) throw new Error('runtime did not connect to the presence server within 15 seconds');
@@ -81,12 +115,12 @@ try {
   runtimeClient = undefined;
   while (Date.now() < reconnectDeadline) {
     await new Promise(resolve => setTimeout(resolve, 250));
-    runtimeClient = [...presence.clients.values()].find(client => client.name === 'May');
+    runtimeClient = [...local.presence.clients.values()].find(client => client.name === 'May');
     if (runtimeClient?.name && (isGpspRuntime || runtimeClient.state)) break;
   }
   if (!runtimeClient?.name || (!isGpspRuntime && !runtimeClient.state)) throw new Error('runtime did not reconnect after a forced disconnect');
   if (runtimeClient.id !== firstId) throw new Error('runtime received a different public trainer ID after reconnect');
-  connections = presence.clients.size;
+  connections = local.presence.clients.size;
   runtimeClient.socket.write(`${JSON.stringify({ type: 'snapshot', map: '0-0', players: [
     { id: 'smoke-peer', name: 'Brendan', map: '0-0', x: 1, y: 1, facing: 'down' }
   ] })}\n`);
@@ -101,9 +135,12 @@ try {
   await new Promise(resolve => setTimeout(resolve, 1500));
   if (child.exitCode !== null) throw new Error(`runtime exited after snapshot injection (${child.exitCode})`);
   console.log(JSON.stringify({ ok: true, engine: isGpspRuntime ? 'gpSP-interpreter-smoke' : 'mGBA', emulatorPid: child.pid, connections, trainerName: runtimeClient.name, protocol: 2, serverIssuedIdentityPersisted: true, stableReconnectIdentity: true, stationaryKeepalive: true, automaticReconnect: true, stateRepublished: Boolean(runtimeClient.state), movementSnapshotsInjected: 2, chatInjected: true, emotesInjected: 4 }));
+  }
 } finally {
   child.kill();
   if (display) display.kill();
-  await new Promise(resolve => presence.server.close(resolve));
-  await new Promise(resolve => health.close(resolve));
+  if (local) {
+    await new Promise(resolve => local.presence.server.close(resolve));
+    await new Promise(resolve => local.health.close(resolve));
+  }
 }
