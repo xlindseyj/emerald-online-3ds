@@ -1,6 +1,6 @@
 {
   "name": "emerald-online-3ds",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,7 @@
     "build:private": "bash scripts/build-runtime.sh",
     "audit:release": "bash scripts/audit-release.sh",
     "smoke:emulator": "node tools/emulator-online-smoke.mjs",
+    "smoke:live:gate3": "node tools/live-gate3-smoke.mjs",
     "test": "node --test server/test/*.test.mjs web/*.test.mjs"
   },
   "dependencies": {

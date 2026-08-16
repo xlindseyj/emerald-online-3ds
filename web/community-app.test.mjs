@@ -3,20 +3,22 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { MemoryIdentityStore } from '../server/src/identity-store.mjs';
 import { MemoryCommunityStore } from '../server/src/community-store.mjs';
+import { MemoryStatsStore } from '../server/src/stats-store.mjs';
 import { createCommunityApp } from './community-app.mjs';
 import { communityPage } from './community-page.mjs';
 
 async function startApp(t) {
   const identityStore = new MemoryIdentityStore();
   const communityStore = new MemoryCommunityStore();
-  const handler = createCommunityApp({ identityStore, communityStore, secureCookies: false, page: communityPage });
+  const statsStore = new MemoryStatsStore();
+  const handler = createCommunityApp({ identityStore, communityStore, statsStore, secureCookies: false, page: communityPage });
   const server = http.createServer(async (req, res) => {
     const handled = await handler(req, res, new URL(req.url, 'http://localhost'));
     if (!handled) res.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
-  return { identityStore, communityStore, base: `http://127.0.0.1:${server.address().port}` };
+  return { identityStore, communityStore, statsStore, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function pair(base, identityStore, enrollment) {
@@ -51,6 +53,31 @@ test('community page is public, anonymous, and explains 3DS pairing', async t =>
   assert.match(body, /tap your trainer profile on the bottom screen/);
   assert.match(body, /Not affiliated with Nintendo/);
   assert.doesNotMatch(body, /Lindsey|LWS/);
+  assert.match(body, /Leaderboards/);
+});
+
+test('profiles and leaderboards are paired-only and stats deletion requires CSRF plus confirmation', async t => {
+  const {base,identityStore,statsStore}=await startApp(t);
+  assert.equal((await request(base,'/api/community/profile')).status,403);
+  assert.equal((await request(base,'/api/community/leaderboards')).status,403);
+  const enrollment=await identityStore.enroll(),auth=await pair(base,identityStore,enrollment);
+  const fields={pokedex_seen:true,pokedex_caught:true,badges:true,frontier_streaks:true};
+  await statsStore.setConsent(enrollment.identityId,enrollment.credentialId,true,fields);
+  await statsStore.submitSnapshot(enrollment.identityId,enrollment.credentialId,{release:'0.6.0',values:{pokedex_seen:25,pokedex_caught:12,badges:2}});
+  const profile=await (await request(base,'/api/community/profile',auth)).json();
+  assert.equal(profile.stats.scores.some(row=>row.credentialId),false);
+  const board=await (await request(base,'/api/community/leaderboards?board=pokedex-caught&release=0.6.0&page=1',auth)).json();
+  assert.equal(board.entries[0].score,12);
+  assert.equal(board.policy.integrity_label,'Community-submitted');
+  const disabled=await (await request(base,'/api/community/leaderboards?board=online-battles&release=0.6.0&page=1',auth)).json();
+  assert.equal(disabled.policy.enabled,false);
+  const compatibility=await request(base,'/api/community/compatibility-reports',auth,{method:'POST',body:JSON.stringify({release:'0.6.0',artifactHash:'a'.repeat(64),consoleModel:'old-3ds-xl',installMethod:'cia',transport:'wss',result:'partial',notes:'WSS connected; physical UI retest pending.'})});
+  assert.equal(compatibility.status,201);
+  const compatibilityBoard=await (await request(base,'/api/community/leaderboards?board=beta-compatibility&release=0.6.0&page=1',auth)).json();
+  assert.equal(compatibilityBoard.entries[0].score,1);assert.equal(compatibilityBoard.policy.integrity_label,'Server-observed');
+  assert.equal((await request(base,'/api/community/stats',auth,{method:'DELETE',body:JSON.stringify({confirm:'wrong'})})).status,400);
+  assert.equal((await request(base,'/api/community/stats',auth,{method:'DELETE',body:JSON.stringify({confirm:'DELETE ALL STATS'})})).status,200);
+  assert.equal((await statsStore.profile(enrollment.identityId)).scores.length,0);
 });
 
 test('pairing gates private boards and forum writes while public help remains readable', async t => {

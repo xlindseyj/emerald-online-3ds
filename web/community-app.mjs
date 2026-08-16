@@ -11,7 +11,11 @@ const MODELS = new Set(['old-3ds', 'old-3ds-xl', 'new-3ds', 'new-3ds-xl', 'new-2
 const INSTALLS = new Set(['cia', '3dsx']);
 const TRANSPORTS = new Set(['wss', 'tcp']);
 const DEFECT_STATES = new Set(['new', 'needs-information', 'confirmed', 'in-progress', 'needs-retest', 'fixed', 'closed']);
+const COMPATIBILITY_RESULTS = new Set(['pass','fail','partial']);
 const COOKIE = 'emerald_session';
+const BOARD = new Set(['pokedex-seen','pokedex-caught','badges','frontier-streak','online-battles','online-trades','beta-compatibility']);
+const RELEASE = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-z0-9.-]+)?$/i;
+const VARIANT = /^[a-z0-9:-]{0,80}$/;
 
 function headers(extra = {}) {
   return {
@@ -91,7 +95,7 @@ function requestIp(req) {
   return String(req.headers['cf-connecting-ip'] ?? req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? 'unknown').split(',')[0].trim();
 }
 
-export function createCommunityApp({ identityStore, communityStore, secureCookies = true, page = '' }) {
+export function createCommunityApp({ identityStore, communityStore, statsStore = null, secureCookies = true, page = '' }) {
   if (!identityStore || !communityStore) throw new Error('identity and community stores are required');
   const pairingStarts = new Map();
   const writeBuckets = new Map();
@@ -168,6 +172,50 @@ export function createCommunityApp({ identityStore, communityStore, secureCookie
         await identityStore.revokeBrowserSession(auth.token);
         send(res, 200, { ok: true }, { 'set-cookie': clearCookie });
         return true;
+      }
+      if (pathname === '/api/community/profile' && req.method === 'GET') {
+        if (!auth.session || !statsStore) return send(res, 403, { ok: false, error: 'paired_session_required' }), true;
+        send(res, 200, { ok: true, fingerprint: auth.session.fingerprint, stats: await statsStore.profile(auth.session.identity_id) });
+        return true;
+      }
+      if (pathname === '/api/community/leaderboards' && req.method === 'GET') {
+        if (!auth.session || !statsStore) return send(res, 403, { ok: false, error: 'paired_session_required' }), true;
+        const board = url.searchParams.get('board') ?? 'pokedex-caught';
+        const release = url.searchParams.get('release') ?? '0.6.0';
+        const variant = url.searchParams.get('variant') ?? '';
+        const pageNumber = Number(url.searchParams.get('page') ?? 1);
+        if (!BOARD.has(board) || !RELEASE.test(release) || !VARIANT.test(variant) || !Number.isSafeInteger(pageNumber) || pageNumber < 1) return send(res, 400, { ok: false, error: 'invalid_leaderboard_query' }), true;
+        const result = await statsStore.listBoards({ board, release, variant, page: pageNumber });
+        if (!result) return send(res, 404, { ok: false, error: 'leaderboard_not_found' }), true;
+        send(res, 200, { ok: true, ...result });
+        return true;
+      }
+      if (pathname === '/api/community/compatibility-reports' && req.method === 'POST') {
+        if (!auth.session || !statsStore || !requireCsrf(req,auth)) return send(res,403,{ok:false,error:'csrf_or_session_required'}),true;
+        if(rateLimited(res,auth,'compatibility-reports',12,3600000))return true;
+        const body=await jsonBody(req),notes=typeof body.notes==='string'&&body.notes.length<=1000?body.notes.trim():null;
+        if(!RELEASE.test(body.release??'')||!HASH.test(body.artifactHash??'')||!MODELS.has(body.consoleModel)||!INSTALLS.has(body.installMethod)||!TRANSPORTS.has(body.transport)||!COMPATIBILITY_RESULTS.has(body.result)||notes===null)return send(res,400,{ok:false,error:'invalid_compatibility_report'}),true;
+        const created=await statsStore.reportCompatibility(auth.session.identity_id,{release:body.release,artifactHash:body.artifactHash,consoleModel:body.consoleModel,installMethod:body.installMethod,transport:body.transport,result:body.result,notes});
+        send(res,201,{ok:true,id:created.id});return true;
+      }
+      if (pathname === '/api/community/stats' && req.method === 'DELETE') {
+        if (!auth.session || !statsStore || !requireCsrf(req, auth)) return send(res, 403, { ok: false, error: 'csrf_or_session_required' }), true;
+        const body = await jsonBody(req);
+        if (body.confirm !== 'DELETE ALL STATS') return send(res, 400, { ok: false, error: 'stats_deletion_confirmation_required' }), true;
+        await statsStore.deleteIdentityStats(auth.session.identity_id);
+        send(res, 200, { ok: true, deleted: true });
+        return true;
+      }
+      if (pathname === '/api/community/moderation/stats' && req.method === 'GET') {
+        if (!auth.session?.is_moderator || !statsStore) return send(res, 403, { ok: false, error: 'moderator_required' }), true;
+        send(res, 200, { ok: true, entries: await statsStore.listUnderReview() }); return true;
+      }
+      const statsReview = pathname.match(/^\/api\/community\/moderation\/stats\/([0-9a-f-]{36})$/i);
+      if (statsReview && req.method === 'PATCH') {
+        if (!auth.session?.is_moderator || !statsStore || !requireCsrf(req, auth)) return send(res, 403, { ok: false, error: 'moderator_required' }), true;
+        const decision=(await jsonBody(req)).decision;
+        if(!['accept','dismiss'].includes(decision)) return send(res,400,{ok:false,error:'invalid_stats_review'}),true;
+        send(res,200,{ok:await statsStore.resolveReview(statsReview[1],decision,auth.session.identity_id)});return true;
       }
       if (pathname === '/api/community/categories' && req.method === 'GET') {
         send(res, 200, { ok: true, categories: await communityStore.categories(auth.session) });

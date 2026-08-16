@@ -5,11 +5,12 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { PostgresIdentityStore } from './identity-store.mjs';
-import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
+import { PostgresStatsStore } from './stats-store.mjs';
+import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
 
-export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null } = {}) {
+export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null, statsStore = null } = {}) {
   const clients = new Map();
-  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, enrollments: 0, recoveries: 0, authenticationFailures: 0, hellos: 0, states: 0, chats: 0, emotes: 0, reconnectReplacements: 0, disconnects: 0 };
+  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, enrollments: 0, recoveries: 0, authenticationFailures: 0, hellos: 0, states: 0, chats: 0, emotes: 0, statsConsents: 0, statsSnapshots: 0, reconnectReplacements: 0, disconnects: 0 };
   const send = (socket, msg) => { if (!socket.destroyed) socket.write(encode(msg)); };
   const fail = (socket, code) => { send(socket, { type: 'error', code }); socket.end(); };
   const stableId = session => {
@@ -110,6 +111,25 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       send(socket, approved ? { type: 'browser_pairing_approved', code: msg.code } : { type: 'error', code: 'pairing_code_unavailable' });
       return;
     }
+    if (msg.type === 'stats_consent') {
+      if (!client.identityId || !client.credentialId || !statsStore) return send(socket, { type: 'error', code: 'stats_unavailable' });
+      if (!validateStatsConsent(msg)) return send(socket, { type: 'error', code: 'invalid_stats_consent' });
+      const result = await statsStore.setConsent(client.identityId, client.credentialId, msg.enabled, msg.fields, msg.deleteHistory === true);
+      if (!result) return send(socket, { type: 'error', code: 'stats_consent_failed' });
+      metrics.statsConsents++;
+      send(socket, { type: 'stats_consent_saved', ...result });
+      return;
+    }
+    if (msg.type === 'stats_snapshot') {
+      if (!client.identityId || !client.credentialId || !statsStore) return send(socket, { type: 'error', code: 'stats_unavailable' });
+      if (!validateStatsSnapshot(msg)) return send(socket, { type: 'error', code: 'invalid_stats_snapshot' });
+      const result = await statsStore.submitSnapshot(client.identityId, client.credentialId, msg);
+      if (!result) return send(socket, { type: 'error', code: 'invalid_stats_snapshot' });
+      if (!result.accepted) return send(socket, { type: 'error', code: result.error });
+      metrics.statsSnapshots++;
+      send(socket, { type: 'stats_snapshot_saved', count: result.entries.length, underReview: result.entries.filter(entry => entry.review_status === 'under-review').length });
+      return;
+    }
     if (msg.type === 'ping') { send(socket, { type: 'pong', at: msg.at }); return; }
     if (msg.type === 'chat') {
       if (!client.state || !validateChat(msg)) return send(socket, { type: 'error', code: 'invalid_chat' });
@@ -178,7 +198,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
   return { server, clients, metrics, status };
 }
 
-export async function startServers({ identityStore: identityStoreOverride = null } = {}) {
+export async function startServers({ identityStore: identityStoreOverride = null, statsStore: statsStoreOverride = null } = {}) {
   const host = process.env.GAME_HOST ?? '0.0.0.0';
   const port = Number(process.env.GAME_PORT ?? 3210);
   const healthPort = Number(process.env.HEALTH_PORT ?? 3211);
@@ -191,6 +211,7 @@ export async function startServers({ identityStore: identityStoreOverride = null
       idleMs < 5000 || maxConnections < 1 || maxConnectionsPerIp < 1 || helloTimeoutMs < 1000) throw new Error('invalid server configuration');
   let pool = null;
   let identityStore = identityStoreOverride;
+  let statsStore = statsStoreOverride;
   const databaseConfig = process.env.DATABASE_URL
     ? { connectionString: process.env.DATABASE_URL }
     : process.env.PGHOST
@@ -203,8 +224,9 @@ export async function startServers({ identityStore: identityStoreOverride = null
     pool = new pg.Pool({ ...databaseConfig, max: Number(process.env.DATABASE_POOL_SIZE ?? 10), ssl });
     await pool.query('SELECT 1');
     identityStore = new PostgresIdentityStore(pool, process.env.IDENTITY_PEPPER);
+    statsStore = new PostgresStatsStore(pool);
   }
-  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore });
+  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore, statsStore });
   await new Promise(resolve => presence.server.listen(port, host, resolve));
   const health = http.createServer((req, res) => {
     if (req.url === '/health') {

@@ -12,6 +12,7 @@ const TOKEN = /^[a-f0-9]{64}$/i;
 const RECOVERY = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){4}$/;
 const PAIRING = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const AVATARS = new Set(['boy', 'girl']);
+const STAT_FIELDS = new Set(['pokedex_seen', 'pokedex_caught', 'badges', 'frontier_streaks']);
 
 export function validateHello(msg) {
   if (msg?.type !== 'hello' || !NAME.test(msg.name) || (msg.avatar !== undefined && !AVATARS.has(msg.avatar))) return false;
@@ -33,6 +34,37 @@ export function validateRecover(msg) {
 
 export function validatePairBrowserApprove(msg) {
   return msg?.type === 'pair_browser_approve' && PAIRING.test(msg.code ?? '');
+}
+
+export function validateStatsConsent(msg) {
+  if (msg?.type !== 'stats_consent' || typeof msg.enabled !== 'boolean' ||
+      (msg.deleteHistory !== undefined && typeof msg.deleteHistory !== 'boolean') ||
+      !msg.fields || typeof msg.fields !== 'object' || Array.isArray(msg.fields)) return false;
+  const keys = Object.keys(msg.fields);
+  return keys.length === STAT_FIELDS.size && keys.every(key => STAT_FIELDS.has(key) && typeof msg.fields[key] === 'boolean');
+}
+
+export function validateStatsSnapshot(msg) {
+  if (msg?.type !== 'stats_snapshot' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-z0-9.-]+)?$/i.test(msg.release ?? '') ||
+      !msg.values || typeof msg.values !== 'object' || Array.isArray(msg.values)) return false;
+  const keys = Object.keys(msg.values);
+  if (!keys.length || keys.some(key => !STAT_FIELDS.has(key))) return false;
+  const bounded = (value, max) => Number.isInteger(value) && value >= 0 && value <= max;
+  if ('pokedex_seen' in msg.values && !bounded(msg.values.pokedex_seen, 386)) return false;
+  if ('pokedex_caught' in msg.values && !bounded(msg.values.pokedex_caught, 386)) return false;
+  if ('badges' in msg.values && !bounded(msg.values.badges, 8)) return false;
+  if ('pokedex_seen' in msg.values && 'pokedex_caught' in msg.values && msg.values.pokedex_caught > msg.values.pokedex_seen) return false;
+  if ('frontier_streaks' in msg.values) {
+    if (!Array.isArray(msg.values.frontier_streaks) || msg.values.frontier_streaks.length > 24) return false;
+    const facilities = new Set(['tower','dome','palace','arena','factory','pike','pyramid']);
+    const seen = new Set();
+    for (const row of msg.values.frontier_streaks) {
+      if (!row || !facilities.has(row.facility) || !['singles','doubles'].includes(row.mode) || !['50','open'].includes(row.level) || !bounded(row.streak,9999)) return false;
+      if (['arena','pike','pyramid'].includes(row.facility) && row.mode !== 'singles') return false;
+      const key = `${row.facility}:${row.mode}:${row.level}`; if (seen.has(key)) return false; seen.add(key);
+    }
+  }
+  return true;
 }
 
 export function validateState(msg, previousSeq = -1) {

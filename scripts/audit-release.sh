@@ -26,7 +26,7 @@ for required_path in LICENSE.md package.json gpsp-runtime/source/main.cpp third_
   }
 done
 
-if grep -Eiq '(^|/)([^/]*\.gba|[^/]*\.sav|online\.cfg|identity\.cfg|avatars\.t3x|\.git)(/|$)' <<<"${archive_listing}"; then
+if grep -Eiq '(^|/)([^/]*\.gba|[^/]*\.sav|online\.cfg|identity\.cfg|stats\.cfg|avatars\.t3x|\.git)(/|$)' <<<"${archive_listing}"; then
   echo "private data or repository metadata found in source archive" >&2
   exit 1
 fi

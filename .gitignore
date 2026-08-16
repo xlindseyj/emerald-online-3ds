@@ -6,6 +6,7 @@ generated/
 *.sav
 identity.cfg
 online.cfg
+stats.cfg
 
 # Build/runtime output
 client/build/

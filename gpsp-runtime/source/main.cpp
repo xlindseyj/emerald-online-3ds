@@ -41,6 +41,8 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/online.cfg"
 #define IDENTITY_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg"
 #define IDENTITY_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg.tmp"
+#define STATS_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg"
+#define STATS_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg.tmp"
 #define DEFAULT_HOST "live.emeraldonline3ds.com"
 #define DEFAULT_PORT 443
 #define DEFAULT_WEBSOCKET_PATH "/game"
@@ -49,7 +51,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.5.0"
+#define APP_VERSION "0.6.1"
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -75,7 +77,8 @@ static unsigned measuredFps;
 static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
-static bool partyPage;
+enum BottomPage { PAGE_ONLINE, PAGE_PARTY, PAGE_STATS };
+static BottomPage bottomPage = PAGE_ONLINE;
 static bool dynarecEnabled = true;
 
 static void debugStage(const char* stage) {
@@ -134,6 +137,24 @@ static char lastChatName[13];
 static char lastChatText[81];
 static char browserPairingStatus[40];
 static uint64_t browserPairingStatusUntil;
+static bool statsEnabled;
+static bool statsSeenEnabled;
+static bool statsCaughtEnabled;
+static bool statsBadgesEnabled;
+static bool statsFrontierEnabled;
+static bool onlineAuthenticated;
+static uint64_t nextStatsUpload;
+static char statsStatus[48] = "UPLOADS OFF - TAP ENABLE";
+static uint64_t statsStatusUntil;
+
+struct SaveStats {
+    bool valid;
+    unsigned seen;
+    unsigned caught;
+    unsigned badges;
+    uint16_t frontier[22];
+};
+static SaveStats saveStats;
 
 static void debugNetworkFailure(void) {
     FILE* file = fopen(DEBUG_LOG_PATH, "a");
@@ -377,6 +398,40 @@ static GamePresence readPresence(void) {
     }
     if (current.valid) previous = current;
     return current;
+}
+
+static unsigned countDexFlags(const uint8_t* flags) {
+    unsigned count = 0;
+    for (unsigned index = 0; index < 386; ++index) if (flags[index >> 3] & (1u << (index & 7))) ++count;
+    return count;
+}
+
+static SaveStats readSaveStats(void) {
+    SaveStats result = {};
+    if (!gbaEwram || !gbaIwram) return result;
+    uint32_t block1Address = read32(gbaIwram, 0x5D8C);
+    uint32_t block2Address = read32(gbaIwram, 0x5D90);
+    if (block1Address < 0x02000000 || block1Address + 0x3D88 > 0x02040000 ||
+        block2Address < 0x02000000 || block2Address + 0xF2C > 0x02040000) return result;
+    const uint8_t* block1 = gbaEwram + block1Address - 0x02000000;
+    const uint8_t* block2 = gbaEwram + block2Address - 0x02000000;
+    result.caught = countDexFlags(block2 + 0x28);
+    result.seen = countDexFlags(block2 + 0x5C);
+    if (result.caught > result.seen || result.seen > 386) return SaveStats{};
+    for (unsigned flag = 0x867; flag <= 0x86E; ++flag)
+        if (block1[0x1270 + (flag >> 3)] & (1u << (flag & 7))) ++result.badges;
+    // SaveBlock2 Battle Frontier streaks. Only single/double modes are
+    // included; Multi and Link Multi are deliberately not uploaded.
+    static const size_t pairedOffsets[] = {0xCE0, 0xD0C, 0xDC8, 0xDE2};
+    unsigned output = 0;
+    for (size_t offset : pairedOffsets) for (unsigned mode = 0; mode < 2; ++mode) for (unsigned level = 0; level < 2; ++level)
+        result.frontier[output++] = read16(block2, offset + (mode * 2 + level) * 2);
+    static const size_t singleOffsets[] = {0xDDA, 0xE04, 0xE1A};
+    for (size_t offset : singleOffsets) for (unsigned level = 0; level < 2; ++level)
+        result.frontier[output++] = read16(block2, offset + level * 2);
+    for (unsigned index = 0; index < output; ++index) if (result.frontier[index] > 9999) return SaveStats{};
+    result.valid = true;
+    return result;
 }
 
 static void updateTrainerNameFromSave(void) {
@@ -680,7 +735,7 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "page")) partyPage = !strcmp(equals, "party");
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
     }
     fclose(file);
@@ -727,6 +782,34 @@ static bool saveIdentity(void) {
     return true;
 }
 
+static void loadStatsConfig(void) {
+    FILE* file = fopen(STATS_CONFIG_PATH, "r");
+    if (!file) return;
+    char line[80];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '='); if (!equals) continue; *equals++ = 0;
+        bool value = !strcmp(equals, "1");
+        if (!strcmp(line, "enabled")) statsEnabled = value;
+        else if (!strcmp(line, "pokedex_seen")) statsSeenEnabled = value;
+        else if (!strcmp(line, "pokedex_caught")) statsCaughtEnabled = value;
+        else if (!strcmp(line, "badges")) statsBadgesEnabled = value;
+        else if (!strcmp(line, "frontier_streaks")) statsFrontierEnabled = value;
+    }
+    fclose(file);
+    if (!statsEnabled) statsSeenEnabled = statsCaughtEnabled = statsBadgesEnabled = statsFrontierEnabled = false;
+}
+
+static bool saveStatsConfig(void) {
+    FILE* file = fopen(STATS_CONFIG_TEMP_PATH, "w"); if (!file) return false;
+    bool ok = fprintf(file, "enabled=%d\npokedex_seen=%d\npokedex_caught=%d\nbadges=%d\nfrontier_streaks=%d\n",
+        statsEnabled, statsSeenEnabled, statsCaughtEnabled, statsBadgesEnabled, statsFrontierEnabled) > 0;
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    if (fclose(file)) ok = false;
+    if (!ok || rename(STATS_CONFIG_TEMP_PATH, STATS_CONFIG_PATH)) { remove(STATS_CONFIG_TEMP_PATH); return false; }
+    return true;
+}
+
 static void onlineDisconnect(void) {
     if (tlsActive) mbedtls_ssl_close_notify(&tlsContext);
     tlsActive = false;
@@ -736,6 +819,7 @@ static void onlineDisconnect(void) {
     remoteCount = 0;
     receiveLength = 0;
     webSocketLength = 0;
+    onlineAuthenticated = false;
     memset(&lastSentPresence, 0, sizeof(lastSentPresence));
     if (onlineEnabled) nextReconnect = osGetTime() + 3000;
 }
@@ -755,9 +839,60 @@ static bool onlineSend(const char* message) {
     return false;
 }
 
+static bool sendStatsConsent(bool deleteHistory) {
+    if (!onlineAuthenticated || !identityId[0]) return false;
+    char packet[320];
+    snprintf(packet, sizeof(packet),
+        "{\"type\":\"stats_consent\",\"enabled\":%s,\"deleteHistory\":%s,\"fields\":{\"pokedex_seen\":%s,\"pokedex_caught\":%s,\"badges\":%s,\"frontier_streaks\":%s}}\n",
+        statsEnabled ? "true" : "false", deleteHistory ? "true" : "false",
+        statsSeenEnabled ? "true" : "false", statsCaughtEnabled ? "true" : "false",
+        statsBadgesEnabled ? "true" : "false", statsFrontierEnabled ? "true" : "false");
+    return onlineSend(packet);
+}
+
+static bool appendPacket(char* packet, size_t capacity, size_t* length, const char* format, ...) {
+    if (*length >= capacity) return false;
+    va_list args; va_start(args, format);
+    int written = vsnprintf(packet + *length, capacity - *length, format, args);
+    va_end(args);
+    if (written < 0 || (size_t) written >= capacity - *length) return false;
+    *length += (size_t) written;
+    return true;
+}
+
+static bool sendStatsSnapshot(void) {
+    if (!onlineAuthenticated || !statsEnabled || !saveStats.valid) return false;
+    char packet[3072]; size_t length = 0; bool comma = false;
+    if (!appendPacket(packet, sizeof(packet), &length, "{\"type\":\"stats_snapshot\",\"release\":\"" APP_VERSION "\",\"values\":{")) return false;
+    if (statsSeenEnabled) { if (!appendPacket(packet,sizeof(packet),&length,"\"pokedex_seen\":%u",saveStats.seen)) return false; comma=true; }
+    if (statsCaughtEnabled) { if (!appendPacket(packet,sizeof(packet),&length,"%s\"pokedex_caught\":%u",comma?",":"",saveStats.caught)) return false; comma=true; }
+    if (statsBadgesEnabled) { if (!appendPacket(packet,sizeof(packet),&length,"%s\"badges\":%u",comma?",":"",saveStats.badges)) return false; comma=true; }
+    if (statsFrontierEnabled) {
+        if (!appendPacket(packet,sizeof(packet),&length,"%s\"frontier_streaks\":[",comma?",":"")) return false;
+        static const char* facilities[22] = {"tower","tower","tower","tower","dome","dome","dome","dome","palace","palace","palace","palace","factory","factory","factory","factory","arena","arena","pike","pike","pyramid","pyramid"};
+        static const char* modes[22] = {"singles","singles","doubles","doubles","singles","singles","doubles","doubles","singles","singles","doubles","doubles","singles","singles","doubles","doubles","singles","singles","singles","singles","singles","singles"};
+        for (unsigned index=0;index<22;++index) if (!appendPacket(packet,sizeof(packet),&length,"%s{\"facility\":\"%s\",\"mode\":\"%s\",\"level\":\"%s\",\"streak\":%u}",index?",":"",facilities[index],modes[index],(index&1)?"open":"50",saveStats.frontier[index])) return false;
+        if (!appendPacket(packet,sizeof(packet),&length,"]")) return false;
+        comma=true;
+    }
+    if (!comma || !appendPacket(packet,sizeof(packet),&length,"}}\n")) return false;
+    return onlineSend(packet);
+}
+
+static void syncStatsAfterAuthentication(void) {
+    onlineAuthenticated = true;
+    if (!statsEnabled) return;
+    if (sendStatsConsent(false) && sendStatsSnapshot()) {
+        strcpy(statsStatus, "SYNC SENT - COMMUNITY-SUBMITTED");
+        statsStatusUntil = osGetTime() + 5000;
+    }
+    nextStatsUpload = osGetTime() + 60000;
+}
+
 static void onlineConnected(void) {
     if (secureWebSocket && !startSecureWebSocket()) { debugNetworkFailure(); return onlineFail(EPROTO); }
     onlineMode = ONLINE_ACTIVE;
+    onlineAuthenticated = false;
     onlineLastError = 0;
     lastPing = osGetTime();
     char hello[320];
@@ -918,7 +1053,22 @@ static void parseOnlineLine(char* line) {
         if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
         if (jsonString(line, "recoveryCode", recovery, sizeof(recovery))) strcpy(recoveryCode, recovery);
         if (!saveIdentity()) onlineLastError = EIO;
+        syncStatsAfterAuthentication();
         return;
+    }
+    if (jsonTypeIs(line, "welcome")) {
+        char fingerprint[11] = {};
+        if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
+        syncStatsAfterAuthentication();
+        return;
+    }
+    if (jsonTypeIs(line, "stats_consent_saved")) {
+        strcpy(statsStatus, "CONSENT SAVED ON SERVER"); statsStatusUntil = osGetTime() + 5000; return;
+    }
+    if (jsonTypeIs(line, "stats_snapshot_saved")) {
+        int review = jsonInt(line, "underReview", 0);
+        strcpy(statsStatus, review ? "SENT - SOME VALUES UNDER REVIEW" : "SCORES SYNCED");
+        statsStatusUntil = osGetTime() + 5000; return;
     }
     if (jsonTypeIs(line, "browser_pairing_approved")) {
         strcpy(browserPairingStatus, "BROWSER PAIRED");
@@ -930,6 +1080,10 @@ static void parseOnlineLine(char* line) {
         if (jsonString(line, "code", code, sizeof(code)) && strstr(code, "pairing")) {
             strcpy(browserPairingStatus, "PAIRING CODE EXPIRED");
             browserPairingStatusUntil = osGetTime() + 5000;
+        }
+        if (strstr(code, "stats")) {
+            snprintf(statsStatus, sizeof(statsStatus), "SERVER: %.34s", code);
+            statsStatusUntil = osGetTime() + 6000;
         }
         return;
     }
@@ -1117,6 +1271,10 @@ static void onlineUpdate(void) {
         snprintf(state, sizeof(state), "{\"type\":\"state\",\"seq\":%u,\"map\":\"%u-%u\",\"x\":%d,\"y\":%d,\"facing\":\"%s\",\"avatar\":\"%s\"}\n", ++onlineSequence, presence.mapGroup, presence.mapNum, presence.x, presence.y, facingName(presence.facing), trainerIsGirl ? "girl" : "boy");
         if (onlineSend(state)) lastSentPresence = presence;
     }
+    if (onlineAuthenticated && statsEnabled && saveStats.valid && now >= nextStatsUpload) {
+        sendStatsSnapshot();
+        nextStatsUpload = now + 60000;
+    }
     if (!receiveOnlineTraffic()) onlineFail(ECONNRESET);
 }
 
@@ -1177,6 +1335,52 @@ static void openBrowserPairing(void) {
     browserPairingStatusUntil = osGetTime() + 5000;
 }
 
+static bool typedConfirmation(const char* hint, const char* expected) {
+    SwkbdState keyboard; char entered[32] = {};
+    swkbdInit(&keyboard, SWKBD_TYPE_QWERTY, 1, sizeof(entered)-1);
+    swkbdSetHintText(&keyboard, hint);
+    if (swkbdInputText(&keyboard, entered, sizeof(entered)) != SWKBD_BUTTON_CONFIRM) return false;
+    for (char* at=entered;*at;++at) *at=(char)toupper((unsigned char)*at);
+    return !strcmp(entered, expected);
+}
+
+static void enableStatsUpload(void) {
+    if (!typedConfirmation("Type YES: upload Seen, Caught, Badges, Frontier", "YES")) {
+        strcpy(statsStatus, "NOT ENABLED - NO DATA UPLOADED"); statsStatusUntil=osGetTime()+5000; return;
+    }
+    statsEnabled=statsSeenEnabled=statsCaughtEnabled=statsBadgesEnabled=statsFrontierEnabled=true;
+    if (!saveStatsConfig()) { statsEnabled=false; strcpy(statsStatus,"COULD NOT SAVE STATS.CFG"); return; }
+    strcpy(statsStatus,"CONSENT SAVED - SYNCING"); statsStatusUntil=osGetTime()+5000;
+    if (onlineAuthenticated) { sendStatsConsent(false); sendStatsSnapshot(); }
+}
+
+static void toggleStatsField(unsigned index) {
+    if (!statsEnabled || index>3) return;
+    bool* fields[] = {&statsSeenEnabled,&statsCaughtEnabled,&statsBadgesEnabled,&statsFrontierEnabled};
+    *fields[index]=!*fields[index];
+    if (!saveStatsConfig()) { *fields[index]=!*fields[index]; strcpy(statsStatus,"COULD NOT SAVE STATS.CFG"); return; }
+    strcpy(statsStatus,*fields[index]?"FIELD ENABLED - SYNCING":"FIELD DISABLED - SERVER DATA REMOVED"); statsStatusUntil=osGetTime()+5000;
+    if (onlineAuthenticated) { sendStatsConsent(false); if (*fields[index]) sendStatsSnapshot(); }
+}
+
+static void deleteStatsHistory(void) {
+    if (!typedConfirmation("Type DELETE to erase all uploaded stats", "DELETE")) {
+        strcpy(statsStatus,"DELETE CANCELLED"); statsStatusUntil=osGetTime()+4000; return;
+    }
+    statsEnabled=statsSeenEnabled=statsCaughtEnabled=statsBadgesEnabled=statsFrontierEnabled=false;
+    saveStatsConfig();
+    if (onlineAuthenticated) sendStatsConsent(true);
+    strcpy(statsStatus,"DELETE SENT - UPLOADS OFF"); statsStatusUntil=osGetTime()+6000;
+}
+
+static void syncStatsNow(void) {
+    saveStats=readSaveStats();
+    if (!statsEnabled) return enableStatsUpload();
+    if (!onlineAuthenticated) { strcpy(statsStatus,"CONNECT ONLINE TO SYNC"); statsStatusUntil=osGetTime()+4000; return; }
+    if (!saveStats.valid) { strcpy(statsStatus,"WAITING FOR VALID SAVE MEMORY"); statsStatusUntil=osGetTime()+4000; return; }
+    sendStatsConsent(false); sendStatsSnapshot(); nextStatsUpload=osGetTime()+60000;
+}
+
 static void drawText(float x, float y, float size, uint32_t color, const char* format, ...) {
     char line[192];
     va_list args;
@@ -1197,14 +1401,41 @@ static char decodeEmerald(uint8_t value) {
     return value == 0x00 ? ' ' : '?';
 }
 
+static void drawStatsPage(void) {
+    drawText(12,42,.30f,C2D_Color32(255,213,128,255),"PRIVATE BY DEFAULT - NO ID, PARTY, ITEMS, SAVE OR ROM");
+    if (!saveStats.valid) drawText(40,61,.37f,C2D_Color32(190,210,200,255),"Waiting for valid Emerald memory...");
+    else drawText(18,61,.36f,C2D_Color32(220,245,235,255),"LOCAL: SEEN %u  CAUGHT %u  BADGES %u/8",saveStats.seen,saveStats.caught,saveStats.badges);
+    const char* labels[4]={"POKEDEX SEEN","POKEDEX CAUGHT","BADGE COUNT","FRONTIER STREAKS"};
+    const bool values[4]={statsSeenEnabled,statsCaughtEnabled,statsBadgesEnabled,statsFrontierEnabled};
+    for(unsigned index=0;index<4;++index){
+        float y=82+index*28;
+        C2D_DrawRectSolid(12,y,0,296,23,values[index]?C2D_Color32(31,104,66,255):C2D_Color32(50,58,57,255));
+        drawText(20,y+5,.36f,C2D_Color32(255,255,255,255),"%s",labels[index]);
+        drawText(260,y+5,.34f,values[index]?C2D_Color32(130,255,176,255):C2D_Color32(180,190,185,255),"%s",values[index]?"ON":"OFF");
+    }
+    if(statsStatus[0] && (!statsStatusUntil || osGetTime()<statsStatusUntil)) drawText(15,196,.29f,C2D_Color32(255,220,130,255),"%.46s",statsStatus);
+    if(!statsEnabled){
+        C2D_DrawRectSolid(12,212,0,296,28,C2D_Color32(35,145,88,255));
+        drawText(68,219,.38f,C2D_Color32(255,255,255,255),"ENABLE UPLOAD - EXPLICIT CONSENT");
+    }else{
+        C2D_DrawRectSolid(12,212,0,143,28,C2D_Color32(35,126,91,255));
+        C2D_DrawRectSolid(165,212,0,143,28,C2D_Color32(145,55,55,255));
+        drawText(48,219,.38f,C2D_Color32(255,255,255,255),"SYNC NOW");
+        drawText(187,219,.34f,C2D_Color32(255,255,255,255),"DELETE ALL STATS");
+    }
+}
+
 static void drawBottom(void) {
     C2D_TargetClear(bottomTarget, C2D_Color32(11, 36, 26, 255));
     C2D_SceneBegin(bottomTarget);
     C2D_DrawRectSolid(0, 0, 0, 320, 38, C2D_Color32(16, 45, 34, 255));
     C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
     C2D_TextBufClear(textBuffer);
-    drawText(16, 11, .55f, C2D_Color32(255,255,255,255), partyPage ? "PARTY" : "EMERALD ONLINE");
-    if (partyPage) {
+    const char* title=bottomPage==PAGE_PARTY?"PARTY - LOCAL ONLY":bottomPage==PAGE_STATS?"PLAYER STATS & CONSENT":"EMERALD ONLINE";
+    drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
+    drawText(280,14,.30f,C2D_Color32(180,220,205,255),"Y >");
+    if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
+    if (bottomPage == PAGE_PARTY) {
         if (!gbaEwram) drawText(30, 95, .48f, C2D_Color32(190,210,200,255), "Waiting for Emerald memory...");
         else {
             unsigned count = gbaEwram[0x244E9];
@@ -1223,7 +1454,7 @@ static void drawBottom(void) {
                 drawText(248, y + 5, .39f, C2D_Color32(255,255,255,255), "%u/%u", hp, maxHp);
             }
         }
-        drawText(82, 222, .43f, C2D_Color32(190,220,210,255), "Y  ONLINE DASHBOARD");
+        drawText(96, 222, .38f, C2D_Color32(190,220,210,255), "Y  PLAYER STATS");
         return;
     }
     const char* status = onlineMode == ONLINE_ACTIVE ? "ONLINE" : onlineMode == ONLINE_CONNECTING ? "CONNECTING" : onlineEnabled ? "RETRYING" : "OFFLINE";
@@ -1238,7 +1469,11 @@ static void drawBottom(void) {
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
         if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
         else if (browserPairingStatus[0] && osGetTime() < browserPairingStatusUntil) drawText(75, 91, .32f, C2D_Color32(255,220,130,255), "%s", browserPairingStatus);
-        else if (onlineMode != ONLINE_ACTIVE) drawText(68, 91, .30f, C2D_Color32(180,205,200,255), "%s:%u E%d S%d", serverHost, serverPort, onlineLastError, onlineProtocolStage);
+        else if (onlineMode != ONLINE_ACTIVE) {
+            drawText(18, 91, .27f, C2D_Color32(180,205,200,255), "v%s %s:%u", APP_VERSION, serverHost, serverPort);
+            drawText(18, 178, .27f, C2D_Color32(255,220,130,255), "E%d S%d TLS%d V%08lx F%d", onlineLastError, onlineProtocolStage,
+                onlineTlsResult, (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+        }
         else drawText(80, 91, .30f, C2D_Color32(180,205,200,255), "TAP PROFILE TO PAIR BROWSER");
     C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
@@ -1380,6 +1615,7 @@ int main(void) {
     debugStage("main");
         loadConfig();
         loadIdentity();
+        loadStatsConfig();
     debugStage("config-loaded");
     socBuffer = (uint32_t*) memalign(0x1000, SOC_BUFFER_SIZE);
     if (!socBuffer || R_FAILED(socInit(socBuffer, SOC_BUFFER_SIZE))) {
@@ -1453,18 +1689,23 @@ int main(void) {
         heldKeys = hidKeysHeld();
         uint32_t down = hidKeysDown();
         if (down & KEY_X) onlineToggle();
-        if (down & KEY_Y) partyPage = !partyPage;
+        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 3);
         if (down & KEY_TOUCH) {
             touchPosition touch;
             hidTouchRead(&touch);
-            if (!partyPage && touch.py >= 202) sendEmote(touch.px / 81);
-            else if (!partyPage && touch.py >= 46 && touch.py < 90) openBrowserPairing();
-            else if (!partyPage && touch.px >= 165 && touch.py >= 104) openChat();
+            if (bottomPage == PAGE_STATS) {
+                if (touch.py >= 82 && touch.py < 194) toggleStatsField((touch.py - 82) / 28);
+                else if (touch.py >= 208 && (!statsEnabled || touch.px < 160)) syncStatsNow();
+                else if (touch.py >= 208 && touch.px >= 160) deleteStatsHistory();
+            } else if (bottomPage == PAGE_ONLINE && touch.py >= 202) sendEmote(touch.px / 81);
+            else if (bottomPage == PAGE_ONLINE && touch.py >= 46 && touch.py < 90) openBrowserPairing();
+            else if (bottomPage == PAGE_ONLINE && touch.px >= 165 && touch.py >= 104) openChat();
         }
         retro_run();
         static bool firstFrameLogged;
         if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
         presence = readPresence();
+        saveStats = readSaveStats();
         updateTrainerNameFromSave();
         uint64_t now = osGetTime();
         if (now >= nextOnlinePoll) { nextOnlinePoll = now + 100; onlineUpdate(); }

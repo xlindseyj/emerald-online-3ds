@@ -8,6 +8,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import pg from 'pg';
 import { MemoryIdentityStore, PostgresIdentityStore } from '../server/src/identity-store.mjs';
 import { MemoryCommunityStore, PostgresCommunityStore } from '../server/src/community-store.mjs';
+import { MemoryStatsStore, PostgresStatsStore } from '../server/src/stats-store.mjs';
 import { createCommunityApp } from './community-app.mjs';
 import { communityPage, communityScript } from './community-page.mjs';
 
@@ -98,6 +99,7 @@ const databaseConfig = process.env.DATABASE_URL
 let databasePool = null;
 let identityStore;
 let communityStore;
+let statsStore;
 if (databaseConfig) {
   const ssl = process.env.DATABASE_CA_PATH
     ? { ca: fs.readFileSync(process.env.DATABASE_CA_PATH, 'utf8'), rejectUnauthorized: true }
@@ -106,11 +108,13 @@ if (databaseConfig) {
   await databasePool.query('SELECT 1');
   identityStore = new PostgresIdentityStore(databasePool, process.env.IDENTITY_PEPPER);
   communityStore = new PostgresCommunityStore(databasePool);
+  statsStore = new PostgresStatsStore(databasePool);
 } else {
   identityStore = new MemoryIdentityStore();
   communityStore = new MemoryCommunityStore();
+  statsStore = new MemoryStatsStore();
 }
-const community = createCommunityApp({ identityStore, communityStore, secureCookies: publicBase.startsWith('https://'), page: communityPage });
+const community = createCommunityApp({ identityStore, communityStore, statsStore, secureCookies: publicBase.startsWith('https://'), page: communityPage });
 
 const page = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" type="image/png" href="/favicon.png">

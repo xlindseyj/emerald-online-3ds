@@ -47,6 +47,7 @@ test('gpSP runtime uses authenticated WebSockets for the public Cloudflare endpo
   assert.match(gpspSource, /MBEDTLS_X509_BADCERT_FUTURE/);
   assert.match(gpspSource, /skew <= 14 \* 60 \* 60/);
   assert.match(gpspSource, /\*flags &= ~MBEDTLS_X509_BADCERT_FUTURE/);
+  assert.match(gpspSource, /TLS%d V%08lx F%d/);
   assert.match(gpspSource, /Sec-WebSocket-Key/);
   assert.match(gpspSource, /Sec-WebSocket-Accept/);
   assert.match(gpspSource, /webSocketHeaderEquals/);
@@ -79,4 +80,24 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(gpspSource, /C2D_DrawEllipseSolid/);
   assert.match(gpspSource, /const bool step/);
   assert.match(gpspSource, /"HI", "!", "<>", "GG"/);
+});
+
+test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregates', () => {
+  assert.match(gpspSource, /STATS_CONFIG_PATH/);
+  assert.match(gpspSource, /PLAYER STATS & CONSENT/);
+  assert.match(gpspSource, /Type YES: upload Seen, Caught, Badges, Frontier/);
+  assert.match(gpspSource, /Type DELETE to erase all uploaded stats/);
+  assert.match(gpspSource, /stats_consent/);
+  assert.match(gpspSource, /stats_snapshot/);
+  assert.match(gpspSource, /pokedex_seen/);
+  assert.match(gpspSource, /pokedex_caught/);
+  assert.match(gpspSource, /frontier_streaks/);
+  assert.match(gpspSource, /block2 \+ 0x28/);
+  assert.match(gpspSource, /block2 \+ 0x5C/);
+  assert.match(gpspSource, /0x1270 \+ \(flag >> 3\)/);
+  assert.match(gpspSource, /PRIVATE BY DEFAULT - NO ID, PARTY, ITEMS, SAVE OR ROM/);
+  const snapshotStart=gpspSource.indexOf('static bool sendStatsSnapshot');
+  const snapshotEnd=gpspSource.indexOf('static void syncStatsAfterAuthentication');
+  const packetSource=gpspSource.slice(snapshotStart,snapshotEnd);
+  assert.doesNotMatch(packetSource,/trainerName|identityId|playerTrainerId|party|inventory|SAVE_PATH|ROM_PATH/);
 });
