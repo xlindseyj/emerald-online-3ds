@@ -361,7 +361,7 @@
     "version": "0.8.3",
     "releasedAt": "2026-08-16T17:15:00Z",
     "title": "Overworld-only trainer overlay hotfix",
-    "status": "Current beta",
+    "status": "Historical beta — superseded",
     "summary": "Prevents online trainer sprites, names, and emotes from appearing over battles, menus, transitions, or any other non-overworld scene by validating Emerald's active engine callback before reading or drawing presence.",
     "highlights": [
       "Requires the exact supported Emerald US CB2_Overworld callback before accepting map coordinates.",
@@ -412,5 +412,72 @@
       }
     ],
     "sourceCommit": "1701bec"
+  },
+  {
+    "version": "0.8.4",
+    "releasedAt": "2026-08-16T18:18:31Z",
+    "title": "Global roster and timestamped Map Chat",
+    "status": "Current beta",
+    "summary": "Adds dedicated touch-paged lower-screen lists for every connected trainer and for current-map chat, while keeping trainer overlays and message delivery map-local and retaining no routine chat on the server.",
+    "highlights": [
+      "Online Users lists every authenticated connection with its display name, current map, and tile coordinates; rows are read-only but retain opaque IDs internally for future actions.",
+      "Map Chat shows sender, server UTC timestamp, and message in a scrollable current-map session list, with a separate Compose control.",
+      "Save-derived statistics are cached for one second instead of rescanning Pokédex flags every frame, reducing unnecessary Old 3DS CPU work while preserving upload freshness."
+    ],
+    "verification": [
+      "Protocol coverage proves the global roster spans different maps while ordinary snapshots remain same-map only.",
+      "A maximum 16-user roster page remains below the 4096-byte protocol limit, and chat delivery includes a validated ISO 8601 timestamp.",
+      "The real devkitARM toolchain compiles and links the new lower-screen pages successfully; automated source coverage checks paging, coordinates, timestamps, current-map filtering, Compose behavior, and read-only user rows."
+    ],
+    "knownIssues": [
+      "The new Online Users and Map Chat pages still require a physical touch/readability check after installation.",
+      "The current v0.8.3 Old 3DS Gate 4 run reports 48-52 FPS; the v0.8.4 stats-cache optimization still needs physical remeasurement against the 60 FPS target, and audio behavior remains unrecorded.",
+      "Cable Club battle, trade, interruption, packet-loss, and save-integrity acceptance remain open; public invitations and battle/trade rankings stay disabled."
+    ],
+    "upgradeNotes": [
+      "Preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, online.cfg, and link-backups when replacing the 3DSX or reinstalling the CIA.",
+      "The global roster publishes your display name, current map, and tile coordinates to every authenticated online user while connected; ROM, save, party, inventory, and credential data remain private.",
+      "Merely copying the CIA to /cias/ does not update the installed HOME Menu title; select it in FBI and choose Install and delete CIA."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "225f021371b3cb3788c0879c2d8fce0d759d9847eee1ecd4f4461b054005d82c",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "71007c45b922463cf1181ca42ae73b1d08ab681cb28c7ad7a2799cab21308ba0",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "d27be10b3d11c4d198ad7679c3f3b57441705dcd258dffbd5231ca76d32dc658",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.4 adds global online-user visibility and a dedicated current-map chat history."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Back up private files, then use FBI Remote Install to update the installed HOME Menu title."
+      },
+      {
+        "url": "/release-media/0.8.4-online-users.png",
+        "alt": "Read-only global Online Users list with maps and tile coordinates on the 3DS lower screen",
+        "caption": "Authentic Azahar capture cropped to the project-owned lower screen; no ROM pixels, saves, identities, or credentials are included."
+      },
+      {
+        "url": "/release-media/0.8.4-map-chat.png",
+        "alt": "Timestamped current-map chat list on the 3DS lower screen",
+        "caption": "Synthetic trainers demonstrate the session-only message list, UTC timestamps, paging, and Compose control without publishing player data."
+      }
+    ],
+    "sourceCommit": "5fee00b"
   }
 ]

@@ -150,13 +150,13 @@ test('gpSP bottom screen exposes paged global users and session-only map chat li
   assert.match(gpspSource, /PAGE_USERS/);
   assert.match(gpspSource, /PAGE_CHAT/);
   assert.match(gpspSource, /ONLINE USERS - READ ONLY/);
-  assert.match(gpspSource, /GLOBAL POSITION LIST - ROW ACTIONS COMING LATER/);
+  assert.match(gpspSource, /GLOBAL MAP \/ TILE POSITIONS - %u ONLINE/);
   assert.match(gpspSource, /jsonTypeIs\(line, "online_users"\)/);
   assert.match(gpspSource, /OnlineUser onlineUsers\[64\]/);
   assert.match(gpspSource, /%.14s  %d,%d/);
   assert.match(gpspSource, /pageCount = onlineUserCount \? \(onlineUserCount \+ 5\) \/ 6 : 1/);
   assert.match(gpspSource, /MAP CHAT/);
-  assert.match(gpspSource, /THIS SESSION - TIMES ARE UTC/);
+  assert.match(gpspSource, /SESSION ONLY - (?:UTC|TIMES ARE UTC)/);
   assert.match(gpspSource, /ChatMessage chatHistory\[24\]/);
   assert.match(gpspSource, /message->name/);
   assert.match(gpspSource, /message->time/);

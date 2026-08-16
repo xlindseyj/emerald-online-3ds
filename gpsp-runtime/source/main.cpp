@@ -1889,7 +1889,7 @@ static void drawStatsPage(void) {
 }
 
 static void drawOnlineUsersPage(void) {
-    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "GLOBAL POSITION LIST - ROW ACTIONS COMING LATER");
+    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "GLOBAL MAP / TILE POSITIONS - %u ONLINE", onlineUserCount);
     drawText(18, 61, .34f, C2D_Color32(160,232,255,255), "TRAINER");
     drawText(178, 61, .34f, C2D_Color32(160,232,255,255), "MAP / TILE");
     const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
@@ -1912,7 +1912,6 @@ static void drawOnlineUsersPage(void) {
     C2D_DrawRectSolid(165, 216, 0, 145, 24, onlineUserPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "PREVIOUS");
     drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
-    drawText(137, 198, .30f, C2D_Color32(190,220,210,255), "%u ONLINE  %u/%u", onlineUserCount, onlineUserPage + 1, pageCount);
 }
 
 static unsigned currentMapChatIndices(unsigned indices[24]) {
@@ -1931,8 +1930,8 @@ static void drawMapChatPage(void) {
     const unsigned pageCount = count ? (count + 3) / 4 : 1;
     if (chatPage >= pageCount) chatPage = pageCount - 1;
     if (presence.valid)
-        drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "MAP %u-%u - THIS SESSION - TIMES ARE UTC", presence.mapGroup, presence.mapNum);
-    else drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "CURRENT MAP - THIS SESSION - TIMES ARE UTC");
+        drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "%u MSG - MAP %u-%u - SESSION ONLY - UTC", count, presence.mapGroup, presence.mapNum);
+    else drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "CURRENT MAP - SESSION ONLY - TIMES ARE UTC");
     const unsigned start = chatPage * 4;
     for (unsigned row = 0; row < 4; ++row) {
         const float y = 61 + row * 37;
@@ -1952,7 +1951,6 @@ static void drawMapChatPage(void) {
     drawText(26, 221, .32f, C2D_Color32(255,255,255,255), "PREVIOUS");
     drawText(131, 221, .34f, C2D_Color32(255,255,255,255), "COMPOSE");
     drawText(244, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
-    drawText(140, 204, .27f, C2D_Color32(190,220,210,255), "%u MESSAGES  %u/%u", count, chatPage + 1, pageCount);
 }
 
 static void drawBottom(void) {

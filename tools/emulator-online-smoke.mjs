@@ -19,8 +19,8 @@ const networkMode = process.env.EMULATOR_NETWORK_MODE ?? 'local-tcp';
 if (!['local-tcp', 'production-wss'].includes(networkMode)) throw new Error('EMULATOR_NETWORK_MODE must be local-tcp or production-wss');
 const productionWss = networkMode === 'production-wss';
 const startPage = process.env.EMULATOR_START_PAGE?.toLowerCase();
-if (startPage && !['online', 'party', 'bag', 'map', 'stats'].includes(startPage)) {
-  throw new Error('EMULATOR_START_PAGE must be online, party, bag, map, or stats');
+if (startPage && !['online', 'users', 'chat', 'party', 'bag', 'map', 'stats'].includes(startPage)) {
+  throw new Error('EMULATOR_START_PAGE must be online, users, chat, party, bag, map, or stats');
 }
 const privateRom = path.join(root, 'Pokemon - Emerald Version.gba');
 const privateConfig = path.join(root, 'generated', 'sd-card', '3ds', 'emerald-online-3ds', 'online.cfg');
@@ -130,6 +130,8 @@ try {
   if (!connections) throw new Error('runtime did not connect to the presence server within 15 seconds');
   if (!runtimeClient?.name) throw new Error('runtime connected but did not complete the hello handshake within 15 seconds');
   if (runtimeClient.name !== 'May') throw new Error(`runtime ignored configured trainer name (got ${runtimeClient.name})`);
+  const identityDeadline = Date.now() + 3000;
+  while (!fs.existsSync(virtualIdentity) && Date.now() < identityDeadline) await new Promise(resolve => setTimeout(resolve, 50));
   if (!fs.existsSync(virtualIdentity)) throw new Error('runtime enrolled but did not persist its server-issued identity');
   const identityConfig = fs.readFileSync(virtualIdentity, 'utf8');
   if (!/^id=[0-9a-f-]{36}$/m.test(identityConfig) || !/^token=[0-9a-f]{64}$/m.test(identityConfig)) throw new Error('runtime persisted an invalid identity credential');

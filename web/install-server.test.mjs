@@ -73,6 +73,8 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.match(pageBody, /src="\/logo\.png"/);
   assert.match(pageBody, /release-media\/community-forums\.png/);
   assert.match(pageBody, /release-media\/online-dashboard\.png/);
+  assert.match(pageBody, /release-media\/0\.8\.4-online-users\.png/);
+  assert.match(pageBody, /release-media\/0\.8\.4-map-chat\.png/);
   assert.doesNotMatch(pageBody, /Lindsey Web Solutions|LindseyWebSolutions/);
   assert.match(page.headers.get('content-security-policy'), /default-src/);
 
@@ -94,6 +96,12 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
     assert.equal(screenshot.status, 200);
     assert.equal(screenshot.headers.get('content-type'), 'image/png');
     assert.ok(Number(screenshot.headers.get('content-length')) > 50000);
+  }
+  for (const image of ['0.8.4-online-users.png', '0.8.4-map-chat.png']) {
+    const screenshot = await fetch(`${base}/release-media/${image}`);
+    assert.equal(screenshot.status, 200);
+    assert.equal(screenshot.headers.get('content-type'), 'image/png');
+    assert.ok(Number(screenshot.headers.get('content-length')) > 10000);
   }
 
   const publicStatus = await fetch(`${base}/api/public-status`);

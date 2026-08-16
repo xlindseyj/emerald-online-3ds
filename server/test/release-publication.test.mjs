@@ -15,15 +15,17 @@ const rawCommunityPublications = JSON.parse(fs.readFileSync(path.join(root, 'rel
 
 test('release catalog produces structured, image-safe official posts', () => {
   const catalog = validateReleaseCatalog(rawCatalog);
-  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
+  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4']);
   const current = catalog.at(-1);
   const topic = formatReleaseTopic(current);
-  assert.match(topic.title, /v0\.8\.3/);
+  assert.match(topic.title, /v0\.8\.4/);
   assert.match(topic.body, /## Highlights/);
   assert.match(topic.body, /\[CIA\]\(\/emerald-online-3ds\.cia\)/);
   const rendered = renderMarkdown(topic.body);
   assert.match(rendered, /<img src="\/logo\.png"/);
   assert.match(rendered, /<img src="\/qr\.svg"/);
+  assert.match(rendered, /<img src="\/release-media\/0\.8\.4-online-users\.png"/);
+  assert.match(rendered, /<img src="\/release-media\/0\.8\.4-map-chat\.png"/);
   assert.match(rendered, /<h2>Highlights<\/h2>/);
   assert.match(rendered, /<ul><li>/);
   assert.match(rendered, /href="\/emerald-online-3ds\.cia"/);
@@ -96,7 +98,8 @@ test('official guides and status pages populate every forum purpose idempotently
   const emulator = publications.find(item => item.key === 'test-with-azahar');
   const status = publications.find(item => item.key === 'live-service-status');
   assert.match(renderMarkdown(install.body), /<img src="\/qr\.svg"/);
-  assert.match(renderMarkdown(emulator.body), /release-media\/online-dashboard\.png/);
+  assert.match(renderMarkdown(emulator.body), /release-media\/0\.8\.4-online-users\.png/);
+  assert.match(renderMarkdown(emulator.body), /release-media\/0\.8\.4-map-chat\.png/);
   assert.match(status.body, /https:\/\/emeraldonline3ds\.com\/community/);
   assert.match(status.body, /wss:\/\/live\.emeraldonline3ds\.com\/game/);
 

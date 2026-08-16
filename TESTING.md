@@ -1,8 +1,20 @@
 # Hardware smoke test
 
-The current 0.8.3 physical release defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. The in-development 0.8.4 runtime adds Online Users and Map Chat to the lower-page cycle. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
+The current public release is 0.8.4 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It adds Online Users and Map Chat to the lower-page cycle. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
+
+## Release 0.8.4 global roster and Map Chat (2026-08-16)
+
+- Runtime UI: Online Users is a read-only, touch-paged global list with names on the left and each authenticated trainer's current map/tile coordinates on the right. Map Chat is a separate touch-paged, current-map session list with sender, UTC timestamp, complete message text, and Compose. Opaque roster IDs remain internal for future actions, and chat is not stored by the server.
+- Isolation: the global roster does not widen gameplay presence. Snapshots and chat remain current-map only, while disconnecting clears the cached global roster. Battle/menu rendering remains restricted to the verified overworld.
+- Performance change: save-derived statistics are refreshed once per second instead of rescanning Pokédex state every frame. This targets the user's 48-52 FPS v0.8.3 result but does not establish a physical improvement until v0.8.4 is installed and remeasured.
+- Authentic media and emulator: official Azahar 2126.0 passed isolated `page=users` and `page=chat` startup, public-WSS authentication, identity persistence, stationary keepalive, reconnect, and bounded protocol injection checks. The two cropped lower-screen captures published on the homepage and emulator guide contain no ROM pixels or private identity/save data.
+- Automated verification: 58 tests passed with zero skips after migrations 001-006 against disposable PostgreSQL 16. The regular suite also passed with the three PostgreSQL-only cases skipped when no database URL was supplied. The public build, catalog validation, and release audit all passed.
+- Artifacts: CIA SHA-256 `225f021371b3cb3788c0879c2d8fce0d759d9847eee1ecd4f4461b054005d82c`, 3DSX `71007c45b922463cf1181ca42ae73b1d08ab681cb28c7ad7a2799cab21308ba0`, and code-only source `d27be10b3d11c4d198ad7679c3f3b57441705dcd258dffbd5231ca76d32dc658`.
+- Production: multi-architecture image `sha256:b0b501e92a3a106fc29eeedd6a5c8829ae3c3fa1d801e22416e22393b9f26668` rolled out with both init containers successful, both application containers Ready, and zero restarts. All four public services report Operational; v0.8.4 is the sole pinned current release; nine maintained forum pages are published; both new screenshots return 200; and all three live artifact hashes match the manifest.
+- Live WSS: two temporary protocol clients on different maps both appeared in the same global roster with their exact map/tile coordinates, did not appear in one another's gameplay snapshot, and received a server-generated ISO timestamp on chat. Both disconnected at the end of the check. The broader Gate 3 lifecycle also passed and deleted its synthetic identity and uploaded test history.
+- Physical status: installation, touch/readability, audio, HOME lifecycle, and FPS remeasurement remain pending on the Old 3DS. The saved v0.8.3 Cable Club session must be restarted on matching v0.8.4 clients before remaining Gate 4 acceptance work.
 
 ## Release 0.8.3 battle-overlay hotfix (2026-08-16)
 
@@ -95,7 +107,7 @@ Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abf
 
 ## Gate 4 Cable Club acceptance
 
-1. Preserve an independent copy of both saves. Use release 0.8.3 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
+1. Preserve an independent copy of both saves. Use release 0.8.4 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.
