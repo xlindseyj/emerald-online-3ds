@@ -1,11 +1,18 @@
 # Hardware smoke test
 
-The current 0.7.1 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen now replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
+The current 0.8.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
 
-- 3DSX SHA-256: `84f9a601839ae6b428eac060dd1b1892db91a2846965e52fc49d9d613f9f7588`
-- CIA SHA-256: `a348571370c5abc37a92f0fc1763856b4c6f3913c6a742906decc4e75f6c100e`
-- Corresponding-source SHA-256: `a9751a767116ad01b04e90017f988fbf1477ebbcaeab3f071b0f8a68aefd0089`
-- Private avatar atlas SHA-256: `ab3f08aec7b8598f383e5032e22d3ea2a5234522230d460b908a2e3517d753d8`
+Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
+
+## Release 0.8.0 verification (2026-08-16)
+
+- Bottom pages: source tests pass for Online, Party, Bag, Map/Radar, and Player Stats; Bag/Map configuration aliases and touch regions are covered.
+- Bag privacy and decoding: source tests cover each pocket's Emerald save offset/capacity, quantity decryption, local money decryption, and private-ROM item-name lookup. No inventory field was added to the protocol, server, database, or browser profile.
+- PostgreSQL suite: 38 passed, 0 failed, 0 skipped against a disposable PostgreSQL 16 container, including all identity, community, consent, leaderboard, compatibility, and deletion lifecycles. The disposable container was removed afterward.
+- Headless emulator: official Azahar 2126.0 passed the 0.8.0 network smoke with both the default page and `page=map`. It persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, republished state, received movement/chat/emotes, and exited without orphaned processes. The harness isolates D-Bus so the emulator UI thread cannot stall while requesting a desktop wake lock.
+- Visual emulator checks: Bag tabs and the `BAG - LOCAL ONLY` label render cleanly; Map/Radar renders its grid, player marker, coordinates, facing, nearby count, and trail. The isolated emulator profile had no playable save, so real Bag item rows and decrypted values remain unverified visually.
+- Hardware status: physical acceptance remains pending. Follow `BOTTOM_SCREEN_HANDOFF.md`; emulator results do not validate the Old 3DS touch, private save/ROM memory, SD, or performance paths.
+- Production: the amd64/arm64 image at immutable digest `sha256:ff5f05a947397164dc4d4a64ebf9c542c1d91a753f1d3a0060da4ecf83f824c1` rolled out successfully. Public health reported protocol 2/database ready, release downloads matched `release/SHA256SUMS`, the connected physical client automatically reauthenticated and republished its positioned state, and the complete synthetic 0.8.0 WSS lifecycle passed before deleting its test identity.
 
 ## Latest physical result (2026-08-15, protocol-v2 WSS test)
 
@@ -22,15 +29,15 @@ The current 0.7.1 actual-game runtime defaults to `wss://live.emeraldonline3ds.c
 - Automated suite: 33 passing against disposable PostgreSQL 17, including migrations 001-003, identity/community lifecycles, per-device consent, validation, anomaly quarantine/review, pagination, opt-out, compatibility contributions, and complete deletion.
 - Live community: pass. A synthetic production-WSS 3DS identity approved a browser pairing, created a paired-only beta topic and reply, remained hidden to anonymous readers, and exposed no internal identity UUID. The topic and identity were then removed and the database confirmed zero synthetic rows.
 - Gate 3 live lifecycle: pass. A synthetic WSS device consented and uploaded aggregate stats, paired a browser, appeared on a per-release board, confirmed disabled battle/trade rankings, submitted a Server-observed compatibility result, opted one field out, deleted all history, and deleted its identity. Direct database verification then found zero synthetic identities, scores, history, or compatibility reports.
-- Headless emulator: pass with official Azahar 2126.0 on Linux. The exact 0.6.0 Gate 3 build persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, republished state, and enrolled through production WSS again after deployment. The 0.6.1 physical-diagnostics hotfix retains the same network implementation and adds its version plus TLS stage, result, verification flags, and accepted future skew to the bottom screen. Synthetic identities were deleted. Physical hardware remains authoritative for the mbedTLS/SD and touch paths.
+- Headless emulator: Gate 3 passed with official Azahar 2126.0 on Linux. See the current 0.8.0 verification section above for the latest release result. Physical hardware remains authoritative for the mbedTLS, SD, touch, and performance paths.
 
-Current artifacts are `1001920` bytes (CIA), `1263412` bytes (3DSX), `2311000` bytes (complete first-party and corresponding gpSP source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
+The release directory contains the CIA, 3DSX, and complete first-party/corresponding-gpSP source archive; verify their current sizes and hashes from the files and `release/SHA256SUMS`. The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
 
 ## Gate 4 experimental link smoke
 
 Automated evidence: two isolated Azahar 2126.0 profiles passed four startup/hard-interruption cycles and retained exactly the newest three save backups per profile. A production-WSS test delivered 53 bounded synthetic packets, recovered from a hard guest disconnect, and measured 164-186 ms round trip (171 ms average) with 4.5 ms mean absolute jitter. Because the available emulator state remained at the title screen and emitted zero Cable Club packets, this is transport evidence only; the battle, trade, save-integrity, real packet-loss, and physical-performance steps below remain required.
 
-1. Preserve an independent copy of both saves. Use release 0.7.1 on both clients.
+1. Preserve an independent copy of both saves. Use release 0.8.0 on both clients.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.
@@ -66,9 +73,11 @@ Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. W
 10. Leave the player stationary online for at least 45 seconds and confirm the status remains `ONLINE`.
 11. Disable Wi-Fi briefly. Confirm the panel changes to `RETRYING` while Emerald keeps running. Restore Wi-Fi and confirm it returns to `ONLINE` without pressing X or moving.
 12. Press `Y` and confirm the native party page shows each party nickname, level, and current/maximum HP. Damage or heal a party member and confirm HP updates without reopening the page.
-13. Press `Y` again for Player Stats. Confirm Seen, Caught, Badges, and Frontier are shown locally while every upload switch is off. Tap Enable, cancel once and verify no upload, then enable by typing `YES`. Toggle each field independently and verify the paired browser profile/leaderboard follows. Confirm no Trainer ID, Pokémon, party, moves, inventory, save, or ROM field appears in network/profile data.
-14. Tap Delete All Stats, cancel once, then type `DELETE`. Confirm the profile is immediately empty and stays absent after page refresh. Disable uploads before testing identity-wide browser deletion so the device cannot re-upload on its next minute sync.
-15. Save through Emerald's normal menu, close using HOME, relaunch, and confirm the save loads and the local `stats.cfg` consent choices persist.
+13. Press `Y` for Bag. Compare money, item names, and quantities against Emerald's own Bag; use all five pocket tabs and both page arrows. Confirm the page is labeled local-only and that no inventory data appears in browser profiles or network payloads.
+14. Press `Y` for Map/Radar. Walk and change facing to build a trail, then change maps and confirm the old trail clears. With a same-map peer, verify the remote marker, name, gender color, and distance update.
+15. Press `Y` again for Player Stats. Confirm Seen, Caught, Badges, and Frontier are shown locally while every upload switch is off. Tap Enable, cancel once and verify no upload, then enable by typing `YES`. Toggle each field independently and verify the paired browser profile/leaderboard follows. Confirm no Trainer ID, Pokémon, party, moves, inventory, save, or ROM field appears in network/profile data.
+16. Tap Delete All Stats, cancel once, then type `DELETE`. Confirm the profile is immediately empty and stays absent after page refresh. Disable uploads before testing identity-wide browser deletion so the device cannot re-upload on its next minute sync.
+17. Save through Emerald's normal menu, close using HOME, relaunch, and confirm the save loads and the local `stats.cfg` consent choices persist.
 
 ## CIA QR installation
 

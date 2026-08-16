@@ -24,6 +24,8 @@
 - [x] Runtime decoding of private-ROM trainer OBJ graphics with transparent overlay
 - [x] Stationary-player keepalive, automatic reconnect, and state republish after transient drops
 - [x] Native lower-screen party summary with live nickname, level, and HP data
+- [x] Local-only bottom-screen Bag browser with pocket tabs, decrypted quantities, money, and private-ROM item names
+- [x] Bottom-screen Map/Radar with current coordinates, facing, movement trail, and same-map remote trainer markers
 - [x] Allowlisted, rate-limited same-map touch emotes with transient overworld indicators
 - [x] Server-issued protocol-v2 device credentials, one-time recovery, export, revocation, deletion, stable opaque IDs, and duplicate-session replacement
 - [x] Two-instance CNPG PostgreSQL with Longhorn, TLS, External Secrets, migrations, retention cleanup, and encrypted scheduled MinIO backups
@@ -37,10 +39,10 @@
 
 - [x] Faithful local overworld/battle/save execution through private-ROM emulation
 - [x] Local battle, party, inventory, progression, save, and audio through gpSP
-- [ ] Bottom-screen production UI expansion (bag and map; party, chat, and emotes are implemented)
+- [x] Bottom-screen production UI expansion (party, bag, map/radar, chat, emotes, profiles, and privacy controls)
 - [x] Remote trainer rendering foundation, interpolation, emotes, and rate-limited map chat
 - [ ] Link battles/trades (feasibility spike must pass before invitations are exposed); durable device authentication is implemented
-- [ ] Browser pairing, forum authorization, reports, sanctions, and moderation UI; device identity, PostgreSQL, and TLS are implemented
+- [x] Browser pairing, paired forum authorization, defect reports, sanctions, moderation UI, device identity, PostgreSQL, and TLS
 - [ ] Add service dashboards, load tests, and a MinIO KMS; the NAT-friendly Kubernetes deployment, persistence, tested compressed backups, and connection/rate limits are operating, but backup encryption at rest is not yet claimed
 - [ ] Confirm May plus authentic avatars in a physical two-client test, test New 3DS, and finalize release packaging (Brendan is confirmed on Old 3DS XL with a synthetic peer)
 

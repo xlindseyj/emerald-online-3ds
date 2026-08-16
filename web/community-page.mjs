@@ -1,4 +1,4 @@
-export const CURRENT_RELEASE = '0.7.1';
+export const CURRENT_RELEASE = '0.8.0';
 export const communityPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/png" href="/favicon.png"><title>Community · Emerald Online 3DS</title>

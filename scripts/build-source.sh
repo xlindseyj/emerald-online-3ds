@@ -10,7 +10,11 @@ release_dir="${project_root}/release"
 rm -rf "${source_stage}"
 mkdir -p "${source_stage}/gpsp-runtime" "${source_stage}/third_party" "${release_dir}"
 cp "${project_root}/README.md" "${project_root}/LICENSE.md" "${project_root}/THIRD_PARTY.md" \
-  "${project_root}/COMMUNITY_PLATFORM_PLAN.md" \
+  "${project_root}/COMMUNITY_PLATFORM_PLAN.md" "${project_root}/ROADMAP.md" \
+  "${project_root}/TESTING.md" "${project_root}/PHASE_0_HANDOFF.md" \
+  "${project_root}/GATE_1_HANDOFF.md" "${project_root}/GATE_2_HANDOFF.md" \
+  "${project_root}/GATE_3_HANDOFF.md" "${project_root}/GATE_4_HANDOFF.md" \
+  "${project_root}/BOTTOM_SCREEN_HANDOFF.md" \
   "${project_root}/package.json" "${project_root}/package-lock.json" "${project_root}/Dockerfile" "${source_stage}/"
 cp -R "${project_root}/assets" "${project_root}/protocol" "${project_root}/scripts" "${project_root}/tools" \
   "${project_root}/server" "${project_root}/web" "${project_root}/deploy" "${source_stage}/"

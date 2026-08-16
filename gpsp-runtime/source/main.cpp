@@ -54,7 +54,10 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.7.1"
+#define APP_VERSION "0.8.0"
+#define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
+#define EMERALD_ITEM_COUNT 377
+#define EMERALD_ITEM_RECORD_SIZE 44
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -80,8 +83,12 @@ static unsigned measuredFps;
 static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
-enum BottomPage { PAGE_ONLINE, PAGE_PARTY, PAGE_STATS };
+enum BottomPage { PAGE_ONLINE, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS };
 static BottomPage bottomPage = PAGE_ONLINE;
+static unsigned bagPocket;
+static unsigned bagPage;
+static char itemNames[EMERALD_ITEM_COUNT][15];
+static bool itemNamesLoaded;
 static bool dynarecEnabled = true;
 static char linkRoom[10];
 static bool linkConfigured;
@@ -210,6 +217,16 @@ struct GamePresence {
 };
 static GamePresence presence;
 static GamePresence lastSentPresence;
+
+struct MapTrailPoint {
+    uint8_t mapGroup;
+    uint8_t mapNum;
+    int16_t x;
+    int16_t y;
+};
+static MapTrailPoint mapTrail[16];
+static unsigned mapTrailCount;
+static unsigned mapTrailNext;
 
 struct RemoteTrainer {
     char id[37];
@@ -841,7 +858,7 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
             strcpy(linkRoom, equals);
@@ -1602,7 +1619,147 @@ static char decodeEmerald(uint8_t value) {
     if (value >= 0xA1 && value <= 0xAA) return '0' + value - 0xA1;
     if (value >= 0xBB && value <= 0xD4) return 'A' + value - 0xBB;
     if (value >= 0xD5 && value <= 0xEE) return 'a' + value - 0xD5;
-    return value == 0x00 ? ' ' : '?';
+    if (value == 0x00) return ' ';
+    if (value == 0x1B) return 'e';
+    if (value == 0x2D) return '&';
+    if (value == 0x2E) return '+';
+    if (value == 0xAB) return '!';
+    if (value == 0xAC) return '?';
+    if (value == 0xAD) return '.';
+    if (value == 0xAE) return '-';
+    if (value == 0xB4) return '\'';
+    if (value == 0xB8) return ',';
+    if (value == 0xBA) return '/';
+    return '?';
+}
+
+static void loadPrivateItemNames(void) {
+    FILE* file = fopen(ROM_PATH, "rb");
+    if (!file || fseek(file, EMERALD_ITEM_TABLE_OFFSET, SEEK_SET)) { if (file) fclose(file); return; }
+    uint8_t record[EMERALD_ITEM_RECORD_SIZE];
+    for (unsigned item = 0; item < EMERALD_ITEM_COUNT; ++item) {
+        if (fread(record, 1, sizeof(record), file) != sizeof(record)) break;
+        unsigned output = 0;
+        for (unsigned input = 0; input < 14 && record[input] != 0xFF && output < sizeof(itemNames[item]) - 1; ++input) {
+            char decoded = decodeEmerald(record[input]);
+            itemNames[item][output++] = decoded;
+        }
+        while (output && itemNames[item][output - 1] == ' ') --output;
+        itemNames[item][output] = 0;
+    }
+    fclose(file);
+    itemNamesLoaded = itemNames[1][0] != 0;
+}
+
+static bool getSaveBlocks(const uint8_t** block1, const uint8_t** block2) {
+    if (!gbaEwram || !gbaIwram) return false;
+    uint32_t block1Address = read32(gbaIwram, 0x5D8C);
+    uint32_t block2Address = read32(gbaIwram, 0x5D90);
+    if (block1Address < 0x02000000 || block1Address + 0x3D88 > 0x02040000 ||
+        block2Address < 0x02000000 || block2Address + 0xF2C > 0x02040000) return false;
+    *block1 = gbaEwram + block1Address - 0x02000000;
+    *block2 = gbaEwram + block2Address - 0x02000000;
+    return true;
+}
+
+static void drawBagPage(void) {
+    static const char* pocketNames[] = {"ITEMS", "KEY", "BALLS", "TM/HM", "BERRY"};
+    static const size_t pocketOffsets[] = {0x560, 0x5D8, 0x650, 0x690, 0x790};
+    static const unsigned pocketCapacities[] = {30, 30, 16, 64, 46};
+    for (unsigned pocket = 0; pocket < 5; ++pocket) {
+        const float x = pocket * 64.0f;
+        C2D_DrawRectSolid(x + 1, 42, 0, 62, 25, pocket == bagPocket ? C2D_Color32(34,126,82,255) : C2D_Color32(43,61,55,255));
+        drawText(x + 9, 49, .31f, C2D_Color32(255,255,255,255), "%s", pocketNames[pocket]);
+    }
+    const uint8_t* block1;
+    const uint8_t* block2;
+    if (!getSaveBlocks(&block1, &block2)) {
+        drawText(34, 116, .42f, C2D_Color32(190,210,200,255), "Waiting for valid Emerald memory...");
+        return;
+    }
+    uint32_t encryptionKey = read32(block2, 0xAC);
+    uint32_t money = read32(block1, 0x490) ^ encryptionKey;
+    const size_t pocketOffset = pocketOffsets[bagPocket];
+    const unsigned capacity = pocketCapacities[bagPocket];
+    unsigned used = 0;
+    for (unsigned slot = 0; slot < capacity; ++slot) {
+        uint16_t itemId = read16(block1, pocketOffset + slot * 4);
+        if (itemId > 0 && itemId < EMERALD_ITEM_COUNT) ++used;
+    }
+    const unsigned pageCount = used ? (used + 4) / 5 : 1;
+    if (bagPage >= pageCount) bagPage = pageCount - 1;
+    drawText(15, 74, .32f, C2D_Color32(255,213,128,255), "LOCAL ONLY   MONEY $%lu", (unsigned long) money);
+    drawText(244, 74, .30f, C2D_Color32(190,220,210,255), "%u/%u", bagPage + 1, pageCount);
+    const unsigned first = bagPage * 5;
+    unsigned logicalIndex = 0;
+    unsigned shown = 0;
+    for (unsigned slot = 0; slot < capacity && shown < 5; ++slot) {
+        uint16_t itemId = read16(block1, pocketOffset + slot * 4);
+        if (!itemId || itemId >= EMERALD_ITEM_COUNT) continue;
+        if (logicalIndex++ < first) continue;
+        uint16_t quantity = read16(block1, pocketOffset + slot * 4 + 2) ^ (uint16_t) encryptionKey;
+        const float y = 92 + shown * 24;
+        C2D_DrawRectSolid(10, y, 0, 300, 21, C2D_Color32(shown & 1 ? 22 : 25, shown & 1 ? 61 : 74, shown & 1 ? 46 : 54, 255));
+        const char* name = itemNamesLoaded && itemNames[itemId][0] ? itemNames[itemId] : "UNKNOWN ITEM";
+        drawText(18, y + 4, .38f, C2D_Color32(255,255,255,255), "%.14s", name);
+        drawText(256, y + 4, .36f, C2D_Color32(190,225,210,255), "x%u", quantity);
+        ++shown;
+    }
+    if (!shown) drawText(112, 140, .40f, C2D_Color32(180,205,200,255), "Pocket is empty");
+    C2D_DrawRectSolid(10, 216, 0, 145, 24, bagPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(165, 216, 0, 145, 24, bagPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(64, 221, .35f, C2D_Color32(255,255,255,255), "PREVIOUS");
+    drawText(226, 221, .35f, C2D_Color32(255,255,255,255), "NEXT");
+}
+
+static void recordMapTrail(const GamePresence& current) {
+    if (!current.valid) return;
+    if (mapTrailCount) {
+        const unsigned last = (mapTrailNext + 15) % 16;
+        if (mapTrail[last].mapGroup != current.mapGroup || mapTrail[last].mapNum != current.mapNum) {
+            mapTrailCount = mapTrailNext = 0;
+        } else if (mapTrail[last].x == current.x && mapTrail[last].y == current.y) return;
+    }
+    mapTrail[mapTrailNext] = {current.mapGroup, current.mapNum, current.x, current.y};
+    mapTrailNext = (mapTrailNext + 1) % 16;
+    if (mapTrailCount < 16) ++mapTrailCount;
+}
+
+static void drawMapPage(void) {
+    if (!presence.valid) {
+        drawText(38, 110, .45f, C2D_Color32(190,210,200,255), "Waiting for the Emerald overworld...");
+        return;
+    }
+    const float radarX = 12, radarY = 45, radarWidth = 200, radarHeight = 180;
+    const float centerX = radarX + radarWidth / 2, centerY = radarY + radarHeight / 2;
+    C2D_DrawRectSolid(radarX, radarY, 0, radarWidth, radarHeight, C2D_Color32(16,55,41,255));
+    for (int x = -8; x <= 8; x += 2) C2D_DrawRectSolid(centerX + x * 10, radarY, 0, 1, radarHeight, C2D_Color32(31,76,59,255));
+    for (int y = -8; y <= 8; y += 2) C2D_DrawRectSolid(radarX, centerY + y * 10, 0, radarWidth, 1, C2D_Color32(31,76,59,255));
+    for (unsigned trail = 0; trail < mapTrailCount; ++trail) {
+        const unsigned index = (mapTrailNext + 16 - mapTrailCount + trail) % 16;
+        int dx = mapTrail[index].x - presence.x, dy = mapTrail[index].y - presence.y;
+        if (dx >= -9 && dx <= 9 && dy >= -8 && dy <= 8)
+            C2D_DrawRectSolid(centerX + dx * 10 - 2, centerY + dy * 10 - 2, .05f, 5, 5, C2D_Color32(83,154,107,180));
+    }
+    C2D_DrawRectSolid(centerX - 6, centerY - 6, .2f, 13, 13, C2D_Color32(255,213,90,255));
+    drawText(centerX - 3, centerY - 7, .31f, C2D_Color32(20,45,35,255), "P");
+    for (int index = 0; index < remoteCount; ++index) {
+        int dx = remoteTrainers[index].x - presence.x, dy = remoteTrainers[index].y - presence.y;
+        int shownX = dx < -9 ? -9 : dx > 9 ? 9 : dx;
+        int shownY = dy < -8 ? -8 : dy > 8 ? 8 : dy;
+        const uint32_t color = remoteTrainers[index].isGirl ? C2D_Color32(232,111,170,255) : C2D_Color32(80,164,245,255);
+        C2D_DrawRectSolid(centerX + shownX * 10 - 5, centerY + shownY * 10 - 5, .2f, 11, 11, color);
+    }
+    drawText(224, 48, .34f, C2D_Color32(160,232,255,255), "LOCAL RADAR");
+    drawText(224, 69, .31f, C2D_Color32(255,255,255,255), "MAP %u-%u", presence.mapGroup, presence.mapNum);
+    drawText(224, 87, .31f, C2D_Color32(255,255,255,255), "TILE %d,%d", presence.x, presence.y);
+    drawText(224, 105, .31f, C2D_Color32(190,220,210,255), "FACING %s", facingName(presence.facing));
+    drawText(224, 130, .33f, C2D_Color32(160,232,255,255), "NEARBY %d", remoteCount);
+    for (int index = 0; index < remoteCount && index < 4; ++index) {
+        int distance = abs(remoteTrainers[index].x - presence.x) + abs(remoteTrainers[index].y - presence.y);
+        drawText(224, 150 + index * 18, .29f, C2D_Color32(255,255,255,255), "%.8s %dt", remoteTrainers[index].name, distance);
+    }
+    if (!remoteCount) drawText(228, 153, .29f, C2D_Color32(180,205,200,255), "No trainers");
 }
 
 static void drawStatsPage(void) {
@@ -1635,10 +1792,15 @@ static void drawBottom(void) {
     C2D_DrawRectSolid(0, 0, 0, 320, 38, C2D_Color32(16, 45, 34, 255));
     C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
     C2D_TextBufClear(textBuffer);
-    const char* title=bottomPage==PAGE_PARTY?"PARTY - LOCAL ONLY":bottomPage==PAGE_STATS?"PLAYER STATS & CONSENT":"EMERALD ONLINE";
+    const char* title = bottomPage == PAGE_PARTY ? "PARTY - LOCAL ONLY" :
+        bottomPage == PAGE_BAG ? "BAG - LOCAL ONLY" :
+        bottomPage == PAGE_MAP ? "MAP & TRAINER RADAR" :
+        bottomPage == PAGE_STATS ? "PLAYER STATS & CONSENT" : "EMERALD ONLINE";
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
     drawText(280,14,.30f,C2D_Color32(180,220,205,255),"Y >");
     if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
+    if (bottomPage == PAGE_MAP) { drawMapPage(); return; }
+    if (bottomPage == PAGE_BAG) { drawBagPage(); return; }
     if (bottomPage == PAGE_PARTY) {
         if (!gbaEwram) drawText(30, 95, .48f, C2D_Color32(190,210,200,255), "Waiting for Emerald memory...");
         else {
@@ -1658,7 +1820,7 @@ static void drawBottom(void) {
                 drawText(248, y + 5, .39f, C2D_Color32(255,255,255,255), "%u/%u", hp, maxHp);
             }
         }
-        drawText(96, 222, .38f, C2D_Color32(190,220,210,255), "Y  PLAYER STATS");
+        drawText(119, 222, .38f, C2D_Color32(190,220,210,255), "Y  BAG");
         return;
     }
     const char* status = onlineMode == ONLINE_ACTIVE ? "ONLINE" : onlineMode == ONLINE_CONNECTING ? "CONNECTING" : onlineEnabled ? "RETRYING" : "OFFLINE";
@@ -1892,6 +2054,7 @@ int main(void) {
         ndspChnSetRate(0, audioRate);
         debugStage(audioRate == 32768.0 ? "audio-rate-32768" : "audio-rate-other");
         loadSave();
+        loadPrivateItemNames();
         debugStage("save-loaded");
         if (onlineEnabled) onlineConnect();
         debugStage("online-started");
@@ -1902,7 +2065,7 @@ int main(void) {
         heldKeys = hidKeysHeld();
         uint32_t down = hidKeysDown();
         if (down & KEY_X) onlineToggle();
-        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 3);
+        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 5);
         if (down & KEY_TOUCH) {
             touchPosition touch;
             hidTouchRead(&touch);
@@ -1910,6 +2073,10 @@ int main(void) {
                 if (touch.py >= 82 && touch.py < 194) toggleStatsField((touch.py - 82) / 28);
                 else if (touch.py >= 208 && (!statsEnabled || touch.px < 160)) syncStatsNow();
                 else if (touch.py >= 208 && touch.px >= 160) deleteStatsHistory();
+            } else if (bottomPage == PAGE_BAG) {
+                if (touch.py >= 40 && touch.py < 72) { bagPocket = touch.px / 64; if (bagPocket > 4) bagPocket = 4; bagPage = 0; }
+                else if (touch.py >= 210 && touch.px < 160) { if (bagPage) --bagPage; }
+                else if (touch.py >= 210 && touch.px >= 160) ++bagPage;
             } else if (bottomPage == PAGE_ONLINE && touch.py >= 202) sendEmote(touch.px / 81);
             else if (bottomPage == PAGE_ONLINE && touch.py >= 46 && touch.py < 90) openBrowserPairing();
             else if (bottomPage == PAGE_ONLINE && touch.px >= 165 && touch.py >= 104) openChat();
@@ -1918,6 +2085,7 @@ int main(void) {
         static bool firstFrameLogged;
         if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
         presence = readPresence();
+        recordMapTrail(presence);
         saveStats = readSaveStats();
         updateTrainerNameFromSave();
         uint64_t now = osGetTime();

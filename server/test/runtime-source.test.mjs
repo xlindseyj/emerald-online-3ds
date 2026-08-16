@@ -107,6 +107,24 @@ test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregat
   assert.doesNotMatch(packetSource,/trainerName|identityId|playerTrainerId|party|inventory|SAVE_PATH|ROM_PATH/);
 });
 
+test('gpSP bottom screen exposes local-only bag data and a same-map trainer radar', () => {
+  assert.match(gpspSource, /PAGE_BAG/);
+  assert.match(gpspSource, /PAGE_MAP/);
+  assert.match(gpspSource, /BAG - LOCAL ONLY/);
+  assert.match(gpspSource, /MAP & TRAINER RADAR/);
+  assert.match(gpspSource, /EMERALD_ITEM_TABLE_OFFSET 0x5839A0/);
+  assert.match(gpspSource, /read16\(block1, pocketOffset \+ slot \* 4 \+ 2\) \^ \(uint16_t\) encryptionKey/);
+  assert.match(gpspSource, /read32\(block1, 0x490\) \^ encryptionKey/);
+  assert.match(gpspSource, /loadPrivateItemNames\(\)/);
+  assert.match(gpspSource, /recordMapTrail\(presence\)/);
+  assert.match(gpspSource, /remoteTrainers\[index\]\.x - presence\.x/);
+  assert.match(gpspSource, /LOCAL RADAR/);
+  const bagStart = gpspSource.indexOf('static void drawBagPage');
+  const bagEnd = gpspSource.indexOf('static void recordMapTrail', bagStart);
+  const bagSource = gpspSource.slice(bagStart, bagEnd);
+  assert.doesNotMatch(bagSource, /onlineSend|stats_snapshot|fetch|send\(/);
+});
+
 test('gpSP experimental link mode registers netpacket callbacks and gates startup on rotating save backups', () => {
   assert.match(gpspSource, /gpsp_serial.*linkConfigured \? "mul_poke" : "disabled"/s);
   assert.match(gpspSource, /RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE/);

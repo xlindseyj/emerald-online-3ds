@@ -18,6 +18,10 @@ const isGpspRuntime = path.basename(app) === 'emerald-online-3ds.3dsx';
 const networkMode = process.env.EMULATOR_NETWORK_MODE ?? 'local-tcp';
 if (!['local-tcp', 'production-wss'].includes(networkMode)) throw new Error('EMULATOR_NETWORK_MODE must be local-tcp or production-wss');
 const productionWss = networkMode === 'production-wss';
+const startPage = process.env.EMULATOR_START_PAGE?.toLowerCase();
+if (startPage && !['online', 'party', 'bag', 'map', 'stats'].includes(startPage)) {
+  throw new Error('EMULATOR_START_PAGE must be online, party, bag, map, or stats');
+}
 const privateRom = path.join(root, 'Pokemon - Emerald Version.gba');
 const privateConfig = path.join(root, 'generated', 'sd-card', '3ds', 'emerald-online-3ds', 'online.cfg');
 const profile = path.join(root, '.tools', 'azahar-profile');
@@ -36,7 +40,8 @@ fs.writeFileSync(path.join(virtualSd, 'online.cfg'), [
   productionWss ? 'server=live.emeraldonline3ds.com' : 'server=127.0.0.1',
   productionWss ? 'port=443' : 'port=3210',
   productionWss ? 'transport=wss' : 'transport=tcp', 'path=/game',
-  'name=May', 'dynarec=disabled', ''
+  'name=May', 'dynarec=disabled',
+  ...(startPage ? [`page=${startPage}`] : []), ''
 ].join('\n'));
 const virtualIdentity = path.join(virtualSd, 'identity.cfg');
 const virtualLog = path.join(virtualSd, 'gpsp-debug.log');
@@ -44,25 +49,49 @@ fs.rmSync(virtualIdentity, { force: true });
 fs.rmSync(virtualLog, { force: true });
 
 const local = productionWss ? null : await startServers({ identityStore: new MemoryIdentityStore() });
-let display;
-if (!isWindows && !process.env.DISPLAY) {
+let displayProcess;
+let displayName = process.env.DISPLAY;
+if (!isWindows && !displayName) {
   const xvfb = path.join(root, '.tools', 'xvfb', 'root', 'usr', 'bin', 'Xvfb');
   if (!fs.existsSync(xvfb)) throw new Error(`missing local Xvfb: ${xvfb}`);
-  display = spawn(xvfb, [':99', '-screen', '0', '1280x720x24', '-nolisten', 'tcp'], { stdio: 'ignore' });
-  await new Promise(resolve => setTimeout(resolve, 500));
+  for (let number = 99; number >= 90; --number) {
+    const candidate = `:${number}`;
+    const process = spawn(xvfb, [candidate, '-screen', '0', '1280x720x24', '-nolisten', 'tcp', '-ac'], { stdio: 'ignore' });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    if (process.exitCode === null) { displayProcess = process; displayName = candidate; break; }
+  }
+  if (!displayProcess) throw new Error('could not start Xvfb on displays :90 through :99');
 }
 const emulatorArgs = isWindows ? [app] : ['--appimage-extract-and-run', app];
-const child = spawn(emulator, emulatorArgs, {
+const isolateDesktopBus = !isWindows && process.env.AZAHAR_ISOLATE_DBUS !== 'false';
+const desktopBusRunner = process.env.DBUS_RUN_SESSION_PATH ?? '/usr/bin/dbus-run-session';
+if (isolateDesktopBus && !fs.existsSync(desktopBusRunner)) throw new Error(`missing D-Bus session runner: ${desktopBusRunner}`);
+const childCommand = isolateDesktopBus ? desktopBusRunner : emulator;
+const childArgs = isolateDesktopBus ? ['--', emulator, ...emulatorArgs] : emulatorArgs;
+const child = spawn(childCommand, childArgs, {
   windowsHide: true,
+  detached: !isWindows,
   stdio: 'ignore',
   env: isWindows ? process.env : {
     ...process.env,
-    DISPLAY: process.env.DISPLAY ?? ':99',
+    DISPLAY: displayName,
     XDG_CONFIG_HOME: path.join(profile, 'config'),
     XDG_DATA_HOME: path.join(profile, 'data'),
     XDG_CACHE_HOME: path.join(profile, 'cache')
   }
 });
+const stopEmulator = async () => {
+  if (!child.pid) return;
+  if (isWindows) {
+    child.kill();
+    return;
+  }
+  try { process.kill(-child.pid, 'SIGTERM'); }
+  catch { child.kill(); }
+  await new Promise(resolve => setTimeout(resolve, 750));
+  try { process.kill(-child.pid, 'SIGKILL'); }
+  catch {}
+};
 try {
   if (productionWss) {
     const deadline = Date.now() + 25000;
@@ -137,8 +166,8 @@ try {
   console.log(JSON.stringify({ ok: true, engine: isGpspRuntime ? 'gpSP-interpreter-smoke' : 'mGBA', emulatorPid: child.pid, connections, trainerName: runtimeClient.name, protocol: 2, serverIssuedIdentityPersisted: true, stableReconnectIdentity: true, stationaryKeepalive: true, automaticReconnect: true, stateRepublished: Boolean(runtimeClient.state), movementSnapshotsInjected: 2, chatInjected: true, emotesInjected: 4 }));
   }
 } finally {
-  child.kill();
-  if (display) display.kill();
+  await stopEmulator();
+  if (displayProcess) displayProcess.kill();
   if (local) {
     await new Promise(resolve => local.presence.server.close(resolve));
     await new Promise(resolve => local.health.close(resolve));

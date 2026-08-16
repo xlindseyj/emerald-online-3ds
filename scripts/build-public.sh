@@ -8,6 +8,11 @@ mgba_commit='26b7884bc25a5933960f3cdcd98bac1ae14d42e2'
 tooling_dir="${project_root}/generated/tooling/mgba-${mgba_commit}"
 release_dir="${project_root}/release"
 version="$(node -p "require('${project_root}/package.json').version")"
+IFS=. read -r version_major version_minor version_micro <<<"${version}"
+if [[ ! "${version_major}" =~ ^[0-9]+$ || ! "${version_minor}" =~ ^[0-9]+$ || ! "${version_micro}" =~ ^[0-9]+$ ]]; then
+  echo "package version must be a numeric major.minor.micro value" >&2
+  exit 1
+fi
 
 mkdir -p "${tooling_dir}" "${release_dir}"
 
@@ -55,7 +60,7 @@ docker run --rm \
 docker run --rm -v "${project_root}:/project" -w /project "${packaging_image}" sh -lc \
   "/opt/devkitpro/devkitARM/bin/arm-none-eabi-strip gpsp-runtime/emerald-online-3ds.elf -o gpsp-runtime/emerald-online-3ds-stripped.elf && \
    /opt/devkitpro/tools/bin/bannertool makebanner -i assets/emerald-online-3ds-banner.png -a generated/tooling/mgba-${mgba_commit}/bios.wav -o gpsp-runtime/emerald-online-3ds.bnr && \
-   /opt/devkitpro/tools/bin/makerom -f cia -o gpsp-runtime/emerald-online-3ds.cia -rsf generated/tooling/mgba-${mgba_commit}/emerald-online-3ds.rsf -target t -exefslogo -elf gpsp-runtime/emerald-online-3ds-stripped.elf -icon gpsp-runtime/emerald-online-3ds.smdh -banner gpsp-runtime/emerald-online-3ds.bnr -major 0 -minor 7 -micro 1"
+   /opt/devkitpro/tools/bin/makerom -f cia -o gpsp-runtime/emerald-online-3ds.cia -rsf generated/tooling/mgba-${mgba_commit}/emerald-online-3ds.rsf -target t -exefslogo -elf gpsp-runtime/emerald-online-3ds-stripped.elf -icon gpsp-runtime/emerald-online-3ds.smdh -banner gpsp-runtime/emerald-online-3ds.bnr -major ${version_major} -minor ${version_minor} -micro ${version_micro}"
 
 cp "${project_root}/gpsp-runtime/emerald-online-3ds.cia" "${release_dir}/emerald-online-3ds.cia"
 cp "${project_root}/gpsp-runtime/emerald-online-3ds.3dsx" "${release_dir}/emerald-online-3ds.3dsx"
