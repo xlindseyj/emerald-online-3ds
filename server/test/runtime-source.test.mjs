@@ -78,6 +78,12 @@ test('gpSP audio rate is applied after content options load', () => {
   assert.match(gpspSource, /audio-rate-32768/);
 });
 
+test('gpSP caches save-derived stats instead of rescanning Pokédex flags every frame', () => {
+  assert.match(gpspSource, /nextStatsRead/);
+  assert.match(gpspSource, /if \(now >= nextStatsRead\) \{ saveStats = readSaveStats\(\); nextStatsRead = now \+ 1000; \}/);
+  assert.doesNotMatch(gpspSource, /recordMapTrail\(presence\);\s*saveStats = readSaveStats\(\);/);
+});
+
 test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(gpspSource, /AVATAR_PATH/);
   assert.match(gpspSource, /C2D_SpriteSheetLoad/);
@@ -138,6 +144,31 @@ test('gpSP bottom screen exposes local-only bag data and a same-map trainer rada
   const bagEnd = gpspSource.indexOf('static void recordMapTrail', bagStart);
   const bagSource = gpspSource.slice(bagStart, bagEnd);
   assert.doesNotMatch(bagSource, /onlineSend|stats_snapshot|fetch|send\(/);
+});
+
+test('gpSP bottom screen exposes paged global users and session-only map chat lists', () => {
+  assert.match(gpspSource, /PAGE_USERS/);
+  assert.match(gpspSource, /PAGE_CHAT/);
+  assert.match(gpspSource, /ONLINE USERS - READ ONLY/);
+  assert.match(gpspSource, /GLOBAL POSITION LIST - ROW ACTIONS COMING LATER/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "online_users"\)/);
+  assert.match(gpspSource, /OnlineUser onlineUsers\[64\]/);
+  assert.match(gpspSource, /%.14s  %d,%d/);
+  assert.match(gpspSource, /pageCount = onlineUserCount \? \(onlineUserCount \+ 5\) \/ 6 : 1/);
+  assert.match(gpspSource, /MAP CHAT/);
+  assert.match(gpspSource, /THIS SESSION - TIMES ARE UTC/);
+  assert.match(gpspSource, /ChatMessage chatHistory\[24\]/);
+  assert.match(gpspSource, /message->name/);
+  assert.match(gpspSource, /message->time/);
+  assert.match(gpspSource, /message->text/);
+  assert.match(gpspSource, /currentMapChatIndices/);
+  assert.match(gpspSource, /COMPOSE/);
+  assert.match(gpspSource, /bottomPage \+ 1\) % 7/);
+  assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
+  assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
+  const usersStart = gpspSource.indexOf('static void drawOnlineUsersPage');
+  const usersEnd = gpspSource.indexOf('static unsigned currentMapChatIndices', usersStart);
+  assert.doesNotMatch(gpspSource.slice(usersStart, usersEnd), /openChat|sendEmote|onlineSend/);
 });
 
 test('gpSP experimental link mode registers netpacket callbacks and gates startup on rotating save backups', () => {

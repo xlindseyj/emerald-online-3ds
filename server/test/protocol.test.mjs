@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { createPresenceServer } from '../src/server.mjs';
+import { encode, MAX_LINE } from '../src/protocol.mjs';
 
 function connect(port) {
   return new Promise((resolve, reject) => { const s = net.createConnection({ host: '127.0.0.1', port }, () => resolve(s)); s.once('error', reject); });
@@ -28,6 +29,39 @@ test('two trainers receive same-map presence and map isolation', async t => {
   assert.deepEqual(isolated.players, []);
 });
 
+test('global online roster includes every authenticated trainer and their coordinates without widening snapshots', async t => {
+  const { server } = createPresenceServer({ host: '127.0.0.1', port: 0, rosterIntervalMs: 25 });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const port = server.address().port, a = await connect(port), b = await connect(port), c = await connect(port);
+  t.after(() => { a.destroy(); b.destroy(); c.destroy(); });
+  const nextA = messages(a), nextB = messages(b), nextC = messages(c);
+  a.write('{"type":"hello","version":1,"name":"May"}\n');
+  b.write('{"type":"hello","version":1,"name":"Brendan"}\n');
+  c.write('{"type":"hello","version":1,"name":"Wally"}\n');
+  await nextA(m => m.type === 'welcome'); await nextB(m => m.type === 'welcome'); await nextC(m => m.type === 'welcome');
+  a.write('{"type":"state","seq":1,"map":"0-9","x":14,"y":13,"facing":"down"}\n');
+  b.write('{"type":"state","seq":1,"map":"0-17","x":6,"y":9,"facing":"up"}\n');
+  c.write('{"type":"state","seq":1,"map":"2-3","x":2,"y":6,"facing":"left"}\n');
+  const roster = await nextA(message => message.type === 'online_users' && message.total === 3 && message.users.every(user => user.x >= 0));
+  assert.equal(roster.pages, 1);
+  assert.deepEqual(roster.users.map(user => [user.name, user.map, user.x, user.y]), [
+    ['Brendan', '0-17', 6, 9],
+    ['May', '0-9', 14, 13],
+    ['Wally', '2-3', 2, 6]
+  ]);
+  const isolated = await nextA(message => message.type === 'snapshot' && message.map === '0-9');
+  assert.deepEqual(isolated.players, []);
+});
+
+test('maximum online roster page stays within the protocol line limit', () => {
+  const users = Array.from({ length: 16 }, (_, index) => ({
+    id: `${String(index).padStart(8, '0')}-0000-4000-8000-000000000000`,
+    name: 'ABCDEFGHIJKL', map: 'a'.repeat(32), x: 4095, y: 4095
+  }));
+  const line = encode({ type: 'online_users', page: 3, pages: 4, total: 64, users });
+  assert.ok(Buffer.byteLength(line.slice(0, -1)) <= MAX_LINE);
+});
+
 test('rejects state before hello', async t => {
   const { server } = createPresenceServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
   const s = await connect(server.address().port); t.after(() => s.destroy()); const next = messages(s);
@@ -47,7 +81,9 @@ test('chat is delivered only to trainers in the same map', async t => {
   c.write('{"type":"state","seq":1,"map":"littleroot","x":4,"y":5,"facing":"up"}\n');
   await nextA(m => m.type === 'snapshot'); await nextB(m => m.type === 'snapshot'); await nextC(m => m.type === 'snapshot');
   a.write('{"type":"chat","text":"Meet by the grass!"}\n');
-  assert.equal((await nextA(m => m.type === 'chat')).text, 'Meet by the grass!');
+  const delivered = await nextA(m => m.type === 'chat');
+  assert.equal(delivered.text, 'Meet by the grass!');
+  assert.match(delivered.sentAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal((await nextB(m => m.type === 'chat')).name, 'May');
   a.write('{"type":"chat","text":"too fast"}\n');
   assert.equal((await nextA(m => m.code === 'chat_rate_limited')).type, 'error');

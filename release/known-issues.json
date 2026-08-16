@@ -3,16 +3,17 @@
     "key": "fluctuating-fps-after-scenes",
     "title": "FPS can fluctuate by device and scene",
     "severity": "medium",
-    "runtimeVersion": "0.8.0",
-    "artifactHash": "33cf8ccda02205ab352b08811ae059cf86b81794c0101481788dc8d49d083b80",
+    "runtimeVersion": "0.8.3",
+    "artifactHash": "5dd5253ba52dd88968693096387af84a546aaf93ca15790879f324af6448cb47",
     "consoleModel": "old-3ds-xl",
-    "installMethod": "3dsx",
+    "installMethod": "cia",
     "transport": "wss",
     "summary": "Frame rate can fluctuate during or after some scenes and cutscenes. The amount of slowdown appears to vary by console model, device condition, and the specific scene, so we are tracking this as a confirmed performance defect rather than assuming one universal cause.",
     "observations": [
       "FPS may be stable in normal play and then drop or fluctuate during or after a cutscene or scene transition.",
       "The severity and duration vary between devices and scenes.",
-      "Online activity appears to be one contributing factor, but the root cause has not yet been isolated."
+      "Online activity appears to be one contributing factor, but the root cause has not yet been isolated.",
+      "A current v0.8.3 Old 3DS Gate 4 run remained consistently between 48 and 52 FPS; the 60 FPS acceptance target is not yet met."
     ],
     "workaround": [
       "Wait until the scene or cutscene has finished.",

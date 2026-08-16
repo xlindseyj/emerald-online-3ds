@@ -9,9 +9,11 @@ import { PostgresStatsStore } from './stats-store.mjs';
 import { renderPrometheusMetrics } from './metrics.mjs';
 import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
 
-export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null, statsStore = null } = {}) {
+export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, rosterIntervalMs = 1000, identityStore = null, statsStore = null } = {}) {
   const clients = new Map();
   const linkRooms = new Map();
+  const rosterPageSize = 16;
+  let rosterDirty = false;
   const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, enrollments: 0, recoveries: 0, authenticationFailures: 0, hellos: 0, states: 0, chats: 0, emotes: 0, statsConsents: 0, statsSnapshots: 0, linkJoins: 0, linkPackets: 0, linkLeaves: 0, linkRateLimited: 0, reconnectReplacements: 0, disconnects: 0 };
   const send = (socket, msg) => { if (!socket.destroyed) socket.write(encode(msg)); };
   const fail = (socket, code) => { send(socket, { type: 'error', code }); socket.end(); };
@@ -24,6 +26,30 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     const players = [...clients.values()].filter(c => c !== client && c.state?.map === client.state.map)
       .map(c => ({ id: c.id, name: c.name, ...c.state }));
     send(client.socket, { type: 'snapshot', map: client.state.map, players });
+  };
+  const publishRosters = () => {
+    if (!rosterDirty) return;
+    rosterDirty = false;
+    const users = [...clients.values()].filter(client => client.name).map(client => ({
+      id: client.id,
+      name: client.name,
+      map: client.state?.map ?? '',
+      x: client.state?.x ?? -1,
+      y: client.state?.y ?? -1
+    })).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    const pages = Math.max(1, Math.ceil(users.length / rosterPageSize));
+    for (const client of clients.values()) {
+      if (!client.name) continue;
+      for (let page = 0; page < pages; page++) {
+        send(client.socket, {
+          type: 'online_users',
+          page,
+          pages,
+          total: users.length,
+          users: users.slice(page * rosterPageSize, (page + 1) * rosterPageSize)
+        });
+      }
+    }
   };
   const leaveLink = (client, reason = 'left') => {
     if (!client.linkRoom) return;
@@ -117,6 +143,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     client.helloTimer = null;
     metrics.hellos++;
     replaceCredentialConnection(client);
+    rosterDirty = true;
   };
   const handleMessage = async (client, msg) => {
     const { socket } = client;
@@ -210,7 +237,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       if (Date.now() - client.lastChat < 1000) return send(socket, { type: 'error', code: 'chat_rate_limited' });
       client.lastChat = Date.now();
       metrics.chats++;
-      const chat = { type: 'chat', id: client.id, name: client.name, map: client.state.map, text: msg.text };
+      const chat = { type: 'chat', id: client.id, name: client.name, map: client.state.map, sentAt: new Date(client.lastChat).toISOString(), text: msg.text };
       for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, chat);
       return;
     }
@@ -227,6 +254,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     client.seq = msg.seq;
     client.state = { map: msg.map, x: msg.x, y: msg.y, facing: msg.facing, avatar: msg.avatar === 'girl' ? 'girl' : client.avatar };
     metrics.states++;
+    rosterDirty = true;
     for (const peer of clients.values()) if (peer.name) snapshot(peer);
   };
   const server = net.createServer(socket => {
@@ -257,10 +285,11 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       }
     });
     socket.on('error', () => {});
-    socket.on('close', () => { if (client.helloTimer) clearTimeout(client.helloTimer); leaveLink(client, 'disconnected'); if (clients.delete(socket)) metrics.disconnects++; for (const peer of clients.values()) snapshot(peer); });
+    socket.on('close', () => { if (client.helloTimer) clearTimeout(client.helloTimer); leaveLink(client, 'disconnected'); if (clients.delete(socket)) { metrics.disconnects++; rosterDirty = true; publishRosters(); } for (const peer of clients.values()) snapshot(peer); });
   });
   const timer = setInterval(() => { const cutoff = Date.now() - idleMs; for (const c of clients.values()) if (c.seen < cutoff) c.socket.destroy(); }, Math.min(idleMs, 5000));
-  timer.unref(); server.on('close', () => clearInterval(timer));
+  const rosterTimer = setInterval(publishRosters, rosterIntervalMs);
+  timer.unref(); rosterTimer.unref(); server.on('close', () => { clearInterval(timer); clearInterval(rosterTimer); });
 	const status = () => ({
 		uptimeSeconds: Math.floor((Date.now() - metrics.startedAt) / 1000),
 		connections: clients.size,

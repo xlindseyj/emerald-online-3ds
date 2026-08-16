@@ -51,7 +51,17 @@ After authentication, clients may send:
 {"type":"ping","at":1234}
 ```
 
-Server messages include `snapshot`, `chat`, `emote`, `pong`, and `error`. Coordinates are integer tile coordinates from 0 through 4095. Names are 1-12 printable ASCII characters. Chat is 1-80 printable ASCII characters; quotes and backslashes are excluded. Chat is same-map only and limited to one message per second. Emotes are `wave`, `battle`, `trade`, or `gg`, same-map only, and limited to one every two seconds. Facing is `up`, `down`, `left`, or `right`. Sequence numbers must increase.
+Server messages include `snapshot`, `online_users`, `chat`, `emote`, `pong`, and `error`. Coordinates are integer tile coordinates from 0 through 4095. Names are 1-12 printable ASCII characters. Chat is 1-80 printable ASCII characters; quotes and backslashes are excluded. Chat is same-map only and limited to one message per second. Each delivered chat includes a server-generated ISO 8601 `sentAt` timestamp. Emotes are `wave`, `battle`, `trade`, or `gg`, same-map only, and limited to one every two seconds. Facing is `up`, `down`, `left`, or `right`. Sequence numbers must increase.
+
+`snapshot` remains strictly same-map and excludes the receiving trainer. `online_users` is a separate global, read-only presence feed containing every authenticated connection, including the receiver. It deliberately exposes only the opaque connection ID, display name, current map, and tile coordinates; it never includes ROM, save, party, inventory, account token, or browser data. A connected trainer that has not sent a valid state yet has an empty map and coordinates of `-1`.
+
+The global feed is sorted by display name and opaque ID, divided into at most 16 users per line, and coalesced to at most one refresh per second:
+
+```json
+{"type":"online_users","page":0,"pages":1,"total":2,"users":[{"id":"00000000-0000-4000-8000-000000000000","name":"May","map":"0-9","x":14,"y":13},{"id":"00000000-0000-4000-8000-000000000002","name":"Wally","map":"0-17","x":6,"y":9}]}
+```
+
+The 3DS keeps a bounded chat list only in memory for the current runtime session and filters it to the current map. Routine chat is not written to the server database.
 
 Clients should send a `ping` at least every 20 seconds while stationary. The 3DS runtime uses a 10-second interval and automatically reconnects. A reconnect authenticates again and republishes current state. Selecting offline mode suppresses reconnect attempts.
 

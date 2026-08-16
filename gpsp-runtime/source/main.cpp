@@ -54,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.8.3"
+#define APP_VERSION "0.8.4"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
@@ -83,10 +83,12 @@ static unsigned measuredFps;
 static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
-enum BottomPage { PAGE_ONLINE, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS };
+enum BottomPage { PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS };
 static BottomPage bottomPage = PAGE_ONLINE;
 static unsigned bagPocket;
 static unsigned bagPage;
+static unsigned onlineUserPage;
+static unsigned chatPage;
 static char itemNames[EMERALD_ITEM_COUNT][15];
 static bool itemNamesLoaded;
 static bool dynarecEnabled = true;
@@ -186,6 +188,7 @@ static bool statsBadgesEnabled;
 static bool statsFrontierEnabled;
 static bool onlineAuthenticated;
 static uint64_t nextStatsUpload;
+static uint64_t nextStatsRead;
 static char statsStatus[48] = "UPLOADS OFF - TAP ENABLE";
 static uint64_t statsStatusUntil;
 
@@ -240,6 +243,28 @@ struct RemoteTrainer {
 };
 static RemoteTrainer remoteTrainers[8];
 static int remoteCount;
+
+struct OnlineUser {
+    char id[37];
+    char name[13];
+    char map[33];
+    int16_t x;
+    int16_t y;
+    bool positioned;
+};
+static OnlineUser onlineUsers[64];
+static unsigned onlineUserCount;
+static unsigned onlineUserExpectedPage;
+static unsigned onlineUserExpectedPages;
+
+struct ChatMessage {
+    char name[13];
+    char map[33];
+    char time[7];
+    char text[81];
+};
+static ChatMessage chatHistory[24];
+static unsigned chatHistoryCount;
 
 static void logPrintf(enum retro_log_level level, const char* fmt, ...) {
     (void) level;
@@ -873,7 +898,7 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
             strcpy(linkRoom, equals);
@@ -964,6 +989,9 @@ static void onlineDisconnect(void) {
     onlineSocket = -1;
     onlineMode = ONLINE_OFFLINE;
     remoteCount = 0;
+    onlineUserCount = 0;
+    onlineUserPage = 0;
+    onlineUserExpectedPage = onlineUserExpectedPages = 0;
     receiveLength = 0;
     webSocketLength = 0;
     onlineAuthenticated = false;
@@ -1328,9 +1356,59 @@ static void parseOnlineLine(char* line) {
         }
         return;
     }
+    if (jsonTypeIs(line, "online_users")) {
+        const int page = jsonInt(line, "page", -1), pages = jsonInt(line, "pages", -1);
+        if (page < 0 || pages < 1 || pages > 4 || page >= pages) return;
+        if (page == 0) {
+            onlineUserCount = 0;
+            onlineUserExpectedPage = 0;
+            onlineUserExpectedPages = (unsigned) pages;
+        }
+        if ((unsigned) page != onlineUserExpectedPage || (unsigned) pages != onlineUserExpectedPages) return;
+        const char* lineEnd = line + strlen(line);
+        const char* user = findJsonValue(line, lineEnd, "users");
+        if (user && user < lineEnd && *user == '[') ++user;
+        while (user && onlineUserCount < 64) {
+            user = skipJsonSpace(user, lineEnd);
+            if (user >= lineEnd || *user == ']') break;
+            if (*user != '{') return;
+            const char* objectEnd = findJsonObjectEnd(user, lineEnd);
+            if (!objectEnd) return;
+            OnlineUser candidate = {};
+            if (!jsonStringBounded(user, objectEnd, "id", candidate.id, sizeof(candidate.id)) ||
+                !jsonStringBounded(user, objectEnd, "name", candidate.name, sizeof(candidate.name))) return;
+            jsonStringBounded(user, objectEnd, "map", candidate.map, sizeof(candidate.map));
+            candidate.x = jsonIntBounded(user, objectEnd, "x", -1);
+            candidate.y = jsonIntBounded(user, objectEnd, "y", -1);
+            candidate.positioned = candidate.map[0] && candidate.x >= 0 && candidate.y >= 0;
+            onlineUsers[onlineUserCount++] = candidate;
+            user = skipJsonSpace(objectEnd, lineEnd);
+            if (user < lineEnd && *user == ',') ++user;
+        }
+        ++onlineUserExpectedPage;
+        const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+        if (onlineUserPage >= pageCount) onlineUserPage = pageCount - 1;
+        return;
+    }
     if (jsonTypeIs(line, "chat")) {
-        jsonString(line, "name", lastChatName, sizeof(lastChatName));
-        jsonString(line, "text", lastChatText, sizeof(lastChatText));
+        char name[13] = {}, text[81] = {}, map[33] = {}, sentAt[32] = {};
+        if (!jsonString(line, "name", name, sizeof(name)) || !jsonString(line, "text", text, sizeof(text))) return;
+        jsonString(line, "map", map, sizeof(map));
+        jsonString(line, "sentAt", sentAt, sizeof(sentAt));
+        strcpy(lastChatName, name);
+        strcpy(lastChatText, text);
+        if (chatHistoryCount == 24) {
+            memmove(chatHistory, chatHistory + 1, sizeof(chatHistory) - sizeof(chatHistory[0]));
+            --chatHistoryCount;
+        }
+        ChatMessage* message = &chatHistory[chatHistoryCount++];
+        strcpy(message->name, name);
+        strcpy(message->map, map);
+        strcpy(message->text, text);
+        if (strlen(sentAt) >= 16 && sentAt[10] == 'T' && sentAt[13] == ':')
+            snprintf(message->time, sizeof(message->time), "%c%c:%c%cZ", sentAt[11], sentAt[12], sentAt[14], sentAt[15]);
+        else strcpy(message->time, "NOW");
+        chatPage = ~0u;
         return;
     }
     if (jsonTypeIs(line, "leave")) {
@@ -1810,18 +1888,89 @@ static void drawStatsPage(void) {
     }
 }
 
+static void drawOnlineUsersPage(void) {
+    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "GLOBAL POSITION LIST - ROW ACTIONS COMING LATER");
+    drawText(18, 61, .34f, C2D_Color32(160,232,255,255), "TRAINER");
+    drawText(178, 61, .34f, C2D_Color32(160,232,255,255), "MAP / TILE");
+    const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+    if (onlineUserPage >= pageCount) onlineUserPage = pageCount - 1;
+    const unsigned start = onlineUserPage * 6;
+    for (unsigned row = 0; row < 6; ++row) {
+        const float y = 78 + row * 22;
+        C2D_DrawRectSolid(10, y, 0, 300, 19, C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        const unsigned index = start + row;
+        if (index >= onlineUserCount) continue;
+        const OnlineUser* user = &onlineUsers[index];
+        drawText(18, y + 3, .37f, C2D_Color32(255,255,255,255), "%.12s", user->name);
+        if (user->positioned)
+            drawText(163, y + 3, .32f, C2D_Color32(190,225,210,255), "%.14s  %d,%d", user->map, user->x, user->y);
+        else drawText(205, y + 3, .31f, C2D_Color32(180,205,200,255), "WAITING");
+    }
+    if (!onlineUserCount)
+        drawText(71, 126, .40f, C2D_Color32(180,205,200,255), onlineMode == ONLINE_ACTIVE ? "Waiting for the online roster..." : "Connect online to view users");
+    C2D_DrawRectSolid(10, 216, 0, 145, 24, onlineUserPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(165, 216, 0, 145, 24, onlineUserPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "PREVIOUS");
+    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
+    drawText(137, 198, .30f, C2D_Color32(190,220,210,255), "%u ONLINE  %u/%u", onlineUserCount, onlineUserPage + 1, pageCount);
+}
+
+static unsigned currentMapChatIndices(unsigned indices[24]) {
+    if (!presence.valid) return 0;
+    char map[33];
+    snprintf(map, sizeof(map), "%u-%u", presence.mapGroup, presence.mapNum);
+    unsigned count = 0;
+    for (unsigned index = 0; index < chatHistoryCount; ++index)
+        if (!strcmp(chatHistory[index].map, map)) indices[count++] = index;
+    return count;
+}
+
+static void drawMapChatPage(void) {
+    unsigned indices[24];
+    const unsigned count = currentMapChatIndices(indices);
+    const unsigned pageCount = count ? (count + 3) / 4 : 1;
+    if (chatPage >= pageCount) chatPage = pageCount - 1;
+    if (presence.valid)
+        drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "MAP %u-%u - THIS SESSION - TIMES ARE UTC", presence.mapGroup, presence.mapNum);
+    else drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "CURRENT MAP - THIS SESSION - TIMES ARE UTC");
+    const unsigned start = chatPage * 4;
+    for (unsigned row = 0; row < 4; ++row) {
+        const float y = 61 + row * 37;
+        C2D_DrawRectSolid(10, y, 0, 300, 33, C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        const unsigned visible = start + row;
+        if (visible >= count) continue;
+        const ChatMessage* message = &chatHistory[indices[visible]];
+        drawText(18, y + 3, .35f, C2D_Color32(160,232,255,255), "%.12s", message->name);
+        drawText(263, y + 3, .31f, C2D_Color32(190,220,210,255), "%s", message->time);
+        drawText(18, y + 18, .28f, C2D_Color32(255,255,255,255), "%.80s", message->text);
+    }
+    if (!count)
+        drawText(79, 117, .39f, C2D_Color32(180,205,200,255), presence.valid ? "No messages on this map yet" : "Waiting for the overworld...");
+    C2D_DrawRectSolid(10, 216, 0, 94, 24, chatPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(113, 216, 0, 94, 24, onlineMode == ONLINE_ACTIVE && presence.valid ? C2D_Color32(35,145,88,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(216, 216, 0, 94, 24, chatPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(26, 221, .32f, C2D_Color32(255,255,255,255), "PREVIOUS");
+    drawText(131, 221, .34f, C2D_Color32(255,255,255,255), "COMPOSE");
+    drawText(244, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
+    drawText(140, 204, .27f, C2D_Color32(190,220,210,255), "%u MESSAGES  %u/%u", count, chatPage + 1, pageCount);
+}
+
 static void drawBottom(void) {
     C2D_TargetClear(bottomTarget, C2D_Color32(11, 36, 26, 255));
     C2D_SceneBegin(bottomTarget);
     C2D_DrawRectSolid(0, 0, 0, 320, 38, C2D_Color32(16, 45, 34, 255));
     C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
     C2D_TextBufClear(textBuffer);
-    const char* title = bottomPage == PAGE_PARTY ? "PARTY - LOCAL ONLY" :
+    const char* title = bottomPage == PAGE_USERS ? "ONLINE USERS - READ ONLY" :
+        bottomPage == PAGE_CHAT ? "MAP CHAT" :
+        bottomPage == PAGE_PARTY ? "PARTY - LOCAL ONLY" :
         bottomPage == PAGE_BAG ? "BAG - LOCAL ONLY" :
         bottomPage == PAGE_MAP ? "MAP & TRAINER RADAR" :
         bottomPage == PAGE_STATS ? "PLAYER STATS & CONSENT" : "EMERALD ONLINE";
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
     drawText(280,14,.30f,C2D_Color32(180,220,205,255),"Y >");
+    if (bottomPage == PAGE_USERS) { drawOnlineUsersPage(); return; }
+    if (bottomPage == PAGE_CHAT) { drawMapChatPage(); return; }
     if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
     if (bottomPage == PAGE_MAP) { drawMapPage(); return; }
     if (bottomPage == PAGE_BAG) { drawBagPage(); return; }
@@ -1874,15 +2023,15 @@ static void drawBottom(void) {
     } else {
         C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
         C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
-        drawText(20, 110, .38f, C2D_Color32(160,232,255,255), "NEARBY  %d", remoteCount);
+        drawText(20, 110, .34f, C2D_Color32(160,232,255,255), "NEARBY %d / ONLINE %u", remoteCount, onlineUserCount);
         for (int i = 0; i < remoteCount && i < 3; ++i) drawText(20, 130 + i * 17, .36f, C2D_Color32(255,255,255,255), "%.12s  %d,%d", remoteTrainers[i].name, remoteTrainers[i].x, remoteTrainers[i].y);
-        if (!remoteCount) drawText(35, 145, .36f, C2D_Color32(180,205,200,255), "No trainers here");
+        if (!remoteCount) drawText(27, 145, .34f, C2D_Color32(180,205,200,255), "Tap for all users");
         drawText(175, 110, .38f, C2D_Color32(160,232,255,255), "MAP CHAT");
         if (lastChatText[0]) {
             drawText(175, 130, .34f, C2D_Color32(160,232,255,255), "%.12s", lastChatName);
             drawText(175, 150, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText);
             if (strlen(lastChatText) > 20) drawText(175, 168, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText + 20);
-        } else drawText(185, 145, .34f, C2D_Color32(180,205,200,255), "Tap to message");
+        } else drawText(181, 145, .34f, C2D_Color32(180,205,200,255), "Tap for messages");
     }
     const uint32_t colors[4] = {C2D_Color32(41,93,66,255),C2D_Color32(66,80,165,255),C2D_Color32(58,118,80,255),C2D_Color32(98,87,46,255)};
     const char* labels[4] = {"WAVE","BATTLE","TRADE","GG"};
@@ -2092,11 +2241,23 @@ int main(void) {
         heldKeys = hidKeysHeld();
         uint32_t down = hidKeysDown();
         if (down & KEY_X) onlineToggle();
-        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 5);
+        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 7);
         if (down & KEY_TOUCH) {
             touchPosition touch;
             hidTouchRead(&touch);
-            if (bottomPage == PAGE_STATS) {
+            if (bottomPage == PAGE_USERS && touch.py >= 210) {
+                const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (onlineUserPage) --onlineUserPage; }
+                else if (onlineUserPage + 1 < pageCount) ++onlineUserPage;
+            } else if (bottomPage == PAGE_CHAT && touch.py >= 210) {
+                unsigned indices[24];
+                const unsigned count = currentMapChatIndices(indices);
+                const unsigned pageCount = count ? (count + 3) / 4 : 1;
+                if (chatPage >= pageCount) chatPage = pageCount - 1;
+                if (touch.px < 108) { if (chatPage) --chatPage; }
+                else if (touch.px < 212) openChat();
+                else if (chatPage + 1 < pageCount) ++chatPage;
+            } else if (bottomPage == PAGE_STATS) {
                 if (touch.py >= 82 && touch.py < 194) toggleStatsField((touch.py - 82) / 28);
                 else if (touch.py >= 208 && (!statsEnabled || touch.px < 160)) syncStatsNow();
                 else if (touch.py >= 208 && touch.px >= 160) deleteStatsHistory();
@@ -2106,16 +2267,20 @@ int main(void) {
                 else if (touch.py >= 210 && touch.px >= 160) ++bagPage;
             } else if (bottomPage == PAGE_ONLINE && touch.py >= 202) sendEmote(touch.px / 81);
             else if (bottomPage == PAGE_ONLINE && touch.py >= 46 && touch.py < 90) openBrowserPairing();
-            else if (bottomPage == PAGE_ONLINE && touch.px >= 165 && touch.py >= 104) openChat();
+            else if (bottomPage == PAGE_ONLINE && touch.px < 155 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_USERS;
+            else if (bottomPage == PAGE_ONLINE && touch.px >= 165 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_CHAT;
         }
         retro_run();
         static bool firstFrameLogged;
         if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
         presence = readPresence();
         recordMapTrail(presence);
-        saveStats = readSaveStats();
         updateTrainerNameFromSave();
         uint64_t now = osGetTime();
+        // Save-derived aggregates change slowly. Re-reading the Pokédex flags
+        // every emulated frame wastes Old 3DS CPU time without improving UI or
+        // upload freshness, so refresh the cached summary once per second.
+        if (now >= nextStatsRead) { saveStats = readSaveStats(); nextStatsRead = now + 1000; }
         if (now >= nextOnlinePoll) { nextOnlinePoll = now + 100; onlineUpdate(); }
         if (now >= nextSaveCheck) { nextSaveCheck = now + 5000; writeSave(false); }
         if (!fpsStarted) fpsStarted = now;

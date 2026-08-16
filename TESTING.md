@@ -1,6 +1,6 @@
 # Hardware smoke test
 
-The current 0.8.3 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
+The current 0.8.3 physical release defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. The in-development 0.8.4 runtime adds Online Users and Map Chat to the lower-page cycle. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
 
@@ -12,6 +12,7 @@ Verify every public artifact against `release/SHA256SUMS`; it is the authoritati
 - Automated verification: all 54 tests passed against disposable PostgreSQL 16 with zero skips, and the release audit passed.
 - Production: multi-architecture image `sha256:3f185c8c132cfe3481dd9ec13b2e286862a8b09a2eb654b678d0127a3c3fb1c8` rolled out with both init containers successful and zero application restarts. The publisher reported eight release topics, one known issue, and nine maintained community pages with v0.8.3 current; all four public services are operational and live artifact hashes match the manifest.
 - Physical acceptance: v0.8.2 exposed the overlay defect during a real wild battle. The v0.8.3 CIA and 3DSX were then staged with matching re-downloaded hashes while the existing WSS/link configuration and newest save remained byte-for-byte unchanged. With v0.8.3 online on the physical 3DS and a temporary same-map production peer connected, the user entered a battle and confirmed the remote-trainer hiding fix worked. The temporary peer was disconnected afterward. Cable Club battle/trade acceptance remains separate and open.
+- Physical performance: the user reports a consistent 48-52 FPS on the current v0.8.3 Old 3DS run. That does not meet the 60 FPS Gate 4 target; audio behavior and the effect of toggling Online still need to be recorded. The 0.8.4 development runtime removes per-frame Pokédex/stat rescans, but its effect requires physical remeasurement.
 
 ## Release 0.8.2 Gate 4 preflight (2026-08-16)
 
