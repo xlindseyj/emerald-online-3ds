@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 const root = path.resolve(import.meta.dirname, '..', '..');
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 
-test('spawned live peer follows only player-proven tiles', async t => {
+test('spawned live peer remains on the exact observed starting tile', async t => {
   const initial = { map: 'route', x: 5, y: 5, facing: 'right', avatar: 'boy' };
   const observations = [
     { ...initial, x: 6 },
@@ -17,7 +17,6 @@ test('spawned live peer follows only player-proven tiles', async t => {
     { ...initial, x: 11, y: 9 }, // skipped updates: exact rebase, no inferred path
     { ...initial, x: 11, y: 10, facing: 'down' }
   ];
-  const allowed = new Set([initial, ...observations].map(state => `${state.map}:${state.x}:${state.y}`));
   const published = [];
 
   const health = http.createServer((request, response) => {
@@ -59,7 +58,6 @@ test('spawned live peer follows only player-proven tiles', async t => {
       GAME_PORT: String(game.address().port),
       HEALTH_PORT: String(health.address().port),
       PEER_DURATION_MS: '1100',
-      PEER_STEP_MS: '250',
       PEER_NAME: 'SafePeer'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -68,10 +66,11 @@ test('spawned live peer follows only player-proven tiles', async t => {
   child.stderr.on('data', chunk => { stderr += chunk; });
   const exitCode = await new Promise(resolve => child.once('exit', resolve));
   assert.equal(exitCode, 0, stderr);
-  assert.ok(published.length >= 3, `expected movement states, got ${published.length}`);
-  assert.ok(published.every(state => allowed.has(`${state.map}:${state.x}:${state.y}`)), JSON.stringify(published));
-  assert.equal(published.some(state => state.x === 11 && state.y === 9), true, 'skipped update rebases on the observed tile');
-  assert.equal(published.some(state => state.x === 6 && state.y === 5), true, 'peer follows a proven breadcrumb');
+  assert.equal(published.length, 1, `synthetic peer must remain stationary: ${JSON.stringify(published)}`);
+  assert.deepEqual(
+    { map: published[0].map, x: published[0].x, y: published[0].y, facing: published[0].facing },
+    { map: initial.map, x: initial.x, y: initial.y, facing: initial.facing }
+  );
 });
 
 test('spawned live peer validates an optional target map', async () => {

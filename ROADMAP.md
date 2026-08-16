@@ -21,7 +21,7 @@
 - [x] Same-map remote trainer markers composited over the Emerald framebuffer
 - [x] Rate-limited same-map chat with native 3DS touch keyboard
 - [x] Direction-aware trainer presence with smooth position interpolation
-- [x] Collision-safe operator test peers that trail only coordinates previously occupied by a real player and never invent adjacent movement tiles
+- [x] Fail-closed operator test peers that stay on the exact observed starting tile and never invent or infer synthetic movement
 - [x] Runtime decoding of private-ROM trainer OBJ graphics with transparent overlay
 - [x] Stationary-player keepalive, automatic reconnect, and state republish after transient drops
 - [x] Native lower-screen party summary with live nickname, level, and HP data
@@ -49,6 +49,7 @@
 - [ ] Add a MinIO KMS; the NAT-friendly Kubernetes deployment, persistence, tested compressed backups, and connection/rate limits are operating, but backup encryption at rest is not yet claimed
 - [ ] Confirm May plus authentic avatars in a physical two-client test, test New 3DS, and finalize release packaging (Brendan is confirmed on Old 3DS XL with a synthetic peer)
 - [ ] Integrate remote-avatar compositing with Emerald's foreground/object priority, or derive a local-only occlusion mask from the user's validated ROM, so a trainer on a valid tile passes behind signs and tree canopies instead of being drawn over them. Do not upload or package ROM-derived map data.
+- [ ] Extend presence with validated locomotion/elevation state (walking, cycling, surfing, diving, and relevant object priority) before allowing operator-spawned peers to move. Until then, movement acceptance must use a real second client; coordinates alone are not sufficient to distinguish visually valid land, water, elevation, and occlusion behavior.
 - [ ] Add a reusable, versioned online-NPC definition system. Its first character is a scientist at map `0-9`, tile `14,13`, facing south, rendered from an allowlisted sprite decoded only from the user's validated official ROM. The scientist exists only while authenticated and connected to the online server and welcomes the player with `Welcome to Emerald Online 3DS - Beta!`. Prefer a short overhead greeting when it is readable and non-blocking; otherwise show the same message when the player talks to the scientist. Before release, verify the tile is walkable, the overlay does not replace or block a ROM NPC, warp, collision, or story event, disconnect removes it immediately, reconnect restores it, and no ROM-derived sprite data is uploaded, stored server-side, or included in public artifacts.
 
 The networking protocol should evolve additively with explicit version negotiation. Never upload ROM-derived content to the server.
