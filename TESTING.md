@@ -1,8 +1,18 @@
 # Hardware smoke test
 
-The current 0.8.1 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
+The current 0.8.2 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
+
+## Release 0.8.2 Gate 4 preflight (2026-08-16)
+
+- Build and release audit: the ROM-free CIA, 3DSX, and code-only corresponding-source archive rebuilt successfully. SHA-256 values are `28b27c96227fae1c596e85b711787d56597b6a7b2063c74cb0378109e3b85ac0`, `e58b33b02f5b9119596c19ada1870276c1fa2dd80594c68933d43f6a5a132abc`, and `1036e7008ecf1f5a5b128e98d1b08fac1e52cf04394c0e662d4588ae7b568ebb` respectively.
+- Save validation: the physical save copy has two complete checksum-valid slots; its active slot records 49 minutes, one party member, and Route 102. Only those non-identifying progress facts enter the ignored bundle manifest.
+- Azahar: official 2126.0 loaded the exact v0.8.2 3DSX and progressed save through gpSP interpreter mode, authenticated over production WSS, entered the isolated Gate 4 room, and remained alive beyond the former invalid-opcode/socket-assertion point. The observed emulator rate was about 29 FPS; this is not a physical performance result.
+- Network regression: the local-TCP smoke passed identity persistence, stationary keepalive, forced reconnect, state republish, movement, chat, and four emotes. The production-WSS smoke enrolled and deleted its synthetic identity.
+- Automated suite: 53 passed, 0 failed, 0 skipped after migrations 001-006 against disposable PostgreSQL 16.
+- Physical staging: re-downloading the console's current 3DSX and staged CIA produced the v0.8.2 hashes above. The v0.8.1 binaries and pre-link configuration were backed up independently, private files were preserved, and the remote save still matched its pre-test SHA-256. The CIA still needs the user to select it in FBI; copying it to `/cias/` alone does not update the HOME Menu title.
+- Production: multi-architecture image `sha256:f6970d835868a01b92126a04cba42a8a582cd758c0410fb0c0041d2ccf72fa5b` rolled out with both init containers successful and zero application restarts. The live homepage reports v0.8.2, the publisher reports seven release topics plus nine maintained community pages, all four public status checks are operational, and the live CIA/3DSX/source hashes match `release/SHA256SUMS`.
 
 ## Release 0.8.0 verification (2026-08-16)
 

@@ -295,5 +295,65 @@
       }
     ],
     "sourceCommit": "12d30c5"
+  },
+  {
+    "version": "0.8.2",
+    "releasedAt": "2026-08-16T16:35:00Z",
+    "title": "Gate 4 emulator stability and verified save handoff",
+    "status": "Current beta",
+    "summary": "Stabilizes the Azahar interpreter and nonblocking network paths used by physical-to-emulator Cable Club testing, and validates progressed Emerald saves before creating a private test bundle.",
+    "highlights": [
+      "Interpreter mode no longer touches unmapped 3DS dynarec caches, preventing the Azahar preflight crash.",
+      "Nonblocking peer polling now supplies the socket metadata Azahar requires while remaining compatible with physical ctrulib networking.",
+      "Gate 4 bundles require checksum-valid Emerald save slots and record only non-identifying progress facts; ROMs, saves, identities, and preferences remain private."
+    ],
+    "verification": [
+      "All 53 automated tests passed against disposable PostgreSQL 16 with zero skips.",
+      "Azahar 2126.0 loaded the checksum-valid progressed save, authenticated through production WSS, entered the isolated link room, and remained alive beyond the former crash point.",
+      "Normal local-TCP and production-WSS Azahar smokes passed; all synthetic production identities were deleted afterward."
+    ],
+    "knownIssues": [
+      "A real physical-to-Azahar Cable Club battle, trade, interruption, save comparison, audio check, and Old 3DS performance check are still required before Gate 5.",
+      "Azahar intentionally uses the slower gpSP interpreter because its 3DS emulation does not provide the physical console's Luma dynarec bootstrap."
+    ],
+    "upgradeNotes": [
+      "Preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, and any link-backups before copying the new 3DSX or reinstalling the CIA.",
+      "Merely copying the CIA to /cias/ does not update the installed HOME Menu title; select it in FBI and choose Install and delete CIA."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "28b27c96227fae1c596e85b711787d56597b6a7b2063c74cb0378109e3b85ac0",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "e58b33b02f5b9119596c19ada1870276c1fa2dd80594c68933d43f6a5a132abc",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "1036e7008ecf1f5a5b128e98d1b08fac1e52cf04394c0e662d4588ae7b568ebb",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.2 stabilizes the private physical-to-Azahar Gate 4 handoff without distributing game or save data."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Scan from FBI Remote Install after backing up and preserving every private file in the application directory."
+      },
+      {
+        "url": "/release-media/online-dashboard.png",
+        "alt": "Emerald Online lower-screen dashboard running in Azahar",
+        "caption": "The public screenshot shows the original dashboard only; private gameplay and progressed-save screenshots remain excluded."
+      }
+    ],
+    "sourceCommit": "2501b95"
   }
 ]

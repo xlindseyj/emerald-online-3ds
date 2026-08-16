@@ -54,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.8.0"
+#define APP_VERSION "0.8.2"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44

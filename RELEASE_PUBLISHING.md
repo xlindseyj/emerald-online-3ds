@@ -27,11 +27,13 @@ Allowed image sources are the project logo, the generated FBI setup QR, and file
 
 The downloadable source archive is a separate code-only allowlist. It includes the 3DS runtime frontend, modified gpSP source, Makefiles, a plain-text version marker, and GPL text. It excludes every `.md` file plus server, website, Kubernetes, operator scripts, release media, screenshots, icons, and other branded assets. `npm run audit:release` extracts the archive and rejects Markdown, secret-like filenames, private IP ranges, internal service names, infrastructure references, repository metadata, binaries, and media files before publication.
 
-The initial backfill contains factual posts for 0.3.2, 0.5.0, 0.6.1, 0.7.1, and 0.8.0. Version 0.8.1 adds the first production observability and bounded-load release entry. Historical builds are clearly marked superseded and are not offered as current downloads.
+The initial backfill contains factual posts for 0.3.2, 0.5.0, 0.6.1, 0.7.1, and 0.8.0. Version 0.8.1 adds production observability and bounded-load evidence; version 0.8.2 adds the validated-save Gate 4 handoff and Azahar interpreter/network stability fixes. Historical builds are clearly marked superseded and are not offered as current downloads.
 
 The first production publication completed on 2026-08-16. Migration 004 and the publisher init container exited successfully, anonymous reads returned all five official topics, 0.8.0 was the sole pinned version, and a deliberate second run preserved the same 0.8.0 topic ID. The follow-up rollout applied migration 005 and published the confirmed FPS issue under stable topic ID `b3570148-29d7-44e8-b60c-944f9874bf17`; anonymous reads showed official attribution, confirmed status, no player identity, and the documented workaround.
 
 The v0.8.1 rollout applied migration 006 and published six release topics, one known issue, and nine maintained community pages. A deliberate production rerun retained nine page rows and six release rows with exactly one pinned release. Anonymous reads confirmed the public status, 3DS installation, and Azahar guides carry official attribution without a player identity; board visibility continues to protect paired-only topics.
+
+The v0.8.2 rollout uses multi-architecture image `sha256:f6970d835868a01b92126a04cba42a8a582cd758c0410fb0c0041d2ccf72fa5b`. Both init containers exited 0, the application had zero restarts, and the publisher reported seven idempotent release topics, one known issue, and nine maintained community pages with v0.8.2 pinned. The homepage, public status API, forums, WSS gateway check, CIA, 3DSX, source archive, and checksum manifest were verified live; all four monitored public services reported operational.
 
 ## Failure behavior
 
