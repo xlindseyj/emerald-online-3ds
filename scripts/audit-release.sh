@@ -19,7 +19,7 @@ done
 (cd "${release_dir}" && sha256sum --check SHA256SUMS)
 
 archive_listing="$(tar -tzf "${source_archive}")"
-for required_path in LICENSE.md package.json gpsp-runtime/source/main.cpp third_party/gpsp/COPYING; do
+for required_path in LICENSE.md package.json gpsp-runtime/source/main.cpp third_party/gpsp/COPYING server/src/server.mjs web/install-server.mjs deploy/kubernetes.yaml; do
   grep -Eq "/${required_path}$" <<<"${archive_listing}" || {
     echo "source archive is missing ${required_path}" >&2
     exit 1

@@ -35,7 +35,7 @@ spec:
       terminationGracePeriodSeconds: 10
       initContainers:
         - name: migrate
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:5ed47c0c724dec6569e5b263476dbe83e947b270dc4554a5c5967fc90fdd6110
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:a2fdab5ee2451d88ad6bf6f6810260b63f33a0ec01170d94ba4a94b27fbc8617
           imagePullPolicy: IfNotPresent
           command: ["node", "server/tools/migrate.mjs"]
           envFrom:
@@ -83,7 +83,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: presence
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:5ed47c0c724dec6569e5b263476dbe83e947b270dc4554a5c5967fc90fdd6110
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:a2fdab5ee2451d88ad6bf6f6810260b63f33a0ec01170d94ba4a94b27fbc8617
           imagePullPolicy: IfNotPresent
           command: ["node", "server/src/server.mjs"]
           ports:
@@ -139,7 +139,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: public-web
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:5ed47c0c724dec6569e5b263476dbe83e947b270dc4554a5c5967fc90fdd6110
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:a2fdab5ee2451d88ad6bf6f6810260b63f33a0ec01170d94ba4a94b27fbc8617
           imagePullPolicy: IfNotPresent
           command: ["node", "web/install-server.mjs"]
           ports:

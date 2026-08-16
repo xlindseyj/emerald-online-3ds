@@ -1,10 +1,10 @@
 # Hardware smoke test
 
-The current 0.6.1 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data.
+The current 0.7.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured.
 
-- 3DSX SHA-256: `92d315f50d2e8a7ce93d9407f4cbe6eb465bf848d484cc39a0263fdcb3914f18`
-- CIA SHA-256: `2050e8c42e49f952a5489afefa6c6c2059a2046fb809423a9ffa280ee5ce1e92`
-- Corresponding-source SHA-256: `2b6ac88b17a29679c96b8ae927d0803cdc1c46455835b36327e51c88dd973ada`
+- 3DSX SHA-256: `520f8d28ce2e78f650e0a9371b07b855a4d8e00096b51273e082cca734b96f6d`
+- CIA SHA-256: `a40799ebd3df8fae7f3a8661d4a8b509a1c997a07bb6569a0915966bcec17269`
+- Corresponding-source SHA-256: `1c6028deaa191562d2f798c10effdd16f9a1ef8a649f5e16bb8c83088f2f6ccf`
 - Private avatar atlas SHA-256: `ab3f08aec7b8598f383e5032e22d3ea2a5234522230d460b908a2e3517d753d8`
 
 ## Latest physical result (2026-08-15, protocol-v2 WSS test)
@@ -24,7 +24,22 @@ The current 0.6.1 actual-game runtime defaults to `wss://live.emeraldonline3ds.c
 - Gate 3 live lifecycle: pass. A synthetic WSS device consented and uploaded aggregate stats, paired a browser, appeared on a per-release board, confirmed disabled battle/trade rankings, submitted a Server-observed compatibility result, opted one field out, deleted all history, and deleted its identity. Direct database verification then found zero synthetic identities, scores, history, or compatibility reports.
 - Headless emulator: pass with official Azahar 2126.0 on Linux. The exact 0.6.0 Gate 3 build persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, republished state, and enrolled through production WSS again after deployment. The 0.6.1 physical-diagnostics hotfix retains the same network implementation and adds its version plus TLS stage, result, verification flags, and accepted future skew to the bottom screen. Synthetic identities were deleted. Physical hardware remains authoritative for the mbedTLS/SD and touch paths.
 
-Current artifacts are `999360` bytes (CIA), `1259060` bytes (3DSX), `2238954` bytes (corresponding source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
+Current artifacts are `1001408` bytes (CIA), `1262992` bytes (3DSX), `2310619` bytes (complete first-party and corresponding gpSP source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
+
+## Gate 4 experimental link smoke
+
+Automated evidence: two isolated Azahar 2126.0 profiles passed four startup/hard-interruption cycles and retained exactly the newest three save backups per profile. A production-WSS test delivered 53 bounded synthetic packets, recovered from a hard guest disconnect, and measured 164-186 ms round trip (171 ms average) with 4.5 ms mean absolute jitter. Because the available emulator state remained at the title screen and emitted zero Cable Club packets, this is transport evidence only; the battle, trade, save-integrity, real packet-loss, and physical-performance steps below remain required.
+
+1. Preserve an independent copy of both saves. Use release 0.7.0 on both clients.
+2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
+3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
+4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.
+5. Confirm `link-backups/` contains a new timestamped 128 KiB save on both clients and never retains more than the newest three.
+6. Enter the Cable Club, complete one battle, exit cleanly, restart both clients, and compare the two saves with their pre-link backups.
+7. Repeat with one complete trade. Confirm the intended Pokémon moved exactly once, both games save, both restart, and no duplication/loss occurred.
+8. Repeat while interrupting before handshake, during battle, during trade before confirmation, and immediately after confirmation. Restore from the automatic backup if either save is invalid.
+9. Repeat on LAN and public WSS while recording the on-screen TX/RX counters, latency observations, disconnects, FPS, and audio stability.
+10. Battle/trade invitations and rankings remain disabled until these tests pass between two emulator instances and between the physical Old 3DS XL and a second client.
 
 ## Automated Linux verification
 

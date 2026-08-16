@@ -101,3 +101,21 @@ test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregat
   const packetSource=gpspSource.slice(snapshotStart,snapshotEnd);
   assert.doesNotMatch(packetSource,/trainerName|identityId|playerTrainerId|party|inventory|SAVE_PATH|ROM_PATH/);
 });
+
+test('gpSP experimental link mode registers netpacket callbacks and gates startup on rotating save backups', () => {
+  assert.match(gpspSource, /gpsp_serial.*linkConfigured \? "mul_poke" : "disabled"/s);
+  assert.match(gpspSource, /RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE/);
+  assert.match(gpspSource, /frontendNetpacketSend/);
+  assert.match(gpspSource, /link_spike_join/);
+  assert.match(gpspSource, /link_packet/);
+  assert.match(gpspSource, /size > 512/);
+  assert.match(gpspSource, /backupSaveForLink\(\)/);
+  assert.match(gpspSource, /LINK_BACKUP_DIRECTORY/);
+  assert.match(gpspSource, /fflush\(destination\).*fsync\(fileno\(destination\)\)/s);
+  assert.match(gpspSource, /index \+ 3 < count/);
+  const start = gpspSource.indexOf('if (jsonTypeIs(line, "link_started"))');
+  const callback = gpspSource.indexOf('coreNetpacketInterface->start((uint16_t)', start);
+  const backup = gpspSource.indexOf('backupSaveForLink()', start);
+  assert.ok(start >= 0 && backup > start && callback > backup, 'save backup must complete before the core netpacket session starts');
+  assert.match(gpspSource, /LINK %s ACTIVE - BACKUP OK/);
+});

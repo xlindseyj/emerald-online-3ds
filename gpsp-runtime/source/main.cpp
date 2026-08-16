@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -14,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -43,6 +45,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define IDENTITY_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg.tmp"
 #define STATS_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg"
 #define STATS_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg.tmp"
+#define LINK_BACKUP_DIRECTORY "sdmc:/3ds/emerald-online-3ds/link-backups"
 #define DEFAULT_HOST "live.emeraldonline3ds.com"
 #define DEFAULT_PORT 443
 #define DEFAULT_WEBSOCKET_PATH "/game"
@@ -51,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.6.1"
+#define APP_VERSION "0.7.0"
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -80,6 +83,38 @@ static uint64_t fpsStarted;
 enum BottomPage { PAGE_ONLINE, PAGE_PARTY, PAGE_STATS };
 static BottomPage bottomPage = PAGE_ONLINE;
 static bool dynarecEnabled = true;
+static char linkRoom[10];
+static bool linkConfigured;
+static bool linkJoined;
+static bool linkStarted;
+static unsigned linkClientId;
+static unsigned linkPeerId;
+static unsigned linkPacketsSent;
+static unsigned linkPacketsReceived;
+static char linkStatus[48] = "LINK SPIKE DISABLED";
+static const retro_netpacket_callback* coreNetpacketInterface;
+
+static bool onlineSend(const char* message);
+
+static void frontendNetpacketSend(int, const void* data, size_t size, uint16_t clientId) {
+    if (!linkStarted || !data || !size || size > 512) return;
+    static const char hex[] = "0123456789abcdef";
+    char encoded[1025];
+    const uint8_t* bytes = (const uint8_t*) data;
+    for (size_t index = 0; index < size; ++index) {
+        encoded[index * 2] = hex[bytes[index] >> 4];
+        encoded[index * 2 + 1] = hex[bytes[index] & 15];
+    }
+    encoded[size * 2] = 0;
+    char packet[1152];
+    snprintf(packet, sizeof(packet), "{\"type\":\"link_packet\",\"to\":%u,\"data\":\"%s\"}\n", clientId, encoded);
+    if (onlineSend(packet)) ++linkPacketsSent;
+}
+
+static void frontendNetpacketPollReceive(void) {
+    // Network input is drained by onlineUpdate between retro_run calls. A
+    // blocking poll here would stall emulation and audio during link jitter.
+}
 
 static void debugStage(const char* stage) {
     FILE* file = fopen(DEBUG_LOG_PATH, "a");
@@ -202,7 +237,7 @@ static const char* optionValue(const char* key) {
     if (!strcmp(key, "gpsp_bios")) return "builtin";
     if (!strcmp(key, "gpsp_boot_mode")) return "game";
     if (!strcmp(key, "gpsp_rtc")) return "auto";
-    if (!strcmp(key, "gpsp_serial")) return "disabled";
+    if (!strcmp(key, "gpsp_serial")) return linkConfigured ? "mul_poke" : "disabled";
     if (!strcmp(key, "gpsp_rumble")) return "disabled";
     if (!strcmp(key, "gpsp_sprlim")) return "disabled";
     if (!strcmp(key, "gpsp_sound_rate")) return "32768";
@@ -248,6 +283,12 @@ static bool environmentCallback(unsigned command, void* data) {
             if (desc->start == 0x02000000) gbaEwram = (uint8_t*) desc->ptr + desc->offset;
             if (desc->start == 0x03000000) gbaIwram = (uint8_t*) desc->ptr + desc->offset;
         }
+        return true;
+    }
+    case RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE: {
+        const retro_netpacket_callback* interface = (const retro_netpacket_callback*) data;
+        if (!interface || !interface->start || !interface->receive) return false;
+        coreNetpacketInterface = interface;
         return true;
     }
     case RETRO_ENVIRONMENT_SET_MESSAGE:
@@ -347,19 +388,73 @@ static void loadSave(void) {
     if (saveRam) saveHash = hashBytes(saveRam, saveRamSize);
 }
 
-static void writeSave(bool force) {
-    if (!saveRam || !saveRamSize) return;
+static bool writeSave(bool force) {
+    if (!saveRam || !saveRamSize) return false;
     uint32_t hash = hashBytes(saveRam, saveRamSize);
-    if (!force && hash == saveHash) return;
+    if (!force && hash == saveHash) return true;
     FILE* file = fopen(SAVE_PATH ".tmp", "wb");
-    if (!file) return;
+    if (!file) return false;
     bool good = fwrite(saveRam, 1, saveRamSize, file) == saveRamSize;
-    fclose(file);
+    if (good && (fflush(file) || fsync(fileno(file)))) good = false;
+    if (fclose(file)) good = false;
     if (good) {
         remove(SAVE_PATH);
-        rename(SAVE_PATH ".tmp", SAVE_PATH);
-        saveHash = hash;
+        good = rename(SAVE_PATH ".tmp", SAVE_PATH) == 0;
+        if (good) saveHash = hash;
     }
+    if (!good) remove(SAVE_PATH ".tmp");
+    return good;
+}
+
+struct LinkBackupEntry { char name[128]; };
+
+static int compareLinkBackups(const void* left, const void* right) {
+    return strcmp(((const LinkBackupEntry*) left)->name, ((const LinkBackupEntry*) right)->name);
+}
+
+static bool backupSaveForLink(void) {
+    if (!writeSave(true) || (mkdir(LINK_BACKUP_DIRECTORY, 0700) && errno != EEXIST)) return false;
+    FILE* source = fopen(SAVE_PATH, "rb");
+    if (!source) return false;
+    char path[256];
+    snprintf(path, sizeof(path), LINK_BACKUP_DIRECTORY "/emerald-link-%lld-%llu.sav",
+        (long long) time(NULL), (unsigned long long) osGetTime());
+    FILE* destination = fopen(path, "wb");
+    bool good = destination != NULL;
+    uint8_t buffer[4096];
+    while (good) {
+        size_t count = fread(buffer, 1, sizeof(buffer), source);
+        if (count && fwrite(buffer, 1, count, destination) != count) good = false;
+        if (count < sizeof(buffer)) { if (ferror(source)) good = false; break; }
+    }
+    if (fclose(source)) good = false;
+    if (destination) {
+        if (good && (fflush(destination) || fsync(fileno(destination)))) good = false;
+        if (fclose(destination)) good = false;
+    }
+    if (!good) { remove(path); return false; }
+
+    DIR* directory = opendir(LINK_BACKUP_DIRECTORY);
+    if (!directory) return false;
+    LinkBackupEntry entries[64] = {};
+    size_t count = 0;
+    dirent* item;
+    while ((item = readdir(directory)) && count < 64) {
+        const size_t length = strlen(item->d_name);
+        if (length < 18 || strncmp(item->d_name, "emerald-link-", 13) || strcmp(item->d_name + length - 4, ".sav")) continue;
+        strncpy(entries[count++].name, item->d_name, sizeof(entries[0].name) - 1);
+    }
+    closedir(directory);
+    qsort(entries, count, sizeof(entries[0]), compareLinkBackups);
+    for (size_t index = 0; index + 3 < count; ++index) {
+        const size_t prefixLength = strlen(LINK_BACKUP_DIRECTORY);
+        memcpy(path, LINK_BACKUP_DIRECTORY, prefixLength);
+        path[prefixLength] = '/';
+        strncpy(path + prefixLength + 1, entries[index].name, sizeof(path) - prefixLength - 2);
+        path[sizeof(path) - 1] = 0;
+        remove(path);
+    }
+    return true;
 }
 
 static uint16_t read16(const uint8_t* memory, size_t offset) {
@@ -717,6 +812,17 @@ static bool startSecureWebSocket(void) {
     return true;
 }
 
+static bool validLinkRoom(const char* value) {
+    if (!value || strlen(value) != 9 || value[4] != '-') return false;
+    for (unsigned index = 0; index < 9; ++index) {
+        if (index == 4) continue;
+        const char character = value[index];
+        if (!((character >= 'A' && character <= 'Z' && character != 'I' && character != 'O') ||
+              (character >= '2' && character <= '9'))) return false;
+    }
+    return true;
+}
+
 static void loadConfig(void) {
     FILE* file = fopen(CONFIG_PATH, "r");
     if (!file) return;
@@ -737,6 +843,11 @@ static void loadConfig(void) {
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
         else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
+        else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
+            strcpy(linkRoom, equals);
+            linkConfigured = true;
+            snprintf(linkStatus, sizeof(linkStatus), "LINK %s CONFIGURED", linkRoom);
+        }
     }
     fclose(file);
     // Old/custom files without an explicit transport use TLS only on 443.
@@ -811,6 +922,10 @@ static bool saveStatsConfig(void) {
 }
 
 static void onlineDisconnect(void) {
+    if (linkStarted && coreNetpacketInterface && coreNetpacketInterface->stop) coreNetpacketInterface->stop();
+    linkStarted = false;
+    linkJoined = false;
+    if (linkConfigured) strcpy(linkStatus, "LINK RECONNECTING");
     if (tlsActive) mbedtls_ssl_close_notify(&tlsContext);
     tlsActive = false;
     if (onlineSocket >= 0) close(onlineSocket);
@@ -881,6 +996,14 @@ static bool sendStatsSnapshot(void) {
 
 static void syncStatsAfterAuthentication(void) {
     onlineAuthenticated = true;
+    if (linkConfigured && !linkJoined) {
+        char packet[160];
+        snprintf(packet, sizeof(packet), "{\"type\":\"link_spike_join\",\"room\":\"%s\",\"core\":\"gpSP v1.0\"}\n", linkRoom);
+        if (onlineSend(packet)) {
+            linkJoined = true;
+            strcpy(linkStatus, "LINK JOIN SENT");
+        }
+    }
     if (!statsEnabled) return;
     if (sendStatsConsent(false) && sendStatsSnapshot()) {
         strcpy(statsStatus, "SYNC SENT - COMMUNITY-SUBMITTED");
@@ -1042,6 +1165,30 @@ static const char* findJsonObjectEnd(const char* at, const char* end) {
     return NULL;
 }
 
+static int hexNibble(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+static size_t decodeLinkPacket(const char* encoded, uint8_t* output, size_t capacity) {
+    const size_t length = strlen(encoded);
+    if (!length || (length & 1) || length / 2 > capacity) return 0;
+    for (size_t index = 0; index < length / 2; ++index) {
+        int high = hexNibble(encoded[index * 2]), low = hexNibble(encoded[index * 2 + 1]);
+        if (high < 0 || low < 0) return 0;
+        output[index] = (uint8_t) ((high << 4) | low);
+    }
+    return length / 2;
+}
+
+static void stopLink(const char* status) {
+    if (linkStarted && coreNetpacketInterface && coreNetpacketInterface->stop) coreNetpacketInterface->stop();
+    linkStarted = false;
+    if (status) snprintf(linkStatus, sizeof(linkStatus), "%s", status);
+}
+
 static void parseOnlineLine(char* line) {
     if (jsonTypeIs(line, "enrolled") || jsonTypeIs(line, "identity_recovered")) {
         char id[37] = {}, token[65] = {}, credential[37] = {}, fingerprint[11] = {}, recovery[25] = {};
@@ -1075,6 +1222,59 @@ static void parseOnlineLine(char* line) {
         browserPairingStatusUntil = osGetTime() + 5000;
         return;
     }
+    if (jsonTypeIs(line, "link_waiting")) {
+        stopLink(NULL);
+        snprintf(linkStatus, sizeof(linkStatus), "LINK %s WAITING", linkRoom);
+        return;
+    }
+    if (jsonTypeIs(line, "link_started")) {
+        int clientId = jsonInt(line, "clientId", -1), peerId = jsonInt(line, "peerId", -1);
+        if (clientId < 0 || clientId > 1 || peerId < 0 || peerId > 1 || !coreNetpacketInterface ||
+            !coreNetpacketInterface->start || !backupSaveForLink()) {
+            strcpy(linkStatus, "LINK BLOCKED - SAVE BACKUP FAILED");
+            onlineSend("{\"type\":\"link_leave\"}\n");
+            linkJoined = false;
+            return;
+        }
+        linkClientId = (unsigned) clientId;
+        linkPeerId = (unsigned) peerId;
+        linkPacketsSent = linkPacketsReceived = 0;
+        coreNetpacketInterface->start((uint16_t) linkClientId, frontendNetpacketSend, frontendNetpacketPollReceive);
+        if (linkClientId == 0 && coreNetpacketInterface->connected && !coreNetpacketInterface->connected((uint16_t) linkPeerId)) {
+            if (coreNetpacketInterface->stop) coreNetpacketInterface->stop();
+            onlineSend("{\"type\":\"link_leave\"}\n");
+            linkJoined = false;
+            strcpy(linkStatus, "LINK BLOCKED BY CORE");
+            return;
+        }
+        linkStarted = true;
+        snprintf(linkStatus, sizeof(linkStatus), "LINK %s ACTIVE - BACKUP OK", linkRoom);
+        debugStage("link-started-backup-complete");
+        return;
+    }
+    if (jsonTypeIs(line, "link_packet")) {
+        char encoded[1025] = {};
+        uint8_t packet[512];
+        int from = jsonInt(line, "from", -1);
+        if (!linkStarted || from < 0 || from > 3 || !jsonString(line, "data", encoded, sizeof(encoded))) return;
+        size_t size = decodeLinkPacket(encoded, packet, sizeof(packet));
+        if (!size) return;
+        coreNetpacketInterface->receive(packet, size, (uint16_t) from);
+        ++linkPacketsReceived;
+        return;
+    }
+    if (jsonTypeIs(line, "link_peer_disconnected")) {
+        int clientId = jsonInt(line, "clientId", -1);
+        if (linkStarted && linkClientId == 0 && clientId >= 0 && coreNetpacketInterface->disconnected)
+            coreNetpacketInterface->disconnected((uint16_t) clientId);
+        stopLink("LINK PEER DISCONNECTED");
+        return;
+    }
+    if (jsonTypeIs(line, "link_ended") || jsonTypeIs(line, "link_left")) {
+        stopLink("LINK SESSION ENDED");
+        linkJoined = false;
+        return;
+    }
     if (jsonTypeIs(line, "error")) {
         char code[40] = {};
         if (jsonString(line, "code", code, sizeof(code)) && strstr(code, "pairing")) {
@@ -1084,6 +1284,10 @@ static void parseOnlineLine(char* line) {
         if (strstr(code, "stats")) {
             snprintf(statsStatus, sizeof(statsStatus), "SERVER: %.34s", code);
             statsStatusUntil = osGetTime() + 6000;
+        }
+        if (strstr(code, "link")) {
+            snprintf(linkStatus, sizeof(linkStatus), "SERVER: %.34s", code);
+            if (strcmp(code, "link_rate_limited")) { stopLink(NULL); linkJoined = false; }
         }
         return;
     }
@@ -1492,6 +1696,7 @@ static void drawBottom(void) {
         C2D_DrawRectSolid(i * 81, 202, 0, i == 2 ? 77 : 78, 38, colors[i]);
         drawText(i * 81 + 17, 214, .36f, C2D_Color32(255,255,255,255), "%s", labels[i]);
     }
+    if (linkConfigured) drawText(12, 193, .24f, C2D_Color32(255,220,130,255), "%.36s TX%u RX%u", linkStatus, linkPacketsSent, linkPacketsReceived);
 }
 
 static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y) {

@@ -13,6 +13,9 @@ const RECOVERY = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){4}$/;
 const PAIRING = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const AVATARS = new Set(['boy', 'girl']);
 const STAT_FIELDS = new Set(['pokedex_seen', 'pokedex_caught', 'badges', 'frontier_streaks']);
+const LINK_ROOM = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
+const LINK_CORE = 'gpSP v1.0';
+const LINK_DATA = /^(?:[a-f0-9]{2}){1,512}$/i;
 
 export function validateHello(msg) {
   if (msg?.type !== 'hello' || !NAME.test(msg.name) || (msg.avatar !== undefined && !AVATARS.has(msg.avatar))) return false;
@@ -65,6 +68,15 @@ export function validateStatsSnapshot(msg) {
     }
   }
   return true;
+}
+
+export function validateLinkJoin(msg) {
+  return msg?.type === 'link_spike_join' && LINK_ROOM.test(msg.room ?? '') && msg.core === LINK_CORE;
+}
+
+export function validateLinkPacket(msg) {
+  return msg?.type === 'link_packet' && Number.isInteger(msg.to) &&
+    (msg.to === 0xffff || (msg.to >= 0 && msg.to <= 3)) && LINK_DATA.test(msg.data ?? '');
 }
 
 export function validateState(msg, previousSeq = -1) {

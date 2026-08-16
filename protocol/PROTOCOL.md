@@ -59,6 +59,30 @@ Clients should send a `ping` at least every 20 seconds while stationary. The 3DS
 
 Snapshots are presence hints, not authoritative save data. Clients must not trust them for battles, trades, inventory, progression, or leaderboard proof.
 
+## Experimental Gate 4 link spike
+
+Link transport is disabled unless the private `online.cfg` contains an eight-character room code such as `link_room=ABCD-2345`. This is a feasibility interface, not a public invitation system. It requires authenticated protocol v2 identities, admits exactly two clients, retains packets only in memory, and never stores packet contents.
+
+The first client becomes gpSP netpacket client 0 and waits. A matching second client becomes client 1; both must advertise the exact `gpSP v1.0` netpacket protocol:
+
+```json
+{"type":"link_spike_join","room":"ABCD-2345","core":"gpSP v1.0"}
+{"type":"link_waiting","room":"ABCD-2345"}
+{"type":"link_started","room":"ABCD-2345","clientId":0,"peerId":1,"core":"gpSP v1.0"}
+```
+
+Before accepting `link_started`, the 3DS flushes its current save, creates and fsyncs a timestamped backup under `link-backups/`, and retains the newest three. Backup failure prevents the core netpacket session from starting.
+
+Core packets are reliable WSS/TCP messages encoded as at most 512 bytes of hexadecimal data. A target of `65535` is broadcast; other targets are client IDs 0 through 3. The relay limits each sender to 240 packets per second and never interprets packet contents.
+
+```json
+{"type":"link_packet","to":65535,"data":"4d504b3100000000"}
+{"type":"link_packet","from":0,"data":"4d504b3100000000"}
+{"type":"link_leave"}
+```
+
+The room is destroyed if its host leaves. Battle/trade invitations and leaderboard completion events remain disabled until complete Cable Club battle, trade, interruption, save-integrity, public-WSS, and Old 3DS performance tests pass.
+
 ## v1 migration window
 
 Protocol v1 `hello` remains accepted temporarily so already-installed builds continue to connect while users update. Its optional 32-hex `session` produces a stable opaque ID but is not Internet-grade authentication. The server replies with `latestVersion:2`. New builds must use v2, and v1 removal requires a separately announced compatibility gate.

@@ -6,11 +6,12 @@ import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { PostgresIdentityStore } from './identity-store.mjs';
 import { PostgresStatsStore } from './stats-store.mjs';
-import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
+import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
 
 export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null, statsStore = null } = {}) {
   const clients = new Map();
-  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, enrollments: 0, recoveries: 0, authenticationFailures: 0, hellos: 0, states: 0, chats: 0, emotes: 0, statsConsents: 0, statsSnapshots: 0, reconnectReplacements: 0, disconnects: 0 };
+  const linkRooms = new Map();
+  const metrics = { startedAt: Date.now(), totalConnections: 0, rejectedConnections: 0, ipRejectedConnections: 0, helloTimeouts: 0, enrollments: 0, recoveries: 0, authenticationFailures: 0, hellos: 0, states: 0, chats: 0, emotes: 0, statsConsents: 0, statsSnapshots: 0, linkJoins: 0, linkPackets: 0, linkLeaves: 0, linkRateLimited: 0, reconnectReplacements: 0, disconnects: 0 };
   const send = (socket, msg) => { if (!socket.destroyed) socket.write(encode(msg)); };
   const fail = (socket, code) => { send(socket, { type: 'error', code }); socket.end(); };
   const stableId = session => {
@@ -22,6 +23,75 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     const players = [...clients.values()].filter(c => c !== client && c.state?.map === client.state.map)
       .map(c => ({ id: c.id, name: c.name, ...c.state }));
     send(client.socket, { type: 'snapshot', map: client.state.map, players });
+  };
+  const leaveLink = (client, reason = 'left') => {
+    if (!client.linkRoom) return;
+    const roomName = client.linkRoom;
+    const room = linkRooms.get(roomName);
+    const leavingId = client.linkClientId;
+    client.linkRoom = null;
+    client.linkClientId = null;
+    client.linkPacketsAt = 0;
+    client.linkPacketCount = 0;
+    if (!room) return;
+    room.members.delete(leavingId);
+    metrics.linkLeaves++;
+    if (leavingId === 0) {
+      for (const peer of room.members.values()) {
+        peer.linkRoom = null;
+        peer.linkClientId = null;
+        send(peer.socket, { type: 'link_ended', reason: 'host_left' });
+      }
+      linkRooms.delete(roomName);
+      return;
+    }
+    const host = room.members.get(0);
+    if (host) {
+      send(host.socket, { type: 'link_peer_disconnected', clientId: leavingId, reason });
+      send(host.socket, { type: 'link_waiting', room: roomName });
+    } else linkRooms.delete(roomName);
+  };
+  const joinLink = (client, msg) => {
+    if (!client.identityId || client.protocolVersion !== VERSION) return send(client.socket, { type: 'error', code: 'identity_required' });
+    if (!validateLinkJoin(msg)) return send(client.socket, { type: 'error', code: 'invalid_link_join' });
+    if (client.linkRoom) return send(client.socket, { type: 'error', code: 'already_in_link_room' });
+    let room = linkRooms.get(msg.room);
+    if (!room) {
+      room = { core: msg.core, members: new Map() };
+      linkRooms.set(msg.room, room);
+    }
+    if (room.core !== msg.core || room.members.size >= 2) return send(client.socket, { type: 'error', code: 'link_room_unavailable' });
+    const clientId = room.members.has(0) ? 1 : 0;
+    room.members.set(clientId, client);
+    client.linkRoom = msg.room;
+    client.linkClientId = clientId;
+    client.linkPacketsAt = Date.now();
+    client.linkPacketCount = 0;
+    metrics.linkJoins++;
+    if (room.members.size === 1) return send(client.socket, { type: 'link_waiting', room: msg.room });
+    const host = room.members.get(0), guest = room.members.get(1);
+    send(host.socket, { type: 'link_started', room: msg.room, clientId: 0, peerId: 1, core: msg.core });
+    send(guest.socket, { type: 'link_started', room: msg.room, clientId: 1, peerId: 0, core: msg.core });
+  };
+  const relayLinkPacket = (client, msg) => {
+    if (!validateLinkPacket(msg) || !client.linkRoom || client.linkClientId === null) return send(client.socket, { type: 'error', code: 'invalid_link_packet' });
+    const room = linkRooms.get(client.linkRoom);
+    if (!room || room.members.size !== 2) return send(client.socket, { type: 'error', code: 'link_not_ready' });
+    const now = Date.now();
+    if (now - client.linkPacketsAt >= 1000) { client.linkPacketsAt = now; client.linkPacketCount = 0; }
+    if (++client.linkPacketCount > 240) {
+      metrics.linkRateLimited++;
+      if (client.linkPacketCount === 241) send(client.socket, { type: 'error', code: 'link_rate_limited' });
+      return;
+    }
+    let delivered = 0;
+    for (const [peerId, peer] of room.members) {
+      if (peer === client || (msg.to !== 0xffff && msg.to !== peerId)) continue;
+      send(peer.socket, { type: 'link_packet', from: client.linkClientId, data: msg.data });
+      delivered++;
+    }
+    if (!delivered) return send(client.socket, { type: 'error', code: 'link_peer_unavailable' });
+    metrics.linkPackets++;
   };
   const replaceCredentialConnection = client => {
     for (const peer of clients.values()) {
@@ -130,6 +200,9 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       send(socket, { type: 'stats_snapshot_saved', count: result.entries.length, underReview: result.entries.filter(entry => entry.review_status === 'under-review').length });
       return;
     }
+    if (msg.type === 'link_spike_join') { joinLink(client, msg); return; }
+    if (msg.type === 'link_packet') { relayLinkPacket(client, msg); return; }
+    if (msg.type === 'link_leave') { leaveLink(client, 'left'); send(socket, { type: 'link_left' }); return; }
     if (msg.type === 'ping') { send(socket, { type: 'pong', at: msg.at }); return; }
     if (msg.type === 'chat') {
       if (!client.state || !validateChat(msg)) return send(socket, { type: 'error', code: 'invalid_chat' });
@@ -161,7 +234,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     const remoteAddress = socket.remoteAddress ?? 'unknown';
     const sameIp = [...clients.values()].filter(existing => existing.remoteAddress === remoteAddress).length;
     if (sameIp >= maxConnectionsPerIp) { metrics.ipRejectedConnections++; fail(socket, 'ip_connection_limit'); return; }
-    const client = { id: crypto.randomUUID(), identityId: null, credentialId: null, fingerprint: null, protocolVersion: null, session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, helloTimer: null, processing: Promise.resolve() };
+    const client = { id: crypto.randomUUID(), identityId: null, credentialId: null, fingerprint: null, protocolVersion: null, session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, linkRoom: null, linkClientId: null, linkPacketsAt: 0, linkPacketCount: 0, helloTimer: null, processing: Promise.resolve() };
     clients.set(socket, client);
     client.helloTimer = setTimeout(() => {
       if (!client.name) {
@@ -183,7 +256,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       }
     });
     socket.on('error', () => {});
-    socket.on('close', () => { if (client.helloTimer) clearTimeout(client.helloTimer); if (clients.delete(socket)) metrics.disconnects++; for (const peer of clients.values()) snapshot(peer); });
+    socket.on('close', () => { if (client.helloTimer) clearTimeout(client.helloTimer); leaveLink(client, 'disconnected'); if (clients.delete(socket)) metrics.disconnects++; for (const peer of clients.values()) snapshot(peer); });
   });
   const timer = setInterval(() => { const cutoff = Date.now() - idleMs; for (const c of clients.values()) if (c.seen < cutoff) c.socket.destroy(); }, Math.min(idleMs, 5000));
   timer.unref(); server.on('close', () => clearInterval(timer));
@@ -193,6 +266,8 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
 		authenticated: [...clients.values()].filter(client => client.name).length,
 		positioned: [...clients.values()].filter(client => client.state).length,
 		rooms: new Set([...clients.values()].flatMap(client => client.state ? [client.state.map] : [])).size,
+		linkRooms: linkRooms.size,
+		linkPlayers: [...linkRooms.values()].reduce((sum, room) => sum + room.members.size, 0),
 		...metrics
 	});
   return { server, clients, metrics, status };
