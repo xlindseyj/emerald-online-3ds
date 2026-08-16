@@ -1,4 +1,5 @@
 import net from 'node:net';
+import crypto from 'node:crypto';
 
 const host = process.env.GAME_HOST === '0.0.0.0' ? '127.0.0.1' : (process.env.GAME_HOST ?? '127.0.0.1');
 const port = Number(process.env.GAME_PORT ?? 3210);
@@ -7,6 +8,7 @@ const durationMs = Number(process.env.PEER_DURATION_MS ?? 90000);
 const stepMs = Number(process.env.PEER_STEP_MS ?? 650);
 const peerName = process.env.PEER_NAME ?? 'Brendan';
 const peerAvatar = process.env.PEER_AVATAR ?? 'boy';
+const peerSession = crypto.randomBytes(16).toString('hex');
 if (!Number.isSafeInteger(durationMs) || durationMs < 1000 || durationMs > 3600000) throw new Error('PEER_DURATION_MS must be 1000-3600000');
 if (!Number.isSafeInteger(stepMs) || stepMs < 250 || stepMs > 5000) throw new Error('PEER_STEP_MS must be 250-5000');
 if (!/^[\x20-!#-\[\]-~]{1,12}$/.test(peerName)) throw new Error('PEER_NAME must be 1-12 safe ASCII characters');
@@ -52,7 +54,7 @@ socket.on('data', chunk => {
     if (message.type === 'error') throw new Error(`peer rejected: ${message.code}`);
     if (message.type === 'snapshot') {
       const observed = message.players?.find(player => player.name === physical.name);
-      if (observed) target = { map: observed.map, x: observed.x, y: observed.y, facing: observed.facing };
+      target = observed ? { map: observed.map, x: observed.x, y: observed.y, facing: observed.facing } : null;
     }
   }
 });
@@ -62,13 +64,14 @@ await new Promise((resolve, reject) => {
   socket.once('error', reject);
 });
 
-send({ type: 'hello', version: 1, name: peerName, session: 'b7e4d29c468f40b8a47cae2d053db124', avatar: peerAvatar });
+send({ type: 'hello', version: 1, name: peerName, session: peerSession, avatar: peerAvatar });
 position = nextPosition();
 send({ type: 'state', seq: ++sequence, ...position, avatar: peerAvatar });
 setTimeout(() => send({ type: 'chat', text: `Hello from ${peerName}!` }), 1500);
 setTimeout(() => send({ type: 'emote', emote: 'wave' }), 3000);
 
 const movement = setInterval(() => {
+  if (!target) return;
   walkStep = (walkStep + 1) % walkLoop.length;
   position = nextPosition();
   send({ type: 'state', seq: ++sequence, ...position, avatar: peerAvatar });
