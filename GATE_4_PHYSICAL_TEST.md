@@ -4,9 +4,9 @@ Gate 4 remains an experimental feasibility test. Public battle/trade invitations
 
 ## Current artifacts
 
-- Release: `0.8.3`
-- CIA SHA-256: `5dd5253ba52dd88968693096387af84a546aaf93ca15790879f324af6448cb47`
-- 3DSX SHA-256: `732cd07521f205ee0e7da8f80f313afe454d2e32c21495bc6cea901959eac049`
+- Release: `0.8.4`
+- CIA SHA-256: `225f021371b3cb3788c0879c2d8fce0d759d9847eee1ecd4f4461b054005d82c`
+- 3DSX SHA-256: `71007c45b922463cf1181ca42ae73b1d08ab681cb28c7ad7a2799cab21308ba0`
 - Azahar: official 2126.0 AppImage under the ignored `.tools/azahar/` directory
 
 Create a fresh ignored bundle for each session. Its `physical-sd/` tree contains only the current release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.
@@ -36,14 +36,18 @@ The tool accepts only a 128 KiB Emerald save (or a 128 KiB save with a 512-byte 
 5. Complete one battle and one trade through public WSS. Record FPS/audio, packet counters, both save hashes after clean exit and restart, and the result of interrupting one later session.
 6. If either save differs unexpectedly, stop testing and restore the independent backups. Do not proceed to Gate 5.
 
-## Current 0.8.3 preflight evidence
+## Current 0.8.4 preflight evidence
 
-- The physical save has two complete checksum-valid slots. Its active slot has 49 minutes played, one party member, and a Route 102 position, which is sufficient to walk to Oldale's Cable Club. These facts contain no Trainer ID, Pokémon, inventory, ROM, or save bytes.
-- The exact release 3DSX loaded that save in Azahar 2126.0, authenticated through production WSS, entered its isolated link room, and remained alive beyond the former crash point at about 29 FPS in interpreter mode.
+- Before v0.8.4 transfer, the physical save backup had two complete checksum-valid slots, 106 minutes played, two party members, and a valid map position. The runtime, CIA, and on-device v0.8.3 rollback binary were re-downloaded and hash-verified; ROM, save, save state, identity, configuration, statistics preferences, avatar atlas, and diagnostics remained byte-for-byte unchanged.
+- The physical v0.8.4 CIA was installed and reconnected through production WSS. The user confirmed Global Online Users, coordinates, read-only rows, and multi-page touch navigation on the Old 3DS. Map Chat, current FPS, audio, and HOME lifecycle remain to be recorded.
+- A fresh ignored `generated/gate4-cable-session-v084` bundle uses the same private room already configured on the physical console. Its physical handoff contains only the exact v0.8.4 CIA, 3DSX, and `online.cfg`; it excludes ROM, save, identity, preferences, and avatar data.
+- The isolated v0.8.4 Azahar profile contains an independently copied checksum-valid progressed save with two valid slots, 68 minutes, one party member, and map `0-17`. Its save hash matches the preserved source copy. The previous v0.8.3 Azahar process and its orphaned AppImage child were stopped only after this clone was verified.
+- The v0.8.4 Azahar client authenticated through production WSS and is the sole host waiting in the private room. The physical client must toggle Online off/on once to rejoin; both clients must then report `ACTIVE - BACKUP OK` before Cable Club navigation begins.
+- All 60 tests pass with zero skips after migrations 001-006 against disposable PostgreSQL 16. The public build, release audit, production deployment, and live WSS global-roster/chat-timestamp checks also pass.
 - The interpreter no longer initializes unmapped 3DS translation caches, and nonblocking peer polling supplies the address-family metadata Azahar requires.
 - A production-WSS peer was visibly present beside the Azahar player in the overworld, absent throughout a real wild battle while still connected, and visible again after fleeing. This verifies the v0.8.3 overworld callback and battle-flag guard in Azahar.
-- All 54 automated tests passed against disposable PostgreSQL 16 with zero skips. Normal local-TCP and production-WSS Azahar smokes also passed, and every synthetic production identity was deleted.
-- The v0.8.2 physical run exposed the remote-overlay-in-battle defect and was stopped before Cable Club acceptance. The v0.8.3 CIA and 3DSX were staged and re-downloaded from the SD card with the exact hashes above. The existing production-WSS/link configuration and newest save were unchanged by the transfer, and distinct v0.8.2 CIA, 3DSX, and configuration rollback copies were retained.
+- For the historical v0.8.3 hotfix, all 54 automated tests passed against disposable PostgreSQL 16 with zero skips. Normal local-TCP and production-WSS Azahar smokes also passed, and every synthetic production identity was deleted.
+- The v0.8.2 physical run exposed the remote-overlay-in-battle defect and was stopped before Cable Club acceptance. The v0.8.3 hotfix was staged and re-downloaded from the SD card with its exact historical hashes; v0.8.4 retains that guard and has its own verified v0.8.3 rollback copy.
 - With v0.8.3 online on the physical 3DS and a temporary production peer connected on the same map, the user entered a battle and confirmed the remote-trainer hiding fix worked. The test peer was disconnected immediately afterward. This closes the physical regression for the v0.8.2 overlay defect; it does not close the remaining Cable Club battle, trade, save-integrity, interruption, performance, or audio gates.
 
 ## Earlier transport evidence
