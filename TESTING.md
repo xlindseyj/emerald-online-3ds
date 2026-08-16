@@ -11,7 +11,7 @@ Verify every public artifact against `release/SHA256SUMS`; it is the authoritati
 - Azahar: with a production-WSS peer connected on Route 102, the peer was visible beside the player, disappeared throughout a real wild Poochyena battle, and returned immediately after fleeing. The battle screen contained no remote sprite, name, or emote; the lower screen reported that it was waiting for the overworld.
 - Automated verification: all 54 tests passed against disposable PostgreSQL 16 with zero skips, and the release audit passed.
 - Production: multi-architecture image `sha256:3f185c8c132cfe3481dd9ec13b2e286862a8b09a2eb654b678d0127a3c3fb1c8` rolled out with both init containers successful and zero application restarts. The publisher reported eight release topics, one known issue, and nine maintained community pages with v0.8.3 current; all four public services are operational and live artifact hashes match the manifest.
-- Physical acceptance: v0.8.2 exposed the overlay defect during a real wild battle. Install v0.8.3 before resuming Gate 4, then repeat the overworld-to-battle-to-overworld check on the physical 3DS before entering the Cable Club.
+- Physical acceptance: v0.8.2 exposed the overlay defect during a real wild battle. The v0.8.3 CIA and 3DSX were then staged with matching re-downloaded hashes while the existing WSS/link configuration and newest save remained byte-for-byte unchanged. With v0.8.3 online on the physical 3DS and a temporary same-map production peer connected, the user entered a battle and confirmed the remote-trainer hiding fix worked. The temporary peer was disconnected afterward. Cable Club battle/trade acceptance remains separate and open.
 
 ## Release 0.8.2 Gate 4 preflight (2026-08-16)
 

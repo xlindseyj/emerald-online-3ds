@@ -43,8 +43,8 @@ The tool accepts only a 128 KiB Emerald save (or a 128 KiB save with a 512-byte 
 - The interpreter no longer initializes unmapped 3DS translation caches, and nonblocking peer polling supplies the address-family metadata Azahar requires.
 - A production-WSS peer was visibly present beside the Azahar player in the overworld, absent throughout a real wild battle while still connected, and visible again after fleeing. This verifies the v0.8.3 overworld callback and battle-flag guard in Azahar.
 - All 54 automated tests passed against disposable PostgreSQL 16 with zero skips. Normal local-TCP and production-WSS Azahar smokes also passed, and every synthetic production identity was deleted.
-- The v0.8.2 physical run exposed the remote-overlay-in-battle defect and was stopped before Cable Club acceptance. v0.8.3 must be staged, installed, hash-verified, and physically rechecked before the remaining battle/trade work.
-- The copied 3DSX is ready to launch from Homebrew Launcher after staging. A staged CIA does not replace the installed HOME Menu title until it is selected in FBI and installed.
+- The v0.8.2 physical run exposed the remote-overlay-in-battle defect and was stopped before Cable Club acceptance. The v0.8.3 CIA and 3DSX were staged and re-downloaded from the SD card with the exact hashes above. The existing production-WSS/link configuration and newest save were unchanged by the transfer, and distinct v0.8.2 CIA, 3DSX, and configuration rollback copies were retained.
+- With v0.8.3 online on the physical 3DS and a temporary production peer connected on the same map, the user entered a battle and confirmed the remote-trainer hiding fix worked. The test peer was disconnected immediately afterward. This closes the physical regression for the v0.8.2 overlay defect; it does not close the remaining Cable Club battle, trade, save-integrity, interruption, performance, or audio gates.
 
 ## Earlier transport evidence
 
