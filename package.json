@@ -14,6 +14,7 @@
     "smoke:emulator:link": "node tools/emulator-link-spike.mjs",
     "smoke:live:gate3": "node tools/live-gate3-smoke.mjs",
     "smoke:live:link": "node tools/live-link-spike.mjs",
+    "live:peer": "node tools/live-peer.mjs",
     "test": "node --test server/test/*.test.mjs web/*.test.mjs"
   },
   "dependencies": {

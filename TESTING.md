@@ -82,6 +82,15 @@ Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. W
 
 Run the same build on a second 3DS (or one 3DS plus Azahar) and enter the same map on both. Each lower screen should name the other trainer, coordinates, facing, and show `Nearby trainers: 1`; entering different maps should return the count to zero. Once the local runtime has observed each facing direction, nearby remote trainers should use the transparently decoded Emerald trainer sprite for that direction. A magenta silhouette is the safe fallback before a direction has been captured. Walk one tile at a time and confirm the remote sprite glides rather than teleports. Send chat from each system and confirm it appears only while both are on the same map.
 
+For a single-console production check, keep the physical player online in the overworld and stream the cluster-local peer utility into the read-only presence container:
+
+```bash
+kubectl exec -i -n pokemonemeraldonline3ds deployment/emerald-online -c presence -- \
+  env PEER_DURATION_MS=180000 node --input-type=module - < tools/live-peer.mjs
+```
+
+The temporary `Brendan` peer privately discovers the first positioned trainer, follows map changes and movement, walks around adjacent tiles, sends one greeting, waves, and disconnects after the requested duration. The utility does not expose the private client-discovery endpoint publicly and never creates a database identity, score, forum account, ROM, or save. Confirm the lower screen shows `Brendan` under Nearby and that its trainer sprite moves near the physical player.
+
 Record console model, system version, Homebrew Launcher version, each pass/fail result, and any crash/error screen. Real hardware is authoritative for Wi-Fi and lifecycle behavior.
 
 ## Container and Kubernetes server
