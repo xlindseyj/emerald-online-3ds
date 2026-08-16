@@ -3,10 +3,22 @@ import crypto from 'node:crypto';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN = /^[0-9a-f]{64}$/i;
 const RECOVERY = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){4}$/;
+const PAIRING = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function credentialHash(pepper, token) {
   return crypto.createHmac('sha256', pepper).update(token.toLowerCase()).digest();
+}
+
+function purposeHash(pepper, purpose, value) {
+  return crypto.createHmac('sha256', pepper).update(`${purpose}:${value}`).digest();
+}
+
+function randomReadableCode(length = 8) {
+  const bytes = crypto.randomBytes(length);
+  let code = '';
+  for (let i = 0; i < bytes.length; i++) code += RECOVERY_ALPHABET[bytes[i] % RECOVERY_ALPHABET.length];
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
 }
 
 function fingerprint(identityId) {
@@ -113,6 +125,94 @@ export class PostgresIdentityStore {
     return result.rowCount === 1;
   }
 
+  async startPairing() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = randomReadableCode();
+      const requestToken = crypto.randomBytes(32).toString('hex');
+      try {
+        const result = await this.pool.query(
+          `INSERT INTO pairing_codes (id, code_hash, request_hash, expires_at)
+           VALUES ($1, $2, $3, now() + interval '5 minutes') RETURNING expires_at`,
+          [crypto.randomUUID(), purposeHash(this.pepper, 'pairing-code', code), purposeHash(this.pepper, 'pairing-request', requestToken)]
+        );
+        return { code, requestToken, expiresAt: result.rows[0].expires_at };
+      } catch (error) {
+        if (error.code !== '23505' || attempt === 4) throw error;
+      }
+    }
+    throw new Error('unable to allocate pairing code');
+  }
+
+  async approvePairing(identityId, credentialId, code) {
+    if (!UUID.test(identityId ?? '') || !UUID.test(credentialId ?? '') || !PAIRING.test(code ?? '')) return null;
+    const result = await this.pool.query(
+      `UPDATE pairing_codes p SET identity_id=$1, approved_by_credential_id=$2, approved_at=now()
+       WHERE p.code_hash=$3 AND p.identity_id IS NULL AND p.approved_at IS NULL
+       AND p.consumed_at IS NULL AND p.expires_at > now()
+       AND EXISTS (SELECT 1 FROM device_credentials c WHERE c.id=$2 AND c.identity_id=$1 AND c.revoked_at IS NULL)
+       RETURNING p.expires_at`,
+      [identityId, credentialId, purposeHash(this.pepper, 'pairing-code', code)]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async consumePairing(code, requestToken) {
+    if (!PAIRING.test(code ?? '') || !TOKEN.test(requestToken ?? '')) return null;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const pairing = await client.query(
+        `SELECT p.id, p.identity_id, i.fingerprint
+         FROM pairing_codes p JOIN identities i ON i.id=p.identity_id
+         WHERE p.code_hash=$1 AND p.request_hash=$2 AND p.approved_at IS NOT NULL
+         AND p.consumed_at IS NULL AND p.expires_at > now() AND i.deleted_at IS NULL FOR UPDATE`,
+        [purposeHash(this.pepper, 'pairing-code', code), purposeHash(this.pepper, 'pairing-request', requestToken)]
+      );
+      if (!pairing.rowCount) { await client.query('ROLLBACK'); return null; }
+      const token = crypto.randomBytes(32).toString('hex');
+      const sessionId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO browser_sessions (id, identity_id, token_hash, expires_at)
+         VALUES ($1, $2, $3, now() + interval '30 days')`,
+        [sessionId, pairing.rows[0].identity_id, purposeHash(this.pepper, 'browser-session', token)]
+      );
+      await client.query('UPDATE pairing_codes SET consumed_at=now() WHERE id=$1', [pairing.rows[0].id]);
+      await client.query('COMMIT');
+      return { token, sessionId, identityId: pairing.rows[0].identity_id, fingerprint: pairing.rows[0].fingerprint, csrfToken: this.browserCsrf(token) };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  }
+
+  browserCsrf(token) {
+    if (!TOKEN.test(token ?? '')) return null;
+    return purposeHash(this.pepper, 'browser-csrf', token).toString('hex');
+  }
+
+  async authenticateBrowserSession(token) {
+    if (!TOKEN.test(token ?? '')) return null;
+    const result = await this.pool.query(
+      `UPDATE browser_sessions b SET last_used_at=now(), expires_at=now() + interval '30 days'
+       FROM identities i WHERE b.token_hash=$1 AND b.identity_id=i.id AND b.revoked_at IS NULL
+       AND b.expires_at > now() AND b.last_used_at > now() - interval '30 days' AND i.deleted_at IS NULL
+       RETURNING b.id AS session_id, i.id AS identity_id, i.fingerprint,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='moderator') AS is_moderator`,
+      [purposeHash(this.pepper, 'browser-session', token)]
+    );
+    const session = result.rows[0];
+    return session ? { ...session, csrf_token: this.browserCsrf(token) } : null;
+  }
+
+  async revokeBrowserSession(token) {
+    if (!TOKEN.test(token ?? '')) return false;
+    const result = await this.pool.query(
+      'UPDATE browser_sessions SET revoked_at=now() WHERE token_hash=$1 AND revoked_at IS NULL RETURNING id',
+      [purposeHash(this.pepper, 'browser-session', token)]
+    );
+    return result.rowCount === 1;
+  }
+
   async exportIdentity(identityId) {
     const result = await this.pool.query(
       `SELECT i.id, i.fingerprint, i.created_at, p.leaderboard_enabled, p.stat_fields, p.preferences,
@@ -131,7 +231,7 @@ export class PostgresIdentityStore {
 }
 
 export class MemoryIdentityStore {
-  constructor() { this.pepper = crypto.randomBytes(32); this.identities = new Map(); }
+  constructor() { this.pepper = crypto.randomBytes(32); this.identities = new Map(); this.pairings = new Map(); this.browserSessions = new Map(); }
   async enroll({ withRecovery = false } = {}) {
     const identityId = crypto.randomUUID(), credentialId = crypto.randomUUID(), token = crypto.randomBytes(32).toString('hex');
     const code = withRecovery ? recoveryCode() : null, salt = code ? crypto.randomBytes(16) : null;
@@ -152,6 +252,36 @@ export class MemoryIdentityStore {
     return { identityId, credentialId, token, fingerprint: record.fingerprint };
   }
   async revoke(identityId, credentialId) { return this.identities.get(identityId)?.credentials.delete(credentialId) ?? false; }
+  async startPairing() {
+    const code = randomReadableCode(), requestToken = crypto.randomBytes(32).toString('hex');
+    this.pairings.set(code, { requestHash: purposeHash(this.pepper, 'pairing-request', requestToken), expiresAt: new Date(Date.now() + 300000), identityId: null, credentialId: null, consumed: false });
+    return { code, requestToken, expiresAt: this.pairings.get(code).expiresAt };
+  }
+  async approvePairing(identityId, credentialId, code) {
+    const pairing = this.pairings.get(code), identity = this.identities.get(identityId);
+    if (!pairing || pairing.expiresAt <= new Date() || pairing.consumed || pairing.identityId || !identity?.credentials.has(credentialId)) return null;
+    pairing.identityId = identityId; pairing.credentialId = credentialId;
+    return { expires_at: pairing.expiresAt };
+  }
+  async consumePairing(code, requestToken) {
+    const pairing = this.pairings.get(code);
+    if (!pairing?.identityId || pairing.consumed || pairing.expiresAt <= new Date()) return null;
+    const requestHash = purposeHash(this.pepper, 'pairing-request', requestToken ?? '');
+    if (!crypto.timingSafeEqual(pairing.requestHash, requestHash)) return null;
+    pairing.consumed = true;
+    const token = crypto.randomBytes(32).toString('hex'), sessionId = crypto.randomUUID();
+    this.browserSessions.set(token, { sessionId, identityId: pairing.identityId, expiresAt: Date.now() + 2592000000, revoked: false });
+    return { token, sessionId, identityId: pairing.identityId, fingerprint: this.identities.get(pairing.identityId).fingerprint, csrfToken: this.browserCsrf(token) };
+  }
+  browserCsrf(token) { return TOKEN.test(token ?? '') ? purposeHash(this.pepper, 'browser-csrf', token).toString('hex') : null; }
+  async authenticateBrowserSession(token) {
+    const session = this.browserSessions.get(token);
+    if (!session || session.revoked || session.expiresAt <= Date.now() || !this.identities.has(session.identityId)) return null;
+    session.expiresAt = Date.now() + 2592000000;
+    const identity = this.identities.get(session.identityId);
+    return { session_id: session.sessionId, identity_id: session.identityId, fingerprint: identity.fingerprint, is_moderator: identity.isModerator === true, csrf_token: this.browserCsrf(token) };
+  }
+  async revokeBrowserSession(token) { const session = this.browserSessions.get(token); if (!session || session.revoked) return false; session.revoked = true; return true; }
   async exportIdentity(identityId) { const r = this.identities.get(identityId); return r ? { id: r.identityId, fingerprint: r.fingerprint, active_device_credentials: r.credentials.size } : null; }
   async deleteIdentity(identityId) { return this.identities.delete(identityId); }
 }

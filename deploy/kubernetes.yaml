@@ -35,7 +35,7 @@ spec:
       terminationGracePeriodSeconds: 10
       initContainers:
         - name: migrate
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:15e140d0690d597e738b673355c400459425843f155078ad51628635275fb9b6
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:25777c10f12b629ac5eab759f9aa6f4f3f7effef5197f440baf1022041a23c7e
           imagePullPolicy: IfNotPresent
           command: ["node", "server/tools/migrate.mjs"]
           envFrom:
@@ -83,7 +83,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: presence
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:15e140d0690d597e738b673355c400459425843f155078ad51628635275fb9b6
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:25777c10f12b629ac5eab759f9aa6f4f3f7effef5197f440baf1022041a23c7e
           imagePullPolicy: IfNotPresent
           command: ["node", "server/src/server.mjs"]
           ports:
@@ -139,7 +139,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: public-web
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:15e140d0690d597e738b673355c400459425843f155078ad51628635275fb9b6
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:25777c10f12b629ac5eab759f9aa6f4f3f7effef5197f440baf1022041a23c7e
           imagePullPolicy: IfNotPresent
           command: ["node", "web/install-server.mjs"]
           ports:
@@ -159,10 +159,19 @@ spec:
               value: 127.0.0.1
             - name: STATUS_UPSTREAM_PORT
               value: "3211"
+            - name: DATABASE_CA_PATH
+              value: /etc/emerald-db/ca.crt
             - name: MAX_CONNECTIONS
               value: "64"
             - name: MAX_CONNECTIONS_PER_IP
               value: "8"
+          envFrom:
+            - secretRef:
+                name: emerald-runtime
+          volumeMounts:
+            - name: database-ca
+              mountPath: /etc/emerald-db
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health

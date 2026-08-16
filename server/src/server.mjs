@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { PostgresIdentityStore } from './identity-store.mjs';
-import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
+import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
 
 export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null } = {}) {
   const clients = new Map();
@@ -101,6 +101,13 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       await identityStore.deleteIdentity(client.identityId);
       send(socket, { type: 'identity_deleted' });
       socket.end();
+      return;
+    }
+    if (msg.type === 'pair_browser_approve') {
+      if (!client.identityId || !client.credentialId || !identityStore) return send(socket, { type: 'error', code: 'identity_required' });
+      if (!validatePairBrowserApprove(msg)) return send(socket, { type: 'error', code: 'invalid_pairing_code' });
+      const approved = await identityStore.approvePairing(client.identityId, client.credentialId, msg.code);
+      send(socket, approved ? { type: 'browser_pairing_approved', code: msg.code } : { type: 'error', code: 'pairing_code_unavailable' });
       return;
     }
     if (msg.type === 'ping') { send(socket, { type: 'pong', at: msg.at }); return; }

@@ -24,16 +24,16 @@ The cluster's MinIO service rejects S3 SSE because no KMS is configured. Backups
 
 ## Physical acceptance
 
-The initial transfer exposed an `E71` WebSocket protocol error on physical hardware. A first HTTP header-capitalization fix did not resolve it. The new diagnostics reproduced the error against production in Azahar as mbedTLS `-0x2700` with `MBEDTLS_X509_BADCERT_FUTURE`: the 3DS local wall clock was interpreted as UTC and lagged real UTC by four hours. The current build applies a narrowly bounded timezone-skew exception while retaining every other certificate check, and the exact gpSP build has completed production WSS enrollment in Azahar. The last package copied to the device remains the header-only build; transfer the following current artifacts when ftpd is available:
+The initial transfer exposed an `E71` WebSocket protocol error on physical hardware. A first HTTP header-capitalization fix did not resolve it. The new diagnostics reproduced the error against production in Azahar as mbedTLS `-0x2700` with `MBEDTLS_X509_BADCERT_FUTURE`: the 3DS local wall clock was interpreted as UTC and lagged real UTC by four hours. The current build applies a narrowly bounded timezone-skew exception while retaining every other certificate check, and the exact gpSP build has completed production WSS enrollment in Azahar. The last package copied to the device remains the header-only build. Gate 2 now supersedes the standalone Gate 1 package; transfer the following current 0.5.0 artifacts when ftpd is available:
 
 - `/3ds/emerald-online-3ds/online.cfg` contains `live.emeraldonline3ds.com`, port `443`, `wss`, and `/game`.
-- `/3ds/emerald-online-3ds/emerald-online-3ds.3dsx` SHA-256 is `386e5a01b18b3d96e2f777de78b4c1961be1f5e286d10bcd9a0c9b679697c9f5`.
-- `/cias/emerald-online-3ds.cia` SHA-256 is `42c20d312d277627a969397b7c45fff94fe4dfdb6ecf1463568c5b298fe4b96d`; install it with FBI to update the HOME Menu title.
+- `/3ds/emerald-online-3ds/emerald-online-3ds.3dsx` SHA-256 is `cf41213268f190603f6616c1fcb79f56790537f00a2dd4e48c334361083d68d6`.
+- `/cias/emerald-online-3ds.cia` SHA-256 is `d4b32e28b8bf79360897208a660b7f8b9e68d1255c062603890219125d7c0ced`; install it with FBI to update the HOME Menu title.
 - The existing ROM, save, save state, debug log, and avatar atlas were not changed. No prior `identity.cfg` existed.
 - The prior 3DSX and config are retained locally in ignored `generated/device-backups/physical-3ds-pre-gate1-20260815T2342Z/` for rollback.
 - The pre-hotfix 3DSX and config are retained in ignored `generated/device-backups/physical-3ds-pre-wss-header-fix-20260816T000007Z/`.
 
-On the Old 3DS XL, launch the transferred 0.4.0 build and verify:
+On the Old 3DS XL, launch the transferred 0.5.0 build and verify:
 
 1. Emerald remains playable at 60 FPS with correct audio and display orientation.
 2. The status reaches `ONLINE` through `live.emeraldonline3ds.com:443` without a LAN server.

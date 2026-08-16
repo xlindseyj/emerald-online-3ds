@@ -29,6 +29,17 @@ Recovery invalidates every existing device credential and browser session, consu
 
 Authenticated clients may send `export_identity`, `revoke_session`, or `delete_identity` with `confirm:"DELETE"`. Export contains account metadata and preferences, never credential verifiers. Revocation and deletion close the connection.
 
+## Browser pairing
+
+The community website creates a five-minute code plus a separate 256-bit request token. Only the code is shown to the user; the request token remains in that browser tab. On the online dashboard, the player taps the trainer profile and enters the code. The authenticated 3DS sends:
+
+```json
+{"type":"pair_browser_approve","code":"ABCD-EFGH"}
+{"type":"browser_pairing_approved","code":"ABCD-EFGH"}
+```
+
+The browser can consume the approved code only with its matching request token. The server then rotates the one-time pairing state into a random browser-session token stored only as a hashed verifier. The cookie is `HttpOnly`, `Secure`, and `SameSite=Strict`; state-changing forum requests also require a session-derived CSRF token. Pairing codes expire after five minutes and cannot be reused.
+
 ## Presence messages
 
 After authentication, clients may send:

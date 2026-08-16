@@ -10,6 +10,7 @@ const SESSION = /^[a-f0-9]{32}$/i;
 const IDENTITY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN = /^[a-f0-9]{64}$/i;
 const RECOVERY = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){4}$/;
+const PAIRING = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const AVATARS = new Set(['boy', 'girl']);
 
 export function validateHello(msg) {
@@ -28,6 +29,10 @@ export function validateRecover(msg) {
   return msg?.type === 'recover_identity' && msg.version === VERSION && NAME.test(msg.name) &&
     IDENTITY.test(msg.identity ?? '') && RECOVERY.test(msg.recoveryCode ?? '') &&
     (msg.avatar === undefined || AVATARS.has(msg.avatar));
+}
+
+export function validatePairBrowserApprove(msg) {
+  return msg?.type === 'pair_browser_approve' && PAIRING.test(msg.code ?? '');
 }
 
 export function validateState(msg, previousSeq = -1) {

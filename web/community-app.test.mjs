@@ -1,0 +1,196 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { MemoryIdentityStore } from '../server/src/identity-store.mjs';
+import { MemoryCommunityStore } from '../server/src/community-store.mjs';
+import { createCommunityApp } from './community-app.mjs';
+import { communityPage } from './community-page.mjs';
+
+async function startApp(t) {
+  const identityStore = new MemoryIdentityStore();
+  const communityStore = new MemoryCommunityStore();
+  const handler = createCommunityApp({ identityStore, communityStore, secureCookies: false, page: communityPage });
+  const server = http.createServer(async (req, res) => {
+    const handled = await handler(req, res, new URL(req.url, 'http://localhost'));
+    if (!handled) res.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  return { identityStore, communityStore, base: `http://127.0.0.1:${server.address().port}` };
+}
+
+async function pair(base, identityStore, enrollment) {
+  const startedResponse = await fetch(`${base}/api/community/pairing/start`, { method: 'POST' });
+  assert.equal(startedResponse.status, 201);
+  const started = await startedResponse.json();
+  assert.match(started.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  assert.ok(await identityStore.approvePairing(enrollment.identityId, enrollment.credentialId, started.code));
+  const consumedResponse = await fetch(`${base}/api/community/pairing/consume`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(started)
+  });
+  assert.equal(consumedResponse.status, 200);
+  const consumed = await consumedResponse.json();
+  const cookie = consumedResponse.headers.get('set-cookie').split(';', 1)[0];
+  return { cookie, csrf: consumed.csrfToken };
+}
+
+function request(base, route, auth = null, options = {}) {
+  const headers = { ...(options.headers ?? {}) };
+  if (auth?.cookie) headers.cookie = auth.cookie;
+  if (auth?.csrf && options.method && options.method !== 'GET') headers['x-csrf-token'] = auth.csrf;
+  if (options.body && !headers['content-type']) headers['content-type'] = 'application/json';
+  return fetch(`${base}${route}`, { ...options, headers });
+}
+
+test('community page is public, anonymous, and explains 3DS pairing', async t => {
+  const { base } = await startApp(t);
+  const response = await fetch(`${base}/community`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-security-policy'), /script-src 'self'/);
+  const body = await response.text();
+  assert.match(body, /tap your trainer profile on the bottom screen/);
+  assert.match(body, /Not affiliated with Nintendo/);
+  assert.doesNotMatch(body, /Lindsey|LWS/);
+});
+
+test('pairing gates private boards and forum writes while public help remains readable', async t => {
+  const { base, identityStore } = await startApp(t);
+  const enrollment = await identityStore.enroll();
+  const auth = await pair(base, identityStore, enrollment);
+
+  const noCsrf = await request(base, '/api/community/topics', { cookie: auth.cookie }, {
+    method: 'POST', body: JSON.stringify({ category: 'general', title: 'No CSRF', body: 'Should fail' })
+  });
+  assert.equal(noCsrf.status, 403);
+
+  const staffOnly = await request(base, '/api/community/topics', auth, {
+    method: 'POST', body: JSON.stringify({ category: 'releases', title: 'Fake release', body: 'Nope' })
+  });
+  assert.equal(staffOnly.status, 403);
+
+  const help = await request(base, '/api/community/topics', auth, {
+    method: 'POST', body: JSON.stringify({ category: 'installation-help', title: 'Recover from E71', body: 'Check the **stage** and `gpsp-debug.log`.' })
+  });
+  assert.equal(help.status, 201);
+
+  const privateTopic = await request(base, '/api/community/topics', auth, {
+    method: 'POST', body: JSON.stringify({ category: 'beta-testing', title: 'Private beta result', body: '<img src=x onerror=alert(1)>\n\n```js\nconst safe = true;\n```' })
+  });
+  assert.equal(privateTopic.status, 201);
+  const privateId = (await privateTopic.json()).id;
+
+  const anonymous = await (await fetch(`${base}/api/community/topics`)).json();
+  assert.equal(anonymous.topics.some(topic => topic.id === privateId), false);
+  assert.equal(anonymous.topics.some(topic => topic.title === 'Recover from E71'), true);
+  assert.equal((await fetch(`${base}/api/community/topics/${privateId}`)).status, 404);
+
+  const pairedTopic = await (await request(base, `/api/community/topics/${privateId}`, auth)).json();
+  assert.equal('author_identity_id' in pairedTopic.topic, false);
+  assert.match(pairedTopic.topic.body_html, /&lt;img/);
+  assert.doesNotMatch(pairedTopic.topic.body_html, /<img/i);
+  assert.match(pairedTopic.topic.body_html, /<pre><code class="language-js">/);
+
+  const reply = await request(base, `/api/community/topics/${privateId}/replies`, auth, {
+    method: 'POST', body: JSON.stringify({ body: 'Retested on an Old 3DS XL.' })
+  });
+  assert.equal(reply.status, 201);
+  const replyId = (await reply.json()).id;
+  const withReply = await (await request(base, `/api/community/topics/${privateId}`, auth)).json();
+  assert.equal('author_identity_id' in withReply.topic.posts[0], false);
+  assert.equal((await request(base, `/api/community/posts/${replyId}`, auth, { method: 'PATCH', body: JSON.stringify({ body: '' }) })).status, 400);
+  assert.equal((await request(base, `/api/community/topics/${privateId}/subscription`, auth, { method: 'PUT', body: JSON.stringify({ subscribed: false }) })).status, 200);
+  assert.equal((await request(base, '/api/community/reports', auth, { method: 'POST', body: JSON.stringify({ postId: replyId, reason: 'Contains private information' }) })).status, 201);
+});
+
+test('new defects stay paired-only until a moderator confirms them', async t => {
+  const { base, identityStore } = await startApp(t);
+  const enrollment = await identityStore.enroll();
+  const auth = await pair(base, identityStore, enrollment);
+  const createdResponse = await request(base, '/api/community/topics', auth, {
+    method: 'POST', body: JSON.stringify({
+      category: 'bugs-defects', title: 'Connection fails after certificate rotation', body: 'Structured report.',
+      defect: { severity: 'high', reproductionSteps: 'Launch while online.', expectedBehavior: 'Status reaches ONLINE.', actualBehavior: 'Status shows E71.', runtimeVersion: '0.4.0', artifactHash: 'a'.repeat(64), consoleModel: 'old-3ds-xl', installMethod: '3dsx', transport: 'wss', diagnosticText: 'stage=3 tls=-9984 verify=00000200' }
+    })
+  });
+  assert.equal(createdResponse.status, 201);
+  const topicId = (await createdResponse.json()).id;
+  assert.equal((await fetch(`${base}/api/community/topics/${topicId}`)).status, 404);
+
+  identityStore.identities.get(enrollment.identityId).isModerator = true;
+  const session = await (await request(base, '/api/community/session', auth)).json();
+  auth.csrf = session.csrfToken;
+  assert.equal(session.moderator, true);
+  const pairedTopic = await (await request(base, `/api/community/topics/${topicId}`, auth)).json();
+  const updated = await request(base, `/api/community/moderation/defects/${pairedTopic.topic.defect_id}`, auth, {
+    method: 'PATCH', body: JSON.stringify({ status: 'confirmed', targetRelease: '0.4.1' })
+  });
+  assert.equal(updated.status, 200);
+
+  const publicTopic = await fetch(`${base}/api/community/topics/${topicId}`);
+  assert.equal(publicTopic.status, 200);
+  assert.equal((await publicTopic.json()).topic.defect_status, 'confirmed');
+});
+
+test('paired topic creation is rate limited per identity', async t => {
+  const { base, identityStore } = await startApp(t);
+  const enrollment = await identityStore.enroll();
+  const auth = await pair(base, identityStore, enrollment);
+  for (let index = 0; index < 61; index += 1) {
+    const rejected = await request(base, '/api/community/topics', { cookie: auth.cookie }, {
+      method: 'POST', body: JSON.stringify({ category: 'general', title: `CSRF abuse ${index}`, body: 'Rejected.' })
+    });
+    assert.equal(rejected.status, 403);
+  }
+  for (let index = 0; index < 5; index += 1) {
+    const response = await request(base, '/api/community/topics', auth, {
+      method: 'POST', body: JSON.stringify({ category: 'general', title: `Rate test ${index}`, body: 'Bounded write.' })
+    });
+    assert.equal(response.status, 201);
+  }
+  const limited = await request(base, '/api/community/topics', auth, {
+    method: 'POST', body: JSON.stringify({ category: 'general', title: 'Rate test blocked', body: 'Must be rejected.' })
+  });
+  assert.equal(limited.status, 429);
+  assert.equal((await limited.json()).error, 'community_rate_limited');
+});
+
+test('moderators can sanction another topic author but cannot sanction themselves', async t => {
+  const { base, identityStore } = await startApp(t);
+  const moderatorEnrollment = await identityStore.enroll();
+  const targetEnrollment = await identityStore.enroll();
+  identityStore.identities.get(moderatorEnrollment.identityId).isModerator = true;
+  const moderator = await pair(base, identityStore, moderatorEnrollment);
+  const target = await pair(base, identityStore, targetEnrollment);
+
+  const moderatorTopic = await request(base, '/api/community/topics', moderator, {
+    method: 'POST', body: JSON.stringify({ category: 'general', title: 'Moderator topic', body: 'Staff authored.' })
+  });
+  const moderatorTopicId = (await moderatorTopic.json()).id;
+  const selfSanction = await request(base, '/api/community/moderation/sanctions', moderator, {
+    method: 'POST', body: JSON.stringify({ topicId: moderatorTopicId, kind: 'read-only', reason: 'Self sanction must fail' })
+  });
+  assert.equal(selfSanction.status, 404);
+
+  const targetTopic = await request(base, '/api/community/topics', target, {
+    method: 'POST', body: JSON.stringify({ category: 'general', title: 'Target topic', body: 'Moderated content.' })
+  });
+  const targetTopicId = (await targetTopic.json()).id;
+  const sanctionResponse = await request(base, '/api/community/moderation/sanctions', moderator, {
+    method: 'POST', body: JSON.stringify({ topicId: targetTopicId, kind: 'read-only', reason: 'Automated moderation test' })
+  });
+  assert.equal(sanctionResponse.status, 201);
+  const sanctionId = (await sanctionResponse.json()).id;
+
+  const targetSession = await (await request(base, '/api/community/session', target)).json();
+  assert.equal(targetSession.sanctions.some(item => item.id === sanctionId && item.kind === 'read-only'), true);
+  const blocked = await request(base, '/api/community/topics', target, {
+    method: 'POST', body: JSON.stringify({ category: 'general', title: 'Blocked topic', body: 'Must not publish.' })
+  });
+  assert.equal(blocked.status, 403);
+
+  assert.equal((await request(base, `/api/community/moderation/sanctions/${sanctionId}`, moderator, { method: 'DELETE' })).status, 200);
+  const restored = await request(base, '/api/community/topics', target, {
+    method: 'POST', body: JSON.stringify({ category: 'general', title: 'Restored topic', body: 'Write access restored.' })
+  });
+  assert.equal(restored.status, 201);
+});

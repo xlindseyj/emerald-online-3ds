@@ -24,12 +24,22 @@ try {
       DELETE FROM security_events WHERE expires_at IS NOT NULL AND expires_at < now() RETURNING 1
     ), expired_audit AS (
       DELETE FROM moderation_audit WHERE expires_at < now() RETURNING 1
+    ), expired_posts AS (
+      DELETE FROM forum_posts WHERE purge_after IS NOT NULL AND purge_after < now() RETURNING 1
+    ), expired_topics AS (
+      DELETE FROM forum_topics WHERE purge_after IS NOT NULL AND purge_after < now() RETURNING 1
+    ), expired_report_evidence AS (
+      UPDATE forum_reports SET reason='[report evidence expired]'
+      WHERE evidence_expires_at < now() AND reason <> '[report evidence expired]' RETURNING 1
     )
     SELECT
       (SELECT count(*)::int FROM expired_pairing) AS pairing_codes,
       (SELECT count(*)::int FROM expired_sessions) AS browser_sessions,
       (SELECT count(*)::int FROM expired_security) AS security_events,
-      (SELECT count(*)::int FROM expired_audit) AS moderation_audit
+      (SELECT count(*)::int FROM expired_audit) AS moderation_audit,
+      (SELECT count(*)::int FROM expired_posts) AS forum_posts,
+      (SELECT count(*)::int FROM expired_topics) AS forum_topics,
+      (SELECT count(*)::int FROM expired_report_evidence) AS report_evidence
   `);
   console.log(JSON.stringify({ ok: true, deleted: result.rows[0] }));
 } finally {

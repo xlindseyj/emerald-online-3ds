@@ -49,7 +49,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.4.0"
+#define APP_VERSION "0.5.0"
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -132,6 +132,8 @@ static uint32_t onlineTlsVerify;
 static int onlineTlsFutureSkew;
 static char lastChatName[13];
 static char lastChatText[81];
+static char browserPairingStatus[40];
+static uint64_t browserPairingStatusUntil;
 
 static void debugNetworkFailure(void) {
     FILE* file = fopen(DEBUG_LOG_PATH, "a");
@@ -918,6 +920,19 @@ static void parseOnlineLine(char* line) {
         if (!saveIdentity()) onlineLastError = EIO;
         return;
     }
+    if (jsonTypeIs(line, "browser_pairing_approved")) {
+        strcpy(browserPairingStatus, "BROWSER PAIRED");
+        browserPairingStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    if (jsonTypeIs(line, "error")) {
+        char code[40] = {};
+        if (jsonString(line, "code", code, sizeof(code)) && strstr(code, "pairing")) {
+            strcpy(browserPairingStatus, "PAIRING CODE EXPIRED");
+            browserPairingStatusUntil = osGetTime() + 5000;
+        }
+        return;
+    }
     if (jsonTypeIs(line, "chat")) {
         jsonString(line, "name", lastChatName, sizeof(lastChatName));
         jsonString(line, "text", lastChatText, sizeof(lastChatText));
@@ -1131,6 +1146,37 @@ static void openChat(void) {
     onlineSend(packet);
 }
 
+static void openBrowserPairing(void) {
+    if (onlineMode != ONLINE_ACTIVE || !identityId[0]) return;
+    SwkbdState keyboard;
+    char entered[16] = {}, compact[9] = {}, code[10] = {};
+    swkbdInit(&keyboard, SWKBD_TYPE_NORMAL, 1, 9);
+    swkbdSetHintText(&keyboard, "Enter the 8-character browser code");
+    if (swkbdInputText(&keyboard, entered, sizeof(entered)) != SWKBD_BUTTON_CONFIRM) return;
+    size_t length = 0;
+    for (const char* at = entered; *at && length < sizeof(compact) - 1; ++at) {
+        if (*at == '-' || *at == ' ') continue;
+        char value = (char) toupper((unsigned char) *at);
+        if (!((value >= 'A' && value <= 'Z' && value != 'I' && value != 'O') || (value >= '2' && value <= '9'))) {
+            strcpy(browserPairingStatus, "INVALID PAIRING CODE");
+            browserPairingStatusUntil = osGetTime() + 5000;
+            return;
+        }
+        compact[length++] = value;
+    }
+    if (length != 8) {
+        strcpy(browserPairingStatus, "INVALID PAIRING CODE");
+        browserPairingStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    snprintf(code, sizeof(code), "%.4s-%.4s", compact, compact + 4);
+    char packet[80];
+    snprintf(packet, sizeof(packet), "{\"type\":\"pair_browser_approve\",\"code\":\"%s\"}\n", code);
+    if (onlineSend(packet)) strcpy(browserPairingStatus, "PAIRING APPROVAL SENT");
+    else strcpy(browserPairingStatus, "PAIRING SEND FAILED");
+    browserPairingStatusUntil = osGetTime() + 5000;
+}
+
 static void drawText(float x, float y, float size, uint32_t color, const char* format, ...) {
     char line[192];
     va_list args;
@@ -1191,7 +1237,9 @@ static void drawBottom(void) {
     if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), "MAP %u-%u   TILE %d,%d", presence.mapGroup, presence.mapNum, presence.x, presence.y);
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
         if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
+        else if (browserPairingStatus[0] && osGetTime() < browserPairingStatusUntil) drawText(75, 91, .32f, C2D_Color32(255,220,130,255), "%s", browserPairingStatus);
         else if (onlineMode != ONLINE_ACTIVE) drawText(68, 91, .30f, C2D_Color32(180,205,200,255), "%s:%u E%d S%d", serverHost, serverPort, onlineLastError, onlineProtocolStage);
+        else drawText(80, 91, .30f, C2D_Color32(180,205,200,255), "TAP PROFILE TO PAIR BROWSER");
     C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
     drawText(20, 110, .38f, C2D_Color32(160,232,255,255), "NEARBY  %d", remoteCount);
@@ -1410,7 +1458,8 @@ int main(void) {
             touchPosition touch;
             hidTouchRead(&touch);
             if (!partyPage && touch.py >= 202) sendEmote(touch.px / 81);
-            else if (!partyPage) openChat();
+            else if (!partyPage && touch.py >= 46 && touch.py < 90) openBrowserPairing();
+            else if (!partyPage && touch.px >= 165 && touch.py >= 104) openChat();
         }
         retro_run();
         static bool firstFrameLogged;

@@ -31,6 +31,10 @@ test('gpSP replacement retains saves, Emerald memory reads, and online protocol'
   assert.match(gpspSource, /jsonTypeIs\(line, "snapshot"\)/);
   assert.match(gpspSource, /sendEmote/);
   assert.match(gpspSource, /openChat/);
+  assert.match(gpspSource, /openBrowserPairing/);
+  assert.match(gpspSource, /pair_browser_approve/);
+  assert.match(gpspSource, /browser_pairing_approved/);
+  assert.match(gpspSource, /TAP PROFILE TO PAIR BROWSER/);
   assert.match(gpspSource, /getaddrinfo\(serverHost/);
   assert.match(gpspSource, /serverAddressResolvedAt/);
 });

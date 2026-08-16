@@ -97,3 +97,24 @@ test('protocol v2 rejects an invalid identity token', async t => {
   socket.write(`${JSON.stringify({ type: 'hello', version: 2, name: 'May', identity: enrolled.identityId, token: '0'.repeat(64) })}\n`);
   assert.equal((await message(item => item.type === 'error')).code, 'authentication_failed');
 });
+
+test('authenticated 3DS approval rotates a five-minute code into a browser session', async t => {
+  const identityStore = new MemoryIdentityStore();
+  const enrolled = await identityStore.enroll();
+  const pairing = await identityStore.startPairing();
+  const presence = createPresenceServer({ identityStore });
+  await new Promise(resolve => presence.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => presence.server.close());
+  const socket = await connect(presence.server.address().port);
+  t.after(() => socket.destroy());
+  const message = nextMessage(socket);
+  socket.write(`${JSON.stringify({ type: 'hello', version: 2, name: 'May', identity: enrolled.identityId, token: enrolled.token })}\n`);
+  await message(item => item.type === 'welcome');
+  socket.write(`${JSON.stringify({ type: 'pair_browser_approve', code: pairing.code })}\n`);
+  assert.equal((await message(item => item.type === 'browser_pairing_approved')).code, pairing.code);
+  const browser = await identityStore.consumePairing(pairing.code, pairing.requestToken);
+  assert.equal(browser.identityId, enrolled.identityId);
+  assert.match(browser.token, /^[a-f0-9]{64}$/);
+  assert.equal((await identityStore.authenticateBrowserSession(browser.token)).fingerprint, enrolled.fingerprint);
+  assert.equal(await identityStore.consumePairing(pairing.code, pairing.requestToken), null);
+});

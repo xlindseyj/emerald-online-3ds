@@ -1,10 +1,10 @@
 # Hardware smoke test
 
-The current 0.4.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data.
+The current 0.5.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data.
 
-- 3DSX SHA-256: `386e5a01b18b3d96e2f777de78b4c1961be1f5e286d10bcd9a0c9b679697c9f5`
-- CIA SHA-256: `42c20d312d277627a969397b7c45fff94fe4dfdb6ecf1463568c5b298fe4b96d`
-- Corresponding-source SHA-256: `9a9788ab96a489a947bd1d706c3fb6231e27966bae8c063381f7fdc93ae96e5c`
+- 3DSX SHA-256: `cf41213268f190603f6616c1fcb79f56790537f00a2dd4e48c334361083d68d6`
+- CIA SHA-256: `d4b32e28b8bf79360897208a660b7f8b9e68d1255c062603890219125d7c0ced`
+- Corresponding-source SHA-256: `0a2a1113444d5591bb6ae7bc25bf42af4c917c96321187718f23035790367806`
 - Private avatar atlas SHA-256: `ab3f08aec7b8598f383e5032e22d3ea2a5234522230d460b908a2e3517d753d8`
 
 ## Latest physical result (2026-08-15, protocol-v2 WSS test)
@@ -16,13 +16,14 @@ The current 0.4.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.c
 - Bottom screen: pass. The 320x240 emerald dashboard renders correctly.
 - Top screen: full 400x240 coverage and vertical orientation are confirmed. The latest uploaded build removes the remaining horizontal mirror; normal left-to-right orientation still needs one final confirmation.
 - LAN network: pass. The Old 3DS XL reports `ONLINE`; server telemetry confirms one connected client, one authenticated client, and one accepted protocol `hello`.
-- Public WSS network: the first physical 0.4.0 runs reached online startup but reported `E71` (`EPROTO`). The first fix made HTTP header-name parsing case-insensitive, but the error remained. An exact production-WSS run in Azahar then reproduced `stage=3 tls=-9984 verify=00000200`: the 3DS local wall clock is interpreted as UTC, so Cloudflare's newly issued certificate appeared four hours in the future. The current build accepts only `MBEDTLS_X509_BADCERT_FUTURE`, only when the not-before time is within the 14-hour civil-timezone range; hostname, signature, trust-chain, expiry, and all other checks remain mandatory. The same gpSP build subsequently enrolled through `wss://live.emeraldonline3ds.com/game` in Azahar and its synthetic identity was deleted. Physical transfer and acceptance are pending ftpd availability.
+- Public WSS network: the first physical 0.4.0 runs reached online startup but reported `E71` (`EPROTO`). The first fix made HTTP header-name parsing case-insensitive, but the error remained. An exact production-WSS run in Azahar then reproduced `stage=3 tls=-9984 verify=00000200`: the 3DS local wall clock is interpreted as UTC, so Cloudflare's newly issued certificate appeared four hours in the future. The current build accepts only `MBEDTLS_X509_BADCERT_FUTURE`, only when the not-before time is within the 14-hour civil-timezone range; hostname, signature, trust-chain, expiry, and all other checks remain mandatory. The 0.5.0 gpSP build enrolled through `wss://live.emeraldonline3ds.com/game` both before and after the Gate 2 deployment, and each synthetic identity was deleted. The physical device still has the earlier header-only build; 0.5.0 transfer and acceptance are pending ftpd availability.
 - Overworld RAM bridge: pass. The dashboard reports map/tile data and the server confirms one positioned trainer, one active room, and multiple accepted state updates.
 - Authentic remote avatars: Brendan rendering is confirmed on the physical Old 3DS XL using a synthetic same-map peer. The private build found Brendan graphics/palette at ROM offsets `0x4975F8`/`0x4987F8` and May at `0x4A3078`/`0x4A4278`, then produced an SD-only 18-frame atlas. SaveBlock2 also correctly published the test save's selected boy avatar. May and a two-physical-client exchange remain to be confirmed.
-- Automated suite: 19 passing, one PostgreSQL test skipped unless `TEST_DATABASE_URL` is supplied. The same lifecycle has also passed against the live PostgreSQL database over public WSS.
-- Headless emulator: pass with official Azahar 2126.0 on Linux. The 0.4.0 smoke persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, and republished state. Physical hardware remains authoritative for the mbedTLS/SD path.
+- Automated suite: 25 passing, with two PostgreSQL tests skipped unless `TEST_DATABASE_URL` is supplied. Both durable-store tests pass against disposable PostgreSQL 17, including migration 002 and the complete pairing/forum/defect/report/sanction lifecycle.
+- Live community: pass. A synthetic production-WSS 3DS identity approved a browser pairing, created a paired-only beta topic and reply, remained hidden to anonymous readers, and exposed no internal identity UUID. The topic and identity were then removed and the database confirmed zero synthetic rows.
+- Headless emulator: pass with official Azahar 2126.0 on Linux. The 0.5.0 smoke persisted a server-issued identity, retained it across reconnect, stayed online while stationary, automatically reconnected, republished state, and separately enrolled through the real production WSS endpoint. Physical hardware remains authoritative for the mbedTLS/SD path.
 
-Current artifacts are `993216` bytes (CIA), `1251204` bytes (3DSX), `2233745` bytes (corresponding source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
+Current artifacts are `994240` bytes (CIA), `1252212` bytes (3DSX), `2234726` bytes (corresponding source), and `4257` bytes (`avatars.t3x`). The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
 
 ## Automated Linux verification
 
@@ -43,12 +44,13 @@ Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. W
 4. Confirm the top image fills the complete 400x240 display and the lower emerald dashboard fills 320x240 without blue gaps, clipping, or flicker. Record the dashboard FPS after the intro and again in the overworld.
 5. Start or continue a save and enter the overworld. Confirm the lower screen changes from `Waiting for the overworld` to plausible map and tile values, which update as you walk.
 6. With Wi-Fi connected, confirm the mode automatically reaches `ONLINE` through `live.emeraldonline3ds.com:443`. On first enrollment, write down the one-time recovery code and confirm `identity.cfg` appears beside `online.cfg`. Press `X` to disconnect (`OFFLINE`) and again to reconnect with the same displayed fingerprint.
-7. Tap the lower screen, enter a short message in the 3DS keyboard, and press Send. Confirm the keyboard closes and the message appears on the lower panel.
-8. With another client in the same map, tap each lower-edge emote button: `WAVE`, `BATTLE`, `TRADE`, and `GG`. Confirm the matching colored indicator appears briefly above your trainer on the other client. Confirm rapidly repeated taps are rate-limited without interrupting play.
-9. Leave the player stationary online for at least 45 seconds and confirm the status remains `ONLINE`.
-10. Disable Wi-Fi briefly. Confirm the panel changes to `RETRYING` while Emerald keeps running. Restore Wi-Fi and confirm it returns to `ONLINE` without pressing X or moving.
-11. Press `Y` and confirm the native party page shows each party nickname, level, and current/maximum HP. Damage or heal a party member and confirm HP updates without reopening the page. Press `Y` again to return online status.
-12. Save through Emerald's normal menu, close using HOME, relaunch, and confirm the save loads.
+7. Open `https://emeraldonline3ds.com/community` in a browser and choose Pair. While the game is online, tap the trainer profile card on the bottom screen, enter the displayed five-minute code, and confirm the browser becomes paired. Verify Beta Testing is readable and create then delete one test topic.
+8. Tap the chat panel, enter a short message in the 3DS keyboard, and press Send. Confirm the keyboard closes and the message appears on the lower panel.
+9. With another client in the same map, tap each lower-edge emote button: `WAVE`, `BATTLE`, `TRADE`, and `GG`. Confirm the matching colored indicator appears briefly above your trainer on the other client. Confirm rapidly repeated taps are rate-limited without interrupting play.
+10. Leave the player stationary online for at least 45 seconds and confirm the status remains `ONLINE`.
+11. Disable Wi-Fi briefly. Confirm the panel changes to `RETRYING` while Emerald keeps running. Restore Wi-Fi and confirm it returns to `ONLINE` without pressing X or moving.
+12. Press `Y` and confirm the native party page shows each party nickname, level, and current/maximum HP. Damage or heal a party member and confirm HP updates without reopening the page. Press `Y` again to return online status.
+13. Save through Emerald's normal menu, close using HOME, relaunch, and confirm the save loads.
 
 ## CIA QR installation
 

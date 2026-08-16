@@ -55,7 +55,7 @@ docker run --rm \
 docker run --rm -v "${project_root}:/project" -w /project "${packaging_image}" sh -lc \
   "/opt/devkitpro/devkitARM/bin/arm-none-eabi-strip gpsp-runtime/emerald-online-3ds.elf -o gpsp-runtime/emerald-online-3ds-stripped.elf && \
    /opt/devkitpro/tools/bin/bannertool makebanner -i assets/emerald-online-3ds-banner.png -a generated/tooling/mgba-${mgba_commit}/bios.wav -o gpsp-runtime/emerald-online-3ds.bnr && \
-   /opt/devkitpro/tools/bin/makerom -f cia -o gpsp-runtime/emerald-online-3ds.cia -rsf generated/tooling/mgba-${mgba_commit}/emerald-online-3ds.rsf -target t -exefslogo -elf gpsp-runtime/emerald-online-3ds-stripped.elf -icon gpsp-runtime/emerald-online-3ds.smdh -banner gpsp-runtime/emerald-online-3ds.bnr -major 0 -minor 4 -micro 0"
+   /opt/devkitpro/tools/bin/makerom -f cia -o gpsp-runtime/emerald-online-3ds.cia -rsf generated/tooling/mgba-${mgba_commit}/emerald-online-3ds.rsf -target t -exefslogo -elf gpsp-runtime/emerald-online-3ds-stripped.elf -icon gpsp-runtime/emerald-online-3ds.smdh -banner gpsp-runtime/emerald-online-3ds.bnr -major 0 -minor 5 -micro 0"
 
 cp "${project_root}/gpsp-runtime/emerald-online-3ds.cia" "${release_dir}/emerald-online-3ds.cia"
 cp "${project_root}/gpsp-runtime/emerald-online-3ds.3dsx" "${release_dir}/emerald-online-3ds.3dsx"

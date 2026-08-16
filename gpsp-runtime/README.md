@@ -29,7 +29,7 @@ protocol hello and publishes live overworld map/tile state. The dedicated
 frontend binds gpSP's exported EWRAM and its offset-corrected IWRAM directly,
 with libretro memory descriptors retained as a compatible secondary path.
 
-Version 0.4.0 defaults to certificate-validated WSS at
+Version 0.5.0 defaults to certificate-validated WSS at
 `wss://live.emeraldonline3ds.com/game`. It requests a server-issued v2 identity
 on first connection, displays the one-time recovery code for the enrollment
 session, and reuses the saved credential after reconnects. Preserve

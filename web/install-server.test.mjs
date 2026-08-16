@@ -22,18 +22,20 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   const installPort = 18080;
   const gamePort = 18210;
   const statusPort = 18211;
+  const localEnvironment = { ...process.env };
+  for (const name of ['DATABASE_URL', 'PGHOST', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'DATABASE_CA_PATH', 'IDENTITY_PEPPER']) delete localEnvironment[name];
   const presence = spawn(process.execPath, ['server/src/server.mjs'], {
     cwd: root,
     windowsHide: true,
     stdio: 'ignore',
-    env: { ...process.env, GAME_HOST: '127.0.0.1', GAME_PORT: String(gamePort), HEALTH_PORT: String(statusPort) }
+    env: { ...localEnvironment, GAME_HOST: '127.0.0.1', GAME_PORT: String(gamePort), HEALTH_PORT: String(statusPort) }
   });
   const web = spawn(process.execPath, ['web/install-server.mjs'], {
     cwd: root,
     windowsHide: true,
     stdio: 'ignore',
     env: {
-      ...process.env,
+      ...localEnvironment,
       INSTALL_HOST: '127.0.0.1',
       INSTALL_PORT: String(installPort),
       GAME_UPSTREAM_PORT: String(gamePort),
