@@ -92,6 +92,16 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(gpspSource, /"HI", "!", "<>", "GG"/);
 });
 
+test('gpSP frontend suppresses remote trainers outside the verified Emerald overworld', () => {
+  assert.match(gpspSource, /EMERALD_GMAIN_OFFSET = 0x22C0/);
+  assert.match(gpspSource, /EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET \+ 0x4/);
+  assert.match(gpspSource, /EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET \+ 0x439/);
+  assert.match(gpspSource, /EMERALD_CB2_OVERWORLD_THUMB = 0x080867F1/);
+  assert.match(gpspSource, /callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle/);
+  assert.match(gpspSource, /if \(!gbaEwram \|\| !gbaIwram \|\| !isEmeraldOverworld\(\)\) return current/);
+  assert.match(gpspSource, /if \(!isEmeraldOverworld\(\) \|\| !presence\.valid\) return/);
+});
+
 test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregates', () => {
   assert.match(gpspSource, /STATS_CONFIG_PATH/);
   assert.match(gpspSource, /PLAYER STATS & CONSENT/);

@@ -54,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.8.2"
+#define APP_VERSION "0.8.3"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
@@ -486,13 +486,28 @@ static uint32_t read32(const uint8_t* memory, size_t offset) {
     return value;
 }
 
+// Supported Pokemon Emerald (US) runtime symbols. The private-ROM validator
+// accepts only the exact BPEE revision these addresses describe. Function
+// pointers are Thumb addresses, so callback2 stores CB2_Overworld + 1.
+static constexpr size_t EMERALD_GMAIN_OFFSET = 0x22C0;
+static constexpr size_t EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET + 0x4;
+static constexpr size_t EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET + 0x439;
+static constexpr uint32_t EMERALD_CB2_OVERWORLD_THUMB = 0x080867F1;
+
+static bool isEmeraldOverworld(void) {
+    if (!gbaIwram) return false;
+    const uint32_t callback2 = read32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET);
+    const bool inBattle = (gbaIwram[EMERALD_GMAIN_FLAGS_OFFSET] & 0x02) != 0;
+    return callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle;
+}
+
 static char decodeEmerald(uint8_t value);
 static void onlineDisconnect(void);
 
 static GamePresence readPresence(void) {
     static GamePresence previous = {false, 0, 0, 0, 0, 1};
     GamePresence current = {false, 0, 0, 0, 0, (uint8_t) (previous.facing ? previous.facing : 1)};
-    if (!gbaEwram || !gbaIwram) return current;
+    if (!gbaEwram || !gbaIwram || !isEmeraldOverworld()) return current;
     uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
     if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return current;
     size_t offset = saveBlock - 0x02000000;
@@ -1933,7 +1948,10 @@ static void drawTop(void) {
     C2D_TargetClear(topTarget, C2D_Color32(0,0,0,255));
     C2D_SceneBegin(topTarget);
     if (videoReady) C2D_DrawImageAt(gameImage, 0, 0, 0, NULL, 400.0f / 240.0f, 240.0f / 160.0f);
-    if (!presence.valid) return;
+    // Coordinates remain populated while Emerald is in battles and menus.
+    // Recheck callback2 at draw time so stale presence can never place a
+    // network trainer over a non-overworld framebuffer.
+    if (!isEmeraldOverworld() || !presence.valid) return;
     C2D_TextBufClear(textBuffer);
     for (int i = 0; i < remoteCount; ++i) {
         int dx = remoteTrainers[i].x - presence.x, dy = remoteTrainers[i].y - presence.y;
