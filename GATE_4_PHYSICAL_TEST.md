@@ -4,12 +4,12 @@ Gate 4 remains an experimental feasibility test. Public battle/trade invitations
 
 ## Current artifacts
 
-- Release: `0.8.0`
-- CIA SHA-256: `500169bf7579fe118b39bd79d307c1b95a21ea5b2fcffb201ddf21bad7c94a45`
+- Release: `0.8.1`
+- CIA SHA-256: `012da4236b2018d5e64faefcfedfe786fe207d0b925cf714cf755c534e385c37`
 - 3DSX SHA-256: `33cf8ccda02205ab352b08811ae059cf86b81794c0101481788dc8d49d083b80`
 - Azahar: official 2126.0 AppImage under the ignored `.tools/azahar/` directory
 
-The current prepared bundle is under the ignored `generated/link-test-f8fz-g4lf/` directory and uses room `F8FZ-G4LF`. Its `physical-sd/` tree contains only the release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.
+Create a fresh ignored bundle for each session. Its `physical-sd/` tree contains only the current release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.
 
 ## Recreate a safe bundle
 
@@ -36,7 +36,7 @@ The tool accepts only a 128 KiB Emerald save (or a 128 KiB save with a 512-byte 
 5. Complete one battle and one trade through public WSS. Record FPS/audio, packet counters, both save hashes after clean exit and restart, and the result of interrupting one later session.
 6. If either save differs unexpectedly, stop testing and restore the independent backups. Do not proceed to Gate 5.
 
-## Evidence already repeated on 0.8.0
+## Evidence carried forward from 0.8.0
 
 - All 45 automated tests passed with migrations 001-005 against disposable PostgreSQL 16; no tests were skipped.
 - Normal Azahar online smoke passed identity persistence, reconnect, state republish, movement, chat, and all four emotes.

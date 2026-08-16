@@ -44,7 +44,8 @@
 - [x] Remote trainer rendering foundation, interpolation, emotes, and rate-limited map chat
 - [ ] Link battles/trades (transport, reconnect, safe backups, and a privacy-safe physical/Azahar test bundle pass; real Cable Club battle/trade/save/performance acceptance is still required before invitations are exposed)
 - [x] Browser pairing, paired forum authorization, defect reports, sanctions, moderation UI, device identity, PostgreSQL, and TLS
-- [ ] Add service dashboards, load tests, and a MinIO KMS; the NAT-friendly Kubernetes deployment, persistence, tested compressed backups, and connection/rate limits are operating, but backup encryption at rest is not yet claimed
+- [x] Add privacy-safe Prometheus service metrics, an authenticated Grafana dashboard, and bounded concurrent load tests
+- [ ] Add a MinIO KMS; the NAT-friendly Kubernetes deployment, persistence, tested compressed backups, and connection/rate limits are operating, but backup encryption at rest is not yet claimed
 - [ ] Confirm May plus authentic avatars in a physical two-client test, test New 3DS, and finalize release packaging (Brendan is confirmed on Old 3DS XL with a synthetic peer)
 
 The networking protocol should evolve additively with explicit version negotiation. Never upload ROM-derived content to the server.

@@ -1,0 +1,83 @@
+[
+  {
+    "key": "welcome-start-here",
+    "kind": "welcome",
+    "category": "announcements",
+    "title": "Welcome to Emerald Online 3DS — start here",
+    "pinned": true,
+    "locked": false,
+    "body": "Welcome to the official Emerald Online 3DS community. This is an independent, fan-made homebrew beta for people using their own legally obtained Pokémon Emerald cartridge dump.\n\n## Start here\n\n- [Install on a Nintendo 3DS](/community?guide=install-on-3ds)\n- [Test with Azahar on a computer](/community?guide=test-with-azahar)\n- [Open the live service dashboard](/status)\n- [Download the current ROM-free CIA](/emerald-online-3ds.cia)\n- [Verify the current files](/SHA256SUMS)\n\n## Community safety\n\nNever upload or post ROMs, saves, screenshots containing private save information, `identity.cfg`, recovery codes, passwords, or console keys. Keep discussion respectful and focused on reproducible results. This project does not sell or provide Nintendo or Pokémon game files.\n\nOfficial posts have an OFFICIAL badge and no player identity. Ordinary forum participation requires pairing a running 3DS so moderation can limit abuse without collecting an email address."
+  },
+  {
+    "key": "install-on-3ds",
+    "kind": "guide",
+    "category": "installation-help",
+    "title": "Install Emerald Online 3DS on a Nintendo 3DS",
+    "pinned": true,
+    "locked": false,
+    "body": "![FBI Remote Install QR for the current ROM-free CIA](/qr.svg)\n\nThis guide installs the original homebrew runtime. It does not include Pokémon Emerald, a save, console keys, or copyrighted game assets. You must use your own legally obtained cartridge dump.\n\n## Before you begin\n\n- Use a homebrew-capable 3DS with either FBI for CIA installation or the Homebrew Launcher for 3DSX use.\n- Back up the entire `sd:/3ds/emerald-online-3ds/` folder and your save.\n- Keep `emerald.gba`, save files, `identity.cfg`, `stats.cfg`, and `avatars.t3x` private.\n\n## CIA / HOME Menu method\n\n- Open FBI, choose Remote Install, then Scan QR Code.\n- Scan the QR above or download the [current CIA](/emerald-online-3ds.cia) and install it manually.\n- Reinstall through FBI when updating; copying a CIA onto the SD card does not update an already installed title.\n\n## 3DSX / Homebrew Launcher method\n\n- Download the [current 3DSX](/emerald-online-3ds.3dsx).\n- Place it at `sd:/3ds/emerald-online-3ds/emerald-online-3ds.3dsx`.\n- Keep your private ROM at `sd:/3ds/emerald-online-3ds/emerald.gba`.\n\n## Connect to the public service\n\nThe normal production endpoint is `wss://live.emeraldonline3ds.com/game`. A generated `online.cfg` may override it. Preserve an existing `identity.cfg` during updates so the same anonymous player identity reconnects. Launch the game and wait for ONLINE on the lower screen.\n\nIf it fails, copy all four diagnostic lines or the safe error code into Installation Help. Never post the identity token or recovery code."
+  },
+  {
+    "key": "test-with-azahar",
+    "kind": "guide",
+    "category": "installation-help",
+    "title": "Test Emerald Online 3DS with Azahar on a computer",
+    "pinned": true,
+    "locked": false,
+    "body": "![Emerald Online lower-screen dashboard running in Azahar](/release-media/online-dashboard.png)\n\nAzahar can test startup, the lower-screen interface, identity persistence, public WSS connectivity, reconnect behavior, chat, and emotes before copying files to a physical console. Emulator results do not replace Old/New 3DS testing for performance, Wi-Fi, touch, SD writes, audio, or HOME lifecycle.\n\n## Setup\n\n- Install the current official Azahar release from the project's official distribution source.\n- Download the [current 3DSX](/emerald-online-3ds.3dsx).\n- Create an isolated Azahar SD profile and place the 3DSX under `sdmc/3ds/emerald-online-3ds/`.\n- Add your own private `emerald.gba` and optional private save inside that isolated application folder. Do not upload them here.\n- Use the normal public endpoint `wss://live.emeraldonline3ds.com/game`.\n\n## What to test\n\n- The title starts, the lower screen reports ONLINE, and restarting preserves the same anonymous identity.\n- The client stays connected while stationary, reconnects after a brief interruption, and republishes its position.\n- Page cycling, pairing, chat, and emotes work without exposing ROM/save data.\n\n## Experimental Cable Club warning\n\nLink rooms remain an explicit Gate 4 feasibility test. Use independent save backups, a fresh private room code, and a progressed save. Do not claim battles or trades work until battle, trade, interruption, save-integrity, FPS, and audio acceptance all pass."
+  },
+  {
+    "key": "live-service-status",
+    "kind": "status",
+    "category": "service-status",
+    "title": "Live service status and public URLs",
+    "pinned": true,
+    "locked": false,
+    "body": "The [live service dashboard](/status) checks the website, community/database path, multiplayer presence gateway, and public release files. It shows a green Operational or red Outage indicator for each service and the time of the latest check.\n\n## Public URLs\n\n- Website and installer: [https://emeraldonline3ds.com/](https://emeraldonline3ds.com/)\n- Community forums: [https://emeraldonline3ds.com/community](https://emeraldonline3ds.com/community)\n- Multiplayer gateway: `wss://live.emeraldonline3ds.com/game`\n- CIA: [https://emeraldonline3ds.com/emerald-online-3ds.cia](https://emeraldonline3ds.com/emerald-online-3ds.cia)\n- 3DSX: [https://emeraldonline3ds.com/emerald-online-3ds.3dsx](https://emeraldonline3ds.com/emerald-online-3ds.3dsx)\n- Code-only runtime source: [https://emeraldonline3ds.com/source](https://emeraldonline3ds.com/source)\n- Checksums: [https://emeraldonline3ds.com/SHA256SUMS](https://emeraldonline3ds.com/SHA256SUMS)\n\nA green web check does not prove physical-console compatibility. Report physical results separately with console model, install method, release version, and safe diagnostics."
+  },
+  {
+    "key": "beta-testing-checklist",
+    "kind": "guide",
+    "category": "beta-testing",
+    "title": "Beta testing checklist and useful evidence",
+    "pinned": true,
+    "locked": false,
+    "body": "Use a backup and test one change at a time. Include release version, console model or Azahar version, CIA/3DSX install method, public WSS or LAN transport, result, and the exact safe diagnostic lines.\n\n## Useful acceptance checks\n\n- Clean launch and shutdown; 60 FPS/audio observations on real hardware.\n- ONLINE, stationary keepalive, reconnect, position, chat, emotes, and page navigation.\n- Pairing, privacy controls, forum access, consented statistics, and complete deletion.\n- Save hash before and after any experimental link test.\n\nDo not attach ROMs, saves, identity files, recovery codes, private IP addresses, or screenshots containing personal/save information. Emulator passes are valuable but must be labeled Emulator."
+  },
+  {
+    "key": "development-source-boundaries",
+    "kind": "guide",
+    "category": "development-code",
+    "title": "Development, source, licensing, and privacy boundaries",
+    "pinned": true,
+    "locked": false,
+    "body": "The public [3DS runtime source archive](/source) contains the runtime frontend, modified gpSP source, Makefiles, version marker, and GPL text required for the distributed binary. It intentionally excludes server operations, Kubernetes manifests, Markdown handoffs, screenshots, branding assets, private addresses, and credentials.\n\nContributions must not include ROM bytes, extracted sprites/audio, saves, console keys, identity credentials, or copied proprietary code. Describe clean-room behavior and tests rather than uploading game assets. Verify every download with [SHA256SUMS](/SHA256SUMS)."
+  },
+  {
+    "key": "feature-idea-template",
+    "kind": "guide",
+    "category": "feature-ideas",
+    "title": "How to propose a useful feature",
+    "pinned": true,
+    "locked": false,
+    "body": "A strong feature proposal states the player problem, the exact 3DS interaction, what data would leave the console, abuse/privacy risks, Old 3DS performance cost, and a testable acceptance result.\n\nDo not request ROM distribution, copyrighted assets, hidden tracking, public identity exposure, or battle/trade rankings before Gate 4 integrity acceptance. Prefer additive protocol changes that preserve offline play and older clients."
+  },
+  {
+    "key": "multiplayer-help-safety",
+    "kind": "guide",
+    "category": "multiplayer-help",
+    "title": "Multiplayer troubleshooting and experimental-link safety",
+    "pinned": true,
+    "locked": false,
+    "body": "For normal presence, confirm the lower screen says ONLINE and the [live status dashboard](/status) shows the multiplayer gateway Operational. Record the release, transport, console model, and complete safe diagnostic lines.\n\nPresence, chat, and emotes are production beta features. Cable Club battles/trades remain an explicit experiment: use an unpredictable shared room, two authenticated clients, independent save backups, and stop unless both screens show ACTIVE - BACKUP OK. Public invitations and rankings remain disabled until the physical battle/trade, interruption, save-integrity, FPS, and audio checklist passes."
+  },
+  {
+    "key": "general-community-guidelines",
+    "kind": "welcome",
+    "category": "general",
+    "title": "Community guidelines and privacy reminders",
+    "pinned": true,
+    "locked": false,
+    "body": "Be kind, stay on topic, and distinguish confirmed results from guesses. Use the correct board, search before opening a duplicate, and reply with reproducible evidence.\n\nNever share ROMs, saves, console keys, `identity.cfg`, recovery codes, passwords, private network details, or another player's identifying information. Moderators may remove unsafe material and apply warnings, read-only restrictions, or suspensions. Official release, guide, status, and known-issue posts carry an OFFICIAL badge and never impersonate a player."
+  }
+]

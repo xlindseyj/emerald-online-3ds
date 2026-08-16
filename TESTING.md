@@ -1,6 +1,6 @@
 # Hardware smoke test
 
-The current 0.8.0 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
+The current 0.8.1 actual-game runtime defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`. Press `Y` to cycle Online, Party, Bag, Map/Radar, and Player Stats.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
 
@@ -23,7 +23,8 @@ Verify every public artifact against `release/SHA256SUMS`; it is the authoritati
 5. Pair a browser and reply to the official release. Confirm discussion remains available while ordinary paired users cannot create or impersonate a Releases topic.
 6. Fetch the confirmed FPS topic anonymously. Confirm `official_known_issue: true`, `defect_status: confirmed`, no player identity, the device/scene variability description, and the Online off/on workaround after the scene.
 7. List and extract the public source archive. Confirm it contains `LICENSE.txt`, `VERSION.txt`, the runtime frontend, and gpSP source, while containing no `.md`, assets, server/web/deploy directories, private IPs, infrastructure identifiers, or secret-like files.
-8. See `RELEASE_PUBLISHING.md` for the catalog, media, source-package, deployment, and failure-handling contract.
+8. Fetch every entry in `release/community-pages.json` by stable publication key. Confirm the public welcome, install, emulator, and status guides render anonymously; paired-only board guides appear after pairing; official attribution contains no player identity; and a second publisher run preserves every topic ID.
+9. See `RELEASE_PUBLISHING.md` for the catalog, media, source-package, deployment, and failure-handling contract.
 
 Production verification on 2026-08-16 passed with multi-architecture image `sha256:823f92c4753c7d43b74f13d70816a9663e71edbc24214862558f9edc3b5945b2`. Migration 004 and both init containers completed with exit code 0. Anonymous API verification found five official versions (`0.3.2`, `0.5.0`, `0.6.1`, `0.7.1`, `0.8.0`), exactly one pinned topic, two rendered same-origin images on 0.8.0, and no player attribution. A live second publication kept the same 0.8.0 topic ID.
 
@@ -56,7 +57,19 @@ Automated evidence: two isolated Azahar 2126.0 profiles passed four startup/hard
 
 The 0.8.0 rerun passed all 45 tests with zero skips against disposable PostgreSQL 16, the normal Azahar online smoke, and four two-instance link cycles. A fresh production-WSS run delivered 53 synthetic packets, recovered the guest, measured 173.6-200.9 ms round trip (182.9 ms average) with 5.6 ms mean absolute jitter, and deleted both synthetic identities. `npm run prepare:link-test` now builds a shared-room physical SD handoff and isolated Azahar profile under ignored `generated/`; its tests verify strict room/save validation and that no ROM, save, identity, preference, or avatar file enters the physical bundle. See `GATE_4_PHYSICAL_TEST.md`.
 
-1. Preserve an independent copy of both saves. Use release 0.8.0 on both clients.
+## Observability and load testing
+
+1. Fetch the presence status server's `/metrics` directly. Confirm Prometheus text contains connection capacity, current aggregate player/room counts, protocol counters, database readiness, and process memory, but no player name, fingerprint, identity, IP, map, chat, ROM/save, party, or inventory value.
+2. Confirm the production pod annotations advertise port 3211 and `/metrics`, while NetworkPolicy permits that port only from the Prometheus pod in `lindseywebsolutions` and node health probes.
+3. Run `npm run load:test` against loopback. Remote targets must fail without `ALLOW_REMOTE_LOAD_TEST=YES`; client count, duration, and rate must reject values above 48, 60 seconds, and 10 Hz.
+4. The phase baseline is 32 concurrent clients for five seconds at 5 Hz: 768 accepted states, 24,080 received snapshots, 32/32 pongs, zero protocol errors/rejections/authentication failures, and 7.3 ms p95 hello latency.
+5. Query Prometheus for `emerald_online_database_ready`, `emerald_online_authenticated_players`, and `emerald_online_state_updates_total`, then open Grafana dashboard UID `emerald-online-3ds` and confirm all 12 panels resolve.
+
+The v0.8.1 local release suite passed all 50 tests with zero skips against disposable PostgreSQL 17, including migration 006, official community-page idempotency, stable guide URLs, live public-status rendering, release-media serving, metrics privacy, and bounded-load behavior.
+
+## Gate 4 Cable Club acceptance
+
+1. Preserve an independent copy of both saves. Use release 0.8.1 on both clients.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.

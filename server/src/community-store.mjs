@@ -38,7 +38,8 @@ export class PostgresCommunityStore {
         count(p.id) FILTER (WHERE p.deleted_at IS NULL)::int AS reply_count,
         d.id AS defect_id, d.severity, d.status AS defect_status,
         rp.release_version, rp.released_at, (rp.topic_id IS NOT NULL) AS official_release,
-        kip.issue_key AS known_issue_key, (kip.topic_id IS NOT NULL) AS official_known_issue
+        kip.issue_key AS known_issue_key, (kip.topic_id IS NOT NULL) AS official_known_issue,
+        cp.publication_key, cp.kind AS publication_kind, (cp.topic_id IS NOT NULL) AS official_publication
        FROM forum_topics t
        JOIN forum_categories c ON c.slug=t.category_slug
        LEFT JOIN identities i ON i.id=t.author_identity_id
@@ -46,12 +47,13 @@ export class PostgresCommunityStore {
        LEFT JOIN defects d ON d.topic_id=t.id
        LEFT JOIN release_publications rp ON rp.topic_id=t.id
        LEFT JOIN known_issue_publications kip ON kip.topic_id=t.id
+       LEFT JOIN community_publications cp ON cp.topic_id=t.id
        WHERE t.deleted_at IS NULL
          AND ($1::text IS NULL OR t.category_slug=$1)
          AND ($2::text='' OR to_tsvector('simple', t.title || ' ' || t.body_markdown) @@ plainto_tsquery('simple', $2))
          AND (c.visibility='public' OR ($3::uuid IS NOT NULL AND c.visibility='paired') OR $4::boolean
               OR (t.category_slug='bugs-defects' AND d.status IN ('confirmed','fixed','closed')))
-       GROUP BY t.id, c.name, i.fingerprint, d.id, d.severity, d.status, rp.topic_id, rp.release_version, rp.released_at, kip.topic_id, kip.issue_key
+       GROUP BY t.id, c.name, i.fingerprint, d.id, d.severity, d.status, rp.topic_id, rp.release_version, rp.released_at, kip.topic_id, kip.issue_key, cp.topic_id, cp.publication_key, cp.kind
        ORDER BY t.pinned DESC, t.updated_at DESC
        LIMIT $5 OFFSET $6`,
       [category, search, identityId, moderator, bounds.pageSize, bounds.offset]
@@ -68,12 +70,14 @@ export class PostgresCommunityStore {
         d.diagnostic_text, d.status AS defect_status, d.target_release, d.related_change, d.duplicate_of,
         rp.release_version, rp.released_at, rp.source_commit, (rp.topic_id IS NOT NULL) AS official_release,
         kip.issue_key AS known_issue_key, (kip.topic_id IS NOT NULL) AS official_known_issue,
+        cp.publication_key, cp.kind AS publication_kind, (cp.topic_id IS NOT NULL) AS official_publication,
         EXISTS (SELECT 1 FROM forum_subscriptions s WHERE s.topic_id=t.id AND s.identity_id=$2) AS subscribed
        FROM forum_topics t JOIN forum_categories c ON c.slug=t.category_slug
        LEFT JOIN identities i ON i.id=t.author_identity_id
        LEFT JOIN defects d ON d.topic_id=t.id
        LEFT JOIN release_publications rp ON rp.topic_id=t.id
        LEFT JOIN known_issue_publications kip ON kip.topic_id=t.id
+       LEFT JOIN community_publications cp ON cp.topic_id=t.id
        WHERE t.id=$1 AND (t.deleted_at IS NULL OR $3::boolean)
          AND (c.visibility='public' OR ($2::uuid IS NOT NULL AND c.visibility='paired') OR $3::boolean
               OR (t.category_slug='bugs-defects' AND d.status IN ('confirmed','fixed','closed')))`,
@@ -214,6 +218,44 @@ export class PostgresCommunityStore {
       await client.query('COMMIT');
       return { topicId };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async upsertOfficialCommunityPublication({ key, kind, category, title, body, pinned, locked, contentHash }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('emerald-official-community-pages'))");
+      const existing = await client.query('SELECT topic_id FROM community_publications WHERE publication_key=$1 FOR UPDATE', [key]);
+      let topicId = existing.rows[0]?.topic_id;
+      if (topicId) {
+        await client.query(
+          `UPDATE forum_topics SET category_slug=$2,title=$3,body_markdown=$4,pinned=$5,locked=$6,
+             updated_at=now(),deleted_at=NULL,purge_after=NULL WHERE id=$1`,
+          [topicId, category, title, body, pinned, locked]
+        );
+        await client.query(
+          `UPDATE community_publications SET kind=$2,content_sha256=$3,updated_at=now()
+           WHERE publication_key=$1`, [key, kind, contentHash]
+        );
+      } else {
+        const topic = await client.query(
+          `INSERT INTO forum_topics(category_slug,author_identity_id,title,body_markdown,pinned,locked)
+           VALUES($1,NULL,$2,$3,$4,$5) RETURNING id`, [category, title, body, pinned, locked]
+        );
+        topicId = topic.rows[0].id;
+        await client.query(
+          `INSERT INTO community_publications(publication_key,topic_id,kind,content_sha256)
+           VALUES($1,$2,$3,$4)`, [key, topicId, kind, contentHash]
+        );
+      }
+      await client.query('COMMIT');
+      return { topicId };
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async getOfficialCommunityPublication(key, viewer = null) {
+    const result = await this.pool.query('SELECT topic_id FROM community_publications WHERE publication_key=$1', [key]);
+    return result.rowCount ? this.getTopic(result.rows[0].topic_id, viewer) : null;
   }
 
   async updateTopic(topicId, { title, body }, viewer) {
@@ -489,6 +531,8 @@ export class MemoryCommunityStore {
   async upsertOfficialRelease({version,releasedAt,sourceCommit,contentHash,title,body}){let topic=[...this.topics.values()].find(item=>item.release_version===version),id=topic?.id??crypto.randomUUID();topic={...(topic??{}),id,category_slug:'releases',category_name:'Releases',author_identity_id:null,author_fingerprint:null,title,body_markdown:body,pinned:topic?.pinned??false,locked:false,created_at:new Date(releasedAt).getTime(),updated_at:new Date(releasedAt).getTime(),deleted_at:null,release_version:version,released_at:releasedAt,source_commit:sourceCommit,content_sha256:contentHash,official_release:true};this.topics.set(id,topic);return{topicId:id};}
   async pinLatestOfficialRelease(version){let found=false;for(const topic of this.topics.values()){if(topic.official_release){topic.pinned=topic.release_version===version;if(topic.pinned)found=true;}}return found;}
   async upsertOfficialKnownIssue({key,contentHash,title,body,severity,runtimeVersion,artifactHash,consoleModel,installMethod,transport,expectedBehavior,actualBehavior,diagnosticText}){let topic=[...this.topics.values()].find(item=>item.known_issue_key===key),id=topic?.id??crypto.randomUUID();topic={...(topic??{}),id,category_slug:'bugs-defects',category_name:'Bugs and Defects',author_identity_id:null,author_fingerprint:null,title,body_markdown:body,pinned:false,locked:false,created_at:topic?.created_at??Date.now(),updated_at:Date.now(),deleted_at:null,known_issue_key:key,content_sha256:contentHash,official_known_issue:true,defect:{id:topic?.defect?.id??crypto.randomUUID(),status:'confirmed',severity,reproduction_steps:'Observe FPS during and after scene transitions or cutscenes while Online mode is enabled.',expected_behavior:expectedBehavior,actual_behavior:actualBehavior,runtime_version:runtimeVersion,artifact_hash:artifactHash,console_model:consoleModel,install_method:installMethod,transport,diagnostic_text:diagnosticText,target_release:null,related_change:null,duplicate_of:null}};this.topics.set(id,topic);return{topicId:id};}
+  async upsertOfficialCommunityPublication({key,kind,category,title,body,pinned,locked,contentHash}){let topic=[...this.topics.values()].find(item=>item.publication_key===key),id=topic?.id??crypto.randomUUID(),categoryInfo=this.categoriesData.find(item=>item.slug===category);topic={...(topic??{}),id,category_slug:category,category_name:categoryInfo?.name??category,author_identity_id:null,author_fingerprint:null,title,body_markdown:body,pinned,locked,created_at:topic?.created_at??Date.now(),updated_at:Date.now(),deleted_at:null,publication_key:key,publication_kind:kind,content_sha256:contentHash,official_publication:true};this.topics.set(id,topic);return{topicId:id};}
+  async getOfficialCommunityPublication(key,viewer){const topic=[...this.topics.values()].find(item=>item.publication_key===key);return topic?this.getTopic(topic.id,viewer):null;}
   async updateTopic(id,{title,body},viewer){const t=this.topics.get(id);if(!t||!this.canWrite(viewer)||(t.author_identity_id!==viewer?.identity_id&&!viewer?.is_moderator))return false;if(title)t.title=title;if(body)t.body_markdown=body;t.updated_at=Date.now();return true;}
   async deleteTopic(id,viewer){const t=this.topics.get(id);if(!t||(t.author_identity_id!==viewer?.identity_id&&!viewer?.is_moderator))return false;t.deleted_at=Date.now();return true;}
   async createReply(topicId,body,viewer){const t=this.topics.get(topicId);if(!viewer?.identity_id||!this.canWrite(viewer)||!t||!this.canRead(t,viewer)||(t.locked&&!viewer.is_moderator))return null;const id=crypto.randomUUID();this.posts.set(id,{id,topic_id:topicId,author_identity_id:viewer.identity_id,author_fingerprint:viewer.fingerprint,body_markdown:body,created_at:Date.now(),updated_at:Date.now(),deleted_at:null});t.updated_at=Date.now();return{id};}

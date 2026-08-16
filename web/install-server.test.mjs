@@ -19,6 +19,7 @@ async function waitFor(url) {
 
 test('public page exposes the CIA and bridges WebSocket gameplay to the presence server', async t => {
   const root = path.resolve(import.meta.dirname, '..');
+  const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
   const installPort = 18080;
   const gamePort = 18210;
   const statusPort = 18211;
@@ -52,11 +53,17 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(healthBody.ciaUrl, 'https://emeraldonline3ds.com/emerald-online-3ds.cia');
   assert.equal(healthBody.gameUrl, 'wss://live.emeraldonline3ds.com/game');
 
+  const metrics = await fetch(`http://127.0.0.1:${statusPort}/metrics`);
+  assert.equal(metrics.status, 200);
+  assert.match(metrics.headers.get('content-type'), /text\/plain/);
+  assert.match(await metrics.text(), /emerald_online_connection_capacity 64/);
+
   const page = await fetch(base);
   const pageBody = await page.text();
   assert.match(pageBody, /Remote Install/);
   assert.match(pageBody, /live\.emeraldonline3ds\.com/);
-  assert.match(pageBody, /Public multiplayer presence service · v0\.8\.0/);
+  assert.match(pageBody, new RegExp(`Public multiplayer presence service · v${releaseVersion.replaceAll('.', '\\.')}`));
+  assert.match(pageBody, /\.button\{display:inline-block;margin:10px 10px 0 0/);
   assert.match(pageBody, /3DS runtime source \(code only\)/);
   assert.match(pageBody, /Verify downloads/);
   assert.doesNotMatch(pageBody, /Corresponding source|SHA-256 checksums/);
@@ -64,6 +71,8 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.match(pageBody, /does not host, provide, sell, or distribute ROMs/);
   assert.match(pageBody, /Back up your save before use/);
   assert.match(pageBody, /src="\/logo\.png"/);
+  assert.match(pageBody, /release-media\/community-forums\.png/);
+  assert.match(pageBody, /release-media\/online-dashboard\.png/);
   assert.doesNotMatch(pageBody, /Lindsey Web Solutions|LindseyWebSolutions/);
   assert.match(page.headers.get('content-security-policy'), /default-src/);
 
@@ -79,6 +88,29 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   const qr = await fetch(`${base}/qr.svg`);
   assert.match(qr.headers.get('content-type'), /image\/svg\+xml/);
   assert.match(await qr.text(), /<svg/);
+
+  for (const image of ['community-forums.png', 'online-dashboard.png']) {
+    const screenshot = await fetch(`${base}/release-media/${image}`);
+    assert.equal(screenshot.status, 200);
+    assert.equal(screenshot.headers.get('content-type'), 'image/png');
+    assert.ok(Number(screenshot.headers.get('content-length')) > 50000);
+  }
+
+  const publicStatus = await fetch(`${base}/api/public-status`);
+  assert.equal(publicStatus.status, 200);
+  const publicStatusBody = await publicStatus.json();
+  assert.equal(publicStatusBody.ok, true);
+  assert.equal(publicStatusBody.release, releaseVersion);
+  assert.deepEqual(publicStatusBody.services.map(service => service.status), ['operational', 'operational', 'operational', 'operational']);
+  assert.equal(publicStatusBody.services.find(service => service.id === 'multiplayer').url, 'wss://live.emeraldonline3ds.com/game');
+  assert.doesNotMatch(JSON.stringify(publicStatusBody), /192\.168\.|\.svc\.cluster\.local|postgres/i);
+
+  const servicePage = await fetch(`${base}/status`);
+  const servicePageBody = await servicePage.text();
+  assert.equal(servicePage.status, 200);
+  assert.match(servicePageBody, /Service status/);
+  assert.match(servicePageBody, /Operational/);
+  assert.match(servicePageBody, /\/api\/public-status/);
 
   const download = await fetch(`${base}/emerald-online-3ds.cia`);
   assert.equal(download.status, 200);

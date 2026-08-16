@@ -1,6 +1,6 @@
 {
   "name": "emerald-online-3ds",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,6 +18,7 @@
     "smoke:live:gate3": "node tools/live-gate3-smoke.mjs",
     "smoke:live:link": "node tools/live-link-spike.mjs",
     "live:peer": "node tools/live-peer.mjs",
+    "load:test": "node tools/load-test.mjs",
     "prepare:link-test": "node tools/prepare-link-test.mjs",
     "test": "node --test server/test/*.test.mjs web/*.test.mjs"
   },

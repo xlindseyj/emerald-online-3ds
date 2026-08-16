@@ -5,6 +5,7 @@ import pg from 'pg';
 import { PostgresCommunityStore } from '../src/community-store.mjs';
 import { formatReleaseTopic, releaseContentHash, validateReleaseCatalog } from '../src/release-catalog.mjs';
 import { formatKnownIssueTopic, knownIssueContentHash, validateKnownIssueCatalog } from '../src/known-issue-catalog.mjs';
+import { communityPublicationContentHash, validateCommunityPublicationCatalog } from '../src/community-publication-catalog.mjs';
 
 const catalogPath = path.resolve(import.meta.dirname, '..', '..', 'release', 'release-catalog.json');
 const catalog = validateReleaseCatalog(JSON.parse(await fsp.readFile(catalogPath, 'utf8')));
@@ -28,9 +29,13 @@ const knownIssues = validateKnownIssueCatalog(JSON.parse(await fsp.readFile(path
   const topic = formatKnownIssueTopic(issue);
   return { ...issue, ...topic, contentHash: knownIssueContentHash(issue, topic) };
 });
+const communityPublications = validateCommunityPublicationCatalog(JSON.parse(await fsp.readFile(path.resolve(import.meta.dirname, '..', '..', 'release', 'community-pages.json'), 'utf8'))).map(publication => ({
+  ...publication,
+  contentHash: communityPublicationContentHash(publication)
+}));
 
 if (process.argv.includes('--validate-only')) {
-  console.log(`Validated ${publications.length} release publication${publications.length === 1 ? '' : 's'} and ${knownIssues.length} known issue${knownIssues.length === 1 ? '' : 's'}; latest release is ${publications.at(-1).version}.`);
+  console.log(`Validated ${publications.length} release publication${publications.length === 1 ? '' : 's'}, ${knownIssues.length} known issue${knownIssues.length === 1 ? '' : 's'}, and ${communityPublications.length} official community page${communityPublications.length === 1 ? '' : 's'}; latest release is ${publications.at(-1).version}.`);
   process.exit(0);
 }
 
@@ -47,7 +52,8 @@ try {
   for (const publication of publications) await store.upsertOfficialRelease(publication);
   await store.pinLatestOfficialRelease(publications.at(-1).version);
   for (const issue of knownIssues) await store.upsertOfficialKnownIssue(issue);
-  console.log(`Published ${publications.length} idempotent release topic${publications.length === 1 ? '' : 's'} and ${knownIssues.length} known issue${knownIssues.length === 1 ? '' : 's'}; latest release is ${publications.at(-1).version}.`);
+  for (const publication of communityPublications) await store.upsertOfficialCommunityPublication(publication);
+  console.log(`Published ${publications.length} idempotent release topic${publications.length === 1 ? '' : 's'}, ${knownIssues.length} known issue${knownIssues.length === 1 ? '' : 's'}, and ${communityPublications.length} official community page${communityPublications.length === 1 ? '' : 's'}; latest release is ${publications.at(-1).version}.`);
 } finally {
   await pool.end();
 }

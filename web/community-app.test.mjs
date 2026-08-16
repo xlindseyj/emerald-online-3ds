@@ -7,6 +7,7 @@ import { MemoryStatsStore } from '../server/src/stats-store.mjs';
 import { createCommunityApp } from './community-app.mjs';
 import { communityPage } from './community-page.mjs';
 import { formatReleaseTopic, releaseContentHash, validateReleaseCatalog } from '../server/src/release-catalog.mjs';
+import { communityPublicationContentHash, validateCommunityPublicationCatalog } from '../server/src/community-publication-catalog.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -141,13 +142,35 @@ test('official releases are public, visibly attributed, and keep replies availab
   const anonymous = await (await request(base, '/api/community/topics?category=releases')).json();
   const summary = anonymous.topics.find(item => item.id === published.topicId);
   assert.equal(summary.official_release, true);
-  assert.equal(summary.release_version, '0.8.0');
+  assert.equal(summary.release_version, release.version);
   assert.equal(summary.author_fingerprint, null);
   const detail = await (await request(base, `/api/community/topics/${published.topicId}`)).json();
   assert.match(detail.topic.body_html, /<img src="\/qr\.svg"/);
-  assert.equal(detail.topic.source_commit, '4ce4b4e');
+  assert.equal(detail.topic.source_commit, release.sourceCommit ?? null);
   const enrollment = await identityStore.enroll(), auth = await pair(base, identityStore, enrollment);
   assert.equal((await request(base, `/api/community/topics/${published.topicId}/replies`, auth, { method: 'POST', body: JSON.stringify({ body: 'Physical test result.' }) })).status, 201);
+});
+
+test('official installation guides are public, attributed, and addressable by stable key', async t => {
+  const { base, communityStore } = await startApp(t);
+  const catalog = validateCommunityPublicationCatalog(JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'release', 'community-pages.json'), 'utf8')));
+  const guide = catalog.find(item => item.key === 'install-on-3ds');
+  const published = await communityStore.upsertOfficialCommunityPublication({
+    ...guide, contentHash: communityPublicationContentHash(guide)
+  });
+
+  const response = await request(base, '/api/community/publications/install-on-3ds');
+  assert.equal(response.status, 200);
+  const detail = await response.json();
+  assert.equal(detail.topic.id, published.topicId);
+  assert.equal(detail.topic.official_publication, true);
+  assert.equal(detail.topic.publication_kind, 'guide');
+  assert.equal(detail.topic.author_fingerprint, null);
+  assert.match(detail.topic.body_html, /<img src="\/qr\.svg"/);
+
+  const listing = await (await request(base, '/api/community/topics?category=installation-help')).json();
+  assert.equal(listing.topics.some(item => item.publication_key === guide.key && item.official_publication), true);
+  assert.equal((await request(base, '/api/community/publications/missing-guide')).status, 404);
 });
 
 test('new defects stay paired-only until a moderator confirms them', async t => {

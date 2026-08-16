@@ -179,7 +179,7 @@
     "version": "0.8.0",
     "releasedAt": "2026-08-16T14:00:00Z",
     "title": "Local Bag and trainer radar",
-    "status": "Current beta",
+    "status": "Historical beta — superseded",
     "summary": "Expands the lower screen with a private, local-only Bag browser and a Map/Radar page while retaining profiles, community tools, diagnostics, presence, chat, and emotes.",
     "highlights": [
       "Five Bag pockets with local item names, decrypted quantities and money, touch tabs, and paging.",
@@ -230,5 +230,69 @@
       }
     ],
     "sourceCommit": "4ce4b4e"
+  },
+  {
+    "version": "0.8.1",
+    "releasedAt": "2026-08-16T15:45:00Z",
+    "title": "Service observability and capacity guardrails",
+    "status": "Current beta",
+    "summary": "Adds privacy-safe production telemetry, a maintained Grafana dashboard, and deliberately bounded concurrent load testing while leaving the game protocol and private player data unchanged.",
+    "highlights": [
+      "Cluster-internal Prometheus metrics for aggregate players, rooms, protocol activity, capacity, database readiness, memory, and uptime.",
+      "A 12-panel Emerald Online 3DS Grafana dashboard for service health and experimental-link visibility.",
+      "A safety-bounded load harness that defaults to loopback and refuses remote targets without explicit operator opt-in."
+    ],
+    "verification": [
+      "All 50 automated tests passed against disposable PostgreSQL 17 with zero skips.",
+      "A 32-client, five-second local run delivered 768 state updates and 24,080 snapshots with 32 of 32 pongs and zero protocol errors, rejections, or authentication failures.",
+      "The release audit verified the public source archive excludes Markdown, operational infrastructure, private addresses, credentials, ROMs, saves, and branded assets."
+    ],
+    "knownIssues": [
+      "Experimental Cable Club battles and trades still require progressed private save state and physical-hardware acceptance before Gate 5 can begin.",
+      "FPS can fluctuate by device and cutscene; toggling Online off and back on after the scene remains the documented workaround."
+    ],
+    "upgradeNotes": [
+      "Existing 0.8.0 clients remain protocol-compatible; this release primarily improves server operations and release evidence.",
+      "If updating the console build, preserve emerald.gba, saves, identity.cfg, stats.cfg, and avatars.t3x."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "012da4236b2018d5e64faefcfedfe786fe207d0b925cf714cf755c534e385c37",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "33cf8ccda02205ab352b08811ae059cf86b81794c0101481788dc8d49d083b80",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "9748f83c45cb7ba85ada5d049403eb28e188dadaf84ce6b897ce8297db4f23c0",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.1 adds aggregate service observability without exposing player identities or private game data."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Optional console refresh: scan from FBI Remote Install after preserving your private ROM, saves, and identity files."
+      },
+      {
+        "url": "/release-media/community-forums.png",
+        "alt": "Emerald Online 3DS community forum populated with official releases and guides",
+        "caption": "The public community now includes maintained installation, emulator, service-status, testing, development, feature, multiplayer, and community-guideline pages."
+      },
+      {
+        "url": "/release-media/online-dashboard.png",
+        "alt": "Emerald Online lower-screen dashboard running in Azahar",
+        "caption": "Authentic Azahar capture of the project's original lower-screen interface; ROM-derived gameplay pixels and private save information are excluded."
+      }
+    ]
   }
 ]

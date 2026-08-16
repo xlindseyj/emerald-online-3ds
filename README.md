@@ -9,6 +9,7 @@ Clean-room homebrew framework for a dual-screen, online-capable monster-RPG on N
 - Online presence includes interpolated trainer overlays, stationary keepalives, and automatic reconnect; offline gameplay remains uninterrupted.
 - Protocol v2 silently enrolls each installation with a server-issued UUID and 256-bit device credential, stores it separately in private `identity.cfg`, and offers a one-time recovery code plus export, revocation, recovery, and deletion.
 - The server provides validated map rooms, snapshots, rate-limited chat, idle cleanup, health reporting, automated tests, durable identity storage, a paired community forum, private player profiles, consented leaderboards, and idempotent official release publishing in a two-instance PostgreSQL cluster.
+- Cluster-internal Prometheus metrics, an authenticated Grafana dashboard, and a safety-bounded concurrent load harness cover service capacity without exposing player identifiers or game data.
 - The dedicated renderer uses the full 400x240 top screen and full 320x240 touch screen, with a retained emerald-themed dashboard and live FPS telemetry.
 - CIA/3DSX metadata uses the original project icon and custom HOME Menu banner under `assets/`.
 - Authentic Brendan/May walking frames and palettes are located and extracted from the user's validated ROM into an ignored SD-only atlas. SaveBlock2 gender selects the avatar; no sprite pixels are embedded in the CIA or sent to the server.

@@ -10,6 +10,7 @@ The production namespace is `pokemonemeraldonline3ds`. It contains one combined 
 - Temporary game alias: `wss://game.emeraldonline3ds.com/game`
 - Cluster-only protocol: `emerald-online.pokemonemeraldonline3ds.svc.cluster.local:3210`
 - Cluster-only status: `emerald-online.pokemonemeraldonline3ds.svc.cluster.local:3211/health`
+- Cluster-only Prometheus metrics: `emerald-online.pokemonemeraldonline3ds.svc.cluster.local:3211/metrics`
 
 Cloudflare proxied CNAMEs target tunnel `fe20f593-df49-4e2d-92fd-a7df2be8a697`. Arbitrary Tunnel TCP routes require a `cloudflared` client and cannot serve an unmodified 3DS, so the runtime uses certificate-validated WSS on port 443.
 
@@ -41,9 +42,11 @@ kubectl -n pokemonemeraldonline3ds rollout status deployment/emerald-online
 curl -fsS https://live.emeraldonline3ds.com/health
 ```
 
-The Deployment runs idempotent, advisory-locked migrations over verified database TLS, then a second init container validates `release/release-catalog.json` and `release/known-issues.json` and upserts official Releases and confirmed known-issue topics before either application container starts. Publication is keyed by semantic version or stable issue key, so restarts and deployment retries update the same topics instead of creating duplicates; only the newest release is pinned. The homepage reads the same package version. The application is non-root, read-only, capability-free, has no service-account token, and uses an immutable multi-architecture image digest. Presence remains one replica because room state is in memory.
+The Deployment runs idempotent, advisory-locked migrations over verified database TLS, then a second init container validates the release, known-issue, and maintained community-page catalogs. It upserts official Releases, confirmed known issues, installation/emulator help, service status, and the remaining board guides before either application container starts. Publication is keyed by semantic version or stable page/issue key, so restarts and deployment retries update the same topics instead of creating duplicates; only the newest release is pinned. The homepage reads the same package version. The application is non-root, read-only, capability-free, has no service-account token, and uses an immutable multi-architecture image digest. Presence remains one replica because room state is in memory.
 
 After a release build, push both `linux/amd64` and `linux/arm64`, update every image reference in `deploy/kubernetes.yaml` and `deploy/maintenance.yaml`, and verify the public CIA checksum matches `release/SHA256SUMS`.
+
+The presence pod carries Prometheus discovery annotations for `/metrics` on the internal status port. `allow-prometheus-metrics` permits that port only from the `app=prometheus` pod in `lindseywebsolutions`; the public ingress continues to expose only the web bridge. Import `deploy/grafana-dashboard.json` through the authenticated Grafana API and verify dashboard UID `emerald-online-3ds`. See `OBSERVABILITY_HANDOFF.md` for metric privacy and load-test limits.
 
 ## Backup verification and restore drill
 

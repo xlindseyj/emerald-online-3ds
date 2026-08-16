@@ -30,6 +30,10 @@ spec:
       labels:
         app.kubernetes.io/name: emerald-online
         app.kubernetes.io/part-of: emerald-online-3ds
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "3211"
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 10
@@ -353,6 +357,28 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-metrics
+  namespace: pokemonemeraldonline3ds
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: emerald-online
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lindseywebsolutions
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 3211
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

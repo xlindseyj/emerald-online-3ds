@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { PostgresIdentityStore } from './identity-store.mjs';
 import { PostgresStatsStore } from './stats-store.mjs';
+import { renderPrometheusMetrics } from './metrics.mjs';
 import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
 
 export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, identityStore = null, statsStore = null } = {}) {
@@ -268,6 +269,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
 		rooms: new Set([...clients.values()].flatMap(client => client.state ? [client.state.map] : [])).size,
 		linkRooms: linkRooms.size,
 		linkPlayers: [...linkRooms.values()].reduce((sum, room) => sum + room.members.size, 0),
+		capacity: maxConnections,
 		...metrics
 	});
   return { server, clients, metrics, status };
@@ -304,6 +306,11 @@ export async function startServers({ identityStore: identityStoreOverride = null
   const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore, statsStore });
   await new Promise(resolve => presence.server.listen(port, host, resolve));
   const health = http.createServer((req, res) => {
+    if (req.url === '/metrics') {
+      res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(renderPrometheusMetrics(presence.status(), { protocol: VERSION, databaseReady: Boolean(pool) }));
+      return;
+    }
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, protocol: VERSION, database: pool ? 'ready' : 'disabled', ...presence.status() }));

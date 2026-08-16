@@ -62,6 +62,22 @@ test('PostgreSQL pairing, visibility, forum, defect, report, and recovery lifecy
   assert.equal(publicKnownIssue.defect_status, 'confirmed');
   assert.equal(publicKnownIssue.author_fingerprint, null);
 
+  const guidePublication = {
+    key: `guide-${suffix}`, kind: 'guide', category: 'installation-help',
+    title: `Official installation guide ${suffix}`, body: '## Install\n\n- Use your own private ROM.',
+    pinned: true, locked: false, contentHash: 'f'.repeat(64)
+  };
+  const officialGuide = await community.upsertOfficialCommunityPublication(guidePublication);
+  officialTopicIds.push(officialGuide.topicId);
+  const repeatedGuide = await community.upsertOfficialCommunityPublication({ ...guidePublication, body: '## Install\n\n- Updated without duplication.' });
+  assert.equal(repeatedGuide.topicId, officialGuide.topicId);
+  const publicGuide = await community.getOfficialCommunityPublication(guidePublication.key, null);
+  assert.equal(publicGuide.id, officialGuide.topicId);
+  assert.equal(publicGuide.official_publication, true);
+  assert.equal(publicGuide.publication_kind, 'guide');
+  assert.equal(publicGuide.pinned, true);
+  assert.equal(publicGuide.author_fingerprint, null);
+
   const help = await community.createTopic({ category: 'installation-help', title: `Install help ${suffix}`, body: 'Public recovery instructions.' }, viewer);
   const beta = await community.createTopic({ category: 'beta-testing', title: `Private beta ${suffix}`, body: 'Paired-only result.' }, viewer);
   const defect = await community.createTopic({

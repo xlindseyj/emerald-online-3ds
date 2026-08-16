@@ -16,6 +16,7 @@ const COOKIE = 'emerald_session';
 const BOARD = new Set(['pokedex-seen','pokedex-caught','badges','frontier-streak','online-battles','online-trades','beta-compatibility']);
 const RELEASE = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-z0-9.-]+)?$/i;
 const VARIANT = /^[a-z0-9:-]{0,80}$/;
+const PUBLICATION_KEY = /^[a-z0-9][a-z0-9-]{2,79}$/;
 
 function headers(extra = {}) {
   return {
@@ -171,6 +172,14 @@ export function createCommunityApp({ identityStore, communityStore, statsStore =
         if (!auth.session || !requireCsrf(req, auth)) return send(res, 403, { ok: false, error: 'csrf_or_session_required' }), true;
         await identityStore.revokeBrowserSession(auth.token);
         send(res, 200, { ok: true }, { 'set-cookie': clearCookie });
+        return true;
+      }
+      const publicationMatch = pathname.match(/^\/api\/community\/publications\/([a-z0-9][a-z0-9-]{2,79})$/);
+      if (publicationMatch && req.method === 'GET') {
+        if (!PUBLICATION_KEY.test(publicationMatch[1])) return send(res, 400, { ok: false, error: 'invalid_publication_key' }), true;
+        const publication = await communityStore.getOfficialCommunityPublication(publicationMatch[1], auth.session);
+        if (!publication) return send(res, 404, { ok: false, error: 'publication_not_found' }), true;
+        send(res, 200, { ok: true, topic: serializeTopic(publication) });
         return true;
       }
       if (pathname === '/api/community/profile' && req.method === 'GET') {
