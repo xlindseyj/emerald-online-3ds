@@ -1,12 +1,13 @@
 # Gate 4 physical and Azahar test handoff
 
-Gate 4 remains an experimental feasibility test. Public battle/trade invitations and rankings stay disabled until a real Cable Club battle, trade, save comparison, interruption test, and Old 3DS performance test pass.
+Gate 4 remains an experimental feasibility test. Version 0.8.7 has completed a native two-Azahar Union Room trade, but public battle/trade invitations and rankings stay disabled until a physical 3DS-to-second-client Union Room battle, trade, save comparison, interruption test, and Old 3DS performance/audio test pass.
 
 ## Current artifacts
 
-- Release: `0.8.4`
-- CIA SHA-256: `225f021371b3cb3788c0879c2d8fce0d759d9847eee1ecd4f4461b054005d82c`
-- 3DSX SHA-256: `71007c45b922463cf1181ca42ae73b1d08ab681cb28c7ad7a2799cab21308ba0`
+- Release: `0.8.7`
+- CIA SHA-256: `fbbb8f99b47d9443e4d8145d5ef0dd7aef3877e11af818cb6376f4bd201171f3`
+- 3DSX SHA-256: `66db704f409dae82078662ddb9bd189ef363bd8eff7bebc5111af2abedd82641`
+- Corresponding-source SHA-256: `494877949e55693a0bfdefda5a314d4f7032e22b3961eac47b4eebcf0bcd36c8`
 - Azahar: official 2126.0 AppImage under the ignored `.tools/azahar/` directory
 
 Create a fresh ignored bundle for each session. Its `physical-sd/` tree contains only the current release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.
@@ -33,10 +34,17 @@ The tool accepts only a 128 KiB Emerald save (or a 128 KiB save with a 512-byte 
 2. Copy `physical-sd/3ds/emerald-online-3ds/emerald-online-3ds.3dsx` and `online.cfg` to the matching SD directory. Do not replace `identity.cfg`, `stats.cfg`, the ROM, save, or avatar atlas.
 3. Optionally copy the CIA from `physical-sd/cias/` and reinstall it with FBI; merely copying a CIA does not update the installed HOME Menu title.
 4. Start the physical runtime and the prepared Azahar profile. Confirm both show `LINK <room> ACTIVE - BACKUP OK` before entering the Cable Club.
-5. Complete one battle and one trade through public WSS. Record FPS/audio, packet counters, both save hashes after clean exit and restart, and the result of interrupting one later session.
+5. Use the Wireless Club / Union Room, not the Direct Corner attendants. Complete one battle and one trade through public WSS. Record FPS/audio, packet counters, both save hashes after clean exit and restart, and the result of interrupting one later session.
 6. If either save differs unexpectedly, stop testing and restore the independent backups. Do not proceed to Gate 5.
 
-## Current 0.8.4 preflight evidence
+## Current 0.8.7 evidence
+
+- Two isolated Azahar 2126.0 clients completed a native Union Room trade. CODEX offered a level 13 Torchic for a Water-type Pokémon and LINZ sent a level 6 Marill. Both native avatars, the Trading Board offer, request, animation, automatic save, restart, and exchanged parties were confirmed. CODEX loaded two Marill and LINZ loaded two Torchic after restart.
+- The v0.8.7 runtime uses gpSP's RFU backend for explicitly configured rooms, drains packets during gpSP's tight wait windows, preserves temporary host scans, removes explicitly withdrawn/disconnected peers, and suppresses external overlays on native multiplayer maps.
+- The current public CIA, 3DSX, and source downloads match the hashes above. Production image `sha256:b4865ad3e7075f812a7aad303fe17c6ce1ed15f83f19e4e092a7ea24c81016f9` is Ready with zero application-container restarts; the public health endpoint is database-ready and all four public status checks are Operational.
+- Physical v0.8.7 battle/trade, interrupted-session recovery, save comparison, current FPS, audio, and HOME lifecycle remain unrecorded. Gate 5 must not begin yet.
+
+## Historical 0.8.4 physical preflight evidence
 
 - Before v0.8.4 transfer, the physical save backup had two complete checksum-valid slots, 106 minutes played, two party members, and a valid map position. The runtime, CIA, and on-device v0.8.3 rollback binary were re-downloaded and hash-verified; ROM, save, save state, identity, configuration, statistics preferences, avatar atlas, and diagnostics remained byte-for-byte unchanged.
 - The physical v0.8.4 CIA was installed and reconnected through production WSS. The user confirmed Global Online Users, coordinates, read-only rows, and multi-page touch navigation on the Old 3DS. Map Chat, current FPS, audio, and HOME lifecycle remain to be recorded.

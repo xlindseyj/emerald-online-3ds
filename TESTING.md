@@ -1,8 +1,17 @@
 # Hardware smoke test
 
-The current public release is 0.8.4 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It adds Online Users and Map Chat to the lower-page cycle. It contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental Serial-Poke remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
+The current public release is 0.8.7 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes Online Users and Map Chat in the lower-page cycle and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
+
+## Release 0.8.7 native RFU trade (2026-08-16)
+
+- Runtime link path: an explicitly configured private link room now selects gpSP's Emerald RFU backend. The frontend drains packets inside gpSP wait callbacks and once per emulated frame during a live session, preserves temporary RFU host-scan transitions, clears explicit withdrawal/disconnect state, requests New 3DS CPU/L2 acceleration where available, and suppresses external overlays on native multiplayer maps.
+- Interactive Azahar acceptance: two isolated Azahar 2126.0 clients entered Emerald's native Union Room, saw the native trainer avatars, shared a Trading Board offer, and exchanged a level 13 Torchic from CODEX for a level 6 Marill from LINZ. The native animation and automatic save completed on both clients. After restart, CODEX loaded a party containing two Marill and LINZ loaded a party containing two Torchic, proving the exchange persisted without duplication or loss in that two-emulator run.
+- Route constraint: use the Wireless Club / Union Room upstairs in a Pokémon Center. The Direct Corner cable attendants are not supported by the v0.8.7 RFU test path.
+- Automated and release verification: 60 tests passed, three PostgreSQL-only tests were skipped in the non-database run, the release audit passed, and the staged secret scan found no leaks. The current CIA, 3DSX, and source hashes are `fbbb8f99b47d9443e4d8145d5ef0dd7aef3877e11af818cb6376f4bd201171f3`, `66db704f409dae82078662ddb9bd189ef363bd8eff7bebc5111af2abedd82641`, and `494877949e55693a0bfdefda5a314d4f7032e22b3961eac47b4eebcf0bcd36c8`.
+- Production recheck: deployment image `sha256:b4865ad3e7075f812a7aad303fe17c6ce1ed15f83f19e4e092a7ea24c81016f9` is Ready with zero application-container restarts. The public health endpoint reports protocol 2 and database ready; the live status API reports the website, forums, multiplayer WSS gateway, and downloads Operational. All three downloaded public artifacts match the hashes above.
+- Remaining Gate 4 acceptance: complete a two-client native battle, then repeat the native battle and trade with the physical Old 3DS XL and a second client. Record interrupted-session recovery, both save comparisons after restart, public-WSS latency/loss behavior, v0.8.7 FPS, audio, and HOME lifecycle. Do not begin Gate 5 or enable invitations/rankings until these physical criteria pass.
 
 ## Release 0.8.4 global roster and Map Chat (2026-08-16)
 
@@ -87,9 +96,9 @@ The v0.8.1 3DSX and CIA were transferred through the console's private ftpd serv
 
 The release directory contains the CIA, 3DSX, and code-only 3DS-runtime/corresponding-gpSP source archive; verify their current sizes and hashes from the files and `release/SHA256SUMS`. Documentation, infrastructure, release media, branding assets, the private ROM, and the atlas are not part of that source download. The private 3DS package includes the ROM and atlas; the public release never does. Reinstall the CIA after every replacement; overwriting `/cias/emerald-online-3ds.cia` does not update an already installed HOME Menu title.
 
-## Gate 4 experimental link smoke
+## Earlier Gate 4 transport smoke
 
-Automated evidence: two isolated Azahar 2126.0 profiles passed four startup/hard-interruption cycles and retained exactly the newest three save backups per profile. A production-WSS test delivered 53 bounded synthetic packets, recovered from a hard guest disconnect, and measured 164-186 ms round trip (171 ms average) with 4.5 ms mean absolute jitter. Because the available emulator state remained at the title screen and emitted zero Cable Club packets, this is transport evidence only; the battle, trade, save-integrity, real packet-loss, and physical-performance steps below remain required.
+Historical automated evidence: two isolated Azahar 2126.0 profiles passed four startup/hard-interruption cycles and retained exactly the newest three save backups per profile. A production-WSS test delivered 53 bounded synthetic packets, recovered from a hard guest disconnect, and measured 164-186 ms round trip (171 ms average) with 4.5 ms mean absolute jitter. Those earlier profiles remained at the title screen and emitted zero native link packets. Version 0.8.7 supersedes that limitation with a completed two-Azahar Union Room trade, but battle, physical trade, interruption, real packet-loss, save-integrity, audio, and physical-performance acceptance remain required.
 
 The 0.8.0 rerun passed all 45 tests with zero skips against disposable PostgreSQL 16, the normal Azahar online smoke, and four two-instance link cycles. A fresh production-WSS run delivered 53 synthetic packets, recovered the guest, measured 173.6-200.9 ms round trip (182.9 ms average) with 5.6 ms mean absolute jitter, and deleted both synthetic identities. `npm run prepare:link-test` now builds a shared-room physical SD handoff and isolated Azahar profile under ignored `generated/`; its tests verify strict room/save validation and that no ROM, save, identity, preference, or avatar file enters the physical bundle. See `GATE_4_PHYSICAL_TEST.md`.
 
@@ -107,12 +116,12 @@ Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abf
 
 ## Gate 4 Cable Club acceptance
 
-1. Preserve an independent copy of both saves. Use release 0.8.4 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
+1. Preserve an independent copy of both saves. Use release 0.8.7 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.
 5. Confirm `link-backups/` contains a new timestamped 128 KiB save on both clients and never retains more than the newest three.
-6. Enter the Cable Club, complete one battle, exit cleanly, restart both clients, and compare the two saves with their pre-link backups.
+6. Enter the Wireless Club / Union Room, complete one battle, exit cleanly, restart both clients, and compare the two saves with their pre-link backups. Do not use the Direct Corner attendants with the v0.8.7 RFU path.
 7. Repeat with one complete trade. Confirm the intended Pokémon moved exactly once, both games save, both restart, and no duplication/loss occurred.
 8. Repeat while interrupting before handshake, during battle, during trade before confirmation, and immediately after confirmation. Restore from the automatic backup if either save is invalid.
 9. Repeat on LAN and public WSS while recording the on-screen TX/RX counters, latency observations, disconnects, FPS, and audio stability.

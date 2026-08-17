@@ -43,7 +43,7 @@
 - [x] Local battle, party, inventory, progression, save, and audio through gpSP
 - [x] Bottom-screen production UI expansion (party, bag, map/radar, chat, emotes, profiles, and privacy controls)
 - [x] Remote trainer rendering foundation, interpolation, emotes, and rate-limited map chat
-- [ ] Link battles/trades (transport, reconnect, safe backups, and a privacy-safe physical/Azahar test bundle pass; real Cable Club battle/trade/save/performance acceptance is still required before invitations are exposed)
+- [ ] Link battles/trades (transport, reconnect, safe backups, and a complete native two-Azahar Union Room trade through save/restart pass; a two-client battle plus physical 3DS battle/trade/interruption/save/audio/performance acceptance are still required before invitations are exposed)
 - [x] Browser pairing, paired forum authorization, defect reports, sanctions, moderation UI, device identity, PostgreSQL, and TLS
 - [x] Add privacy-safe Prometheus service metrics, an authenticated Grafana dashboard, and bounded concurrent load tests
 - [ ] Add a MinIO KMS; the NAT-friendly Kubernetes deployment, persistence, tested compressed backups, and connection/rate limits are operating, but backup encryption at rest is not yet claimed
