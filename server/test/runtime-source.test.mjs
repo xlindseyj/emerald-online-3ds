@@ -177,7 +177,7 @@ test('gpSP bottom screen exposes paged users plus readable map and global chat l
   assert.match(gpspSource, /TAP TO READ/);
   assert.match(gpspSource, /chatPage \* 3/);
   assert.match(gpspSource, /COMPOSE/);
-  assert.match(gpspSource, /bottomPage \+ 1\) % 8/);
+  assert.match(gpspSource, /bottomPage \+ 1\) % 9/);
   assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
   assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
   assert.match(gpspSource, /!strcmp\(equals, "teleport"\) \? PAGE_TELEPORT/);
@@ -202,6 +202,22 @@ test('gpSP teleport page is server-verified and writes GBA location fields', () 
   assert.match(gpspSource, /applyTeleport/);
   assert.match(gpspSource, /gbaEwram\[offset \+ 4\] = mapGroup/);
   assert.match(gpspSource, /gbaEwram\[offset \+ 5\] = mapNum/);
+});
+
+test('gpSP update page detects, downloads, verifies, and installs releases', () => {
+  assert.match(gpspSource, /PAGE_UPDATE/);
+  assert.match(gpspSource, /"SYSTEM UPDATE"/);
+  assert.match(gpspSource, /drawUpdatePage/);
+  assert.match(gpspSource, /checkForUpdate/);
+  assert.match(gpspSource, /startUpdateDownload/);
+  assert.match(gpspSource, /installUpdate/);
+  assert.match(gpspSource, /downloadHttpsFile/);
+  assert.match(gpspSource, /sha256File/);
+  assert.match(gpspSource, /installCia/);
+  assert.match(gpspSource, /replace3dsx/);
+  assert.match(gpspSource, /\/api\/release/);
+  assert.match(gpspSource, /UPDATE_DIRECTORY/);
+  assert.match(gpspSource, /% 9/);
 });
 
 test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups', () => {

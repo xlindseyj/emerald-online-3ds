@@ -91,6 +91,17 @@ Authenticated clients may request a list of teleport destinations and then ask t
 
 A failed warp returns `ok:false` and a `code` such as `teleport_unauthorized`, `teleport_not_found`, or `teleport_player_unavailable`. Player destinations resolve against the current online roster and are rejected when the target has no valid state.
 
+## Release updates
+
+The installer HTTP server exposes a read-only release endpoint that the 3DS runtime queries from its bottom-screen **System Update** page. The response is JSON and includes download URLs and SHA-256 checksums for the current public artifacts.
+
+```json
+GET /api/release
+{"version":"0.8.8","cia_url":"https://emeraldonline3ds.com/emerald-online-3ds.cia","threedsx_url":"https://emeraldonline3ds.com/emerald-online-3ds.3dsx","sha256_cia":"b1894328c97fc7fe5c1cc525a1a079edf244e80a1a4b193d603bd16ec9b3a726","sha256_threedsx":"a242107124b7f851e2519a04b92f3942d0d1b90c3b37552e6dd0eac86058b6ab","release_notes_url":"https://emeraldonline3ds.com/"}
+```
+
+The runtime compares `version` to its built-in `APP_VERSION`. If the server version is newer, it downloads the chosen artifact to `sdmc:/3ds/emerald-online-3ds/update/`, verifies the SHA-256, and either installs the CIA through the 3DS AM service or replaces the running 3DSX on the SD card. A full app update always requires exiting and relaunching; the runtime cannot replace its own code while running.
+
 ## Experimental Gate 4 link spike
 
 Link transport is disabled unless the private `online.cfg` contains an eight-character room code such as `link_room=ABCD-2345`. This is a feasibility interface, not a public invitation system. It requires authenticated protocol v2 identities, admits exactly two clients, retains packets only in memory, and never stores packet contents.

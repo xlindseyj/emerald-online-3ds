@@ -1,4 +1,5 @@
 #include <3ds.h>
+#include <3ds/services/am.h>
 #include <citro2d.h>
 #include <citro3d.h>
 
@@ -24,6 +25,7 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/sha1.h>
+#include <mbedtls/sha256.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 
@@ -55,6 +57,10 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
 #define APP_VERSION "0.8.8"
+#define UPDATE_DIRECTORY "sdmc:/3ds/emerald-online-3ds/update"
+#define UPDATE_CIA_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.cia"
+#define UPDATE_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.3dsx"
+#define INSTALLED_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/emerald-online-3ds.3dsx"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
@@ -83,7 +89,7 @@ static unsigned measuredFps;
 static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
-enum BottomPage { PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS, PAGE_TELEPORT };
+enum BottomPage { PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS, PAGE_TELEPORT, PAGE_UPDATE };
 static BottomPage bottomPage = PAGE_ONLINE;
 static unsigned bagPocket;
 static unsigned bagPage;
@@ -107,6 +113,12 @@ static const retro_netpacket_callback* coreNetpacketInterface;
 
 static bool onlineSend(const char* message);
 static bool receiveOnlineTraffic(void);
+static const char* findJsonValue(const char* json, const char* end, const char* key);
+static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size);
+static void checkForUpdate(void);
+static void startUpdateDownload(void);
+static void installUpdate(void);
+static void drawUpdatePage(void);
 
 static void frontendNetpacketSend(int, const void* data, size_t size, uint16_t clientId) {
     if (!linkStarted || !data || !size || size > 512) return;
@@ -288,6 +300,19 @@ static int teleportSelectedIndex = -1;
 static uint64_t teleportStatusUntil;
 static char teleportStatus[48] = "";
 static bool teleportLocationsRequested;
+
+enum UpdateState { UPDATE_IDLE, UPDATE_CHECKING, UPDATE_AVAILABLE, UPDATE_DOWNLOADING, UPDATE_VERIFYING, UPDATE_READY, UPDATE_INSTALLING, UPDATE_ERROR, UPDATE_DONE };
+static UpdateState updateState = UPDATE_IDLE;
+static char updateLatestVersion[16] = "";
+static char updateCiaUrl[192] = "";
+static char update3dsxUrl[192] = "";
+static char updateCiaSha256[65] = "";
+static char update3dsxSha256[65] = "";
+static char updateStatus[64] = "";
+static uint64_t updateStatusUntil = 0;
+static uint64_t updateProgress = 0;
+static uint64_t updateTotal = 0;
+static bool updateIsCia = false;
 
 static void logPrintf(enum retro_log_level level, const char* fmt, ...) {
     (void) level;
@@ -612,6 +637,394 @@ static void applyTeleport(uint8_t mapGroup, uint8_t mapNum, int16_t x, int16_t y
     // A follow-up step will identify the IWRAM warp flag or call the
     // SetWarpDestination/WarpIntoMap Thumb functions to force a transition.
     (void) facing;
+}
+
+static bool parseVersion(const char* text, unsigned* major, unsigned* minor, unsigned* micro) {
+    if (!text || !major || !minor || !micro) return false;
+    char* end = nullptr;
+    unsigned long a = strtoul(text, &end, 10);
+    if (end == text || *end != '.') return false;
+    unsigned long b = strtoul(end + 1, &end, 10);
+    if (*end != '.') return false;
+    unsigned long c = strtoul(end + 1, &end, 10);
+    if (*end && *end != '-' && *end != '+') return false;
+    *major = (unsigned) a; *minor = (unsigned) b; *micro = (unsigned) c;
+    return true;
+}
+
+static int compareVersion(const char* left, const char* right) {
+    unsigned lm, ln, lo, rm, rn, ro;
+    if (!parseVersion(left, &lm, &ln, &lo)) return 0;
+    if (!parseVersion(right, &rm, &rn, &ro)) return 0;
+    if (lm != rm) return lm < rm ? -1 : 1;
+    if (ln != rn) return ln < rn ? -1 : 1;
+    if (lo != ro) return lo < ro ? -1 : 1;
+    return 0;
+}
+
+static bool sha256File(const char* path, char hex[65]) {
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts_ret(&ctx, 0);
+    uint8_t buffer[4096];
+    size_t count;
+    while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
+        mbedtls_sha256_update_ret(&ctx, buffer, count);
+    bool readOk = !ferror(file);
+    fclose(file);
+    uint8_t digest[32];
+    if (mbedtls_sha256_finish_ret(&ctx, digest)) readOk = false;
+    mbedtls_sha256_free(&ctx);
+    if (!readOk) return false;
+    static const char hexChars[] = "0123456789abcdef";
+    for (unsigned i = 0; i < 32; ++i) {
+        hex[i * 2] = hexChars[digest[i] >> 4];
+        hex[i * 2 + 1] = hexChars[digest[i] & 15];
+    }
+    hex[64] = 0;
+    return true;
+}
+
+static bool hexEqualCaseInsensitive(const char* left, const char* right) {
+    if (!left || !right) return false;
+    if (strlen(left) != strlen(right)) return false;
+    for (size_t i = 0; left[i] && right[i]; ++i) {
+        char lc = tolower((unsigned char) left[i]);
+        char rc = tolower((unsigned char) right[i]);
+        if (lc != rc) return false;
+    }
+    return true;
+}
+
+static bool updateWriteBytes(int socket, mbedtls_ssl_context* ssl, const unsigned char* data, size_t size) {
+    size_t written = 0;
+    unsigned waits = 0;
+    while (written < size) {
+        int count = ssl
+            ? mbedtls_ssl_write(ssl, data + written, size - written)
+            : (int) send(socket, data + written, size - written, MSG_NOSIGNAL);
+        if (count > 0) { written += (size_t) count; waits = 0; continue; }
+        if ((ssl && (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE)) ||
+            (!ssl && count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) {
+            if (++waits > 250) return false;
+            svcSleepThread(1000000);
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+static int updateReadBytes(int socket, mbedtls_ssl_context* ssl, unsigned char* data, size_t size, uint64_t deadline) {
+    size_t read = 0;
+    while (read < size && osGetTime() < deadline) {
+        int count = ssl
+            ? mbedtls_ssl_read(ssl, data + read, size - read)
+            : (int) recv(socket, data + read, size - read, 0);
+        if (count > 0) { read += (size_t) count; continue; }
+        if ((ssl && (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE)) ||
+            (!ssl && count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) {
+            svcSleepThread(1000000);
+            continue;
+        }
+        return count == 0 ? (int) read : -1;
+    }
+    return (int) read;
+}
+
+static void updateSetStatus(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(updateStatus, sizeof(updateStatus), fmt, args);
+    va_end(args);
+    updateStatusUntil = osGetTime() + 5000;
+}
+
+static bool installCia(const char* ciaPath) {
+    if (R_FAILED(amInit())) return false;
+    Handle handle;
+    if (R_FAILED(AM_StartCiaInstall(MEDIATYPE_SD, &handle))) { amExit(); return false; }
+    FILE* file = fopen(ciaPath, "rb");
+    if (!file) { AM_CancelCIAInstall(handle); amExit(); return false; }
+    bool ok = true;
+    uint8_t buffer[4096];
+    size_t count;
+    while (ok && (count = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        u32 written = 0;
+        if (R_FAILED(AM_WriteCiaInstallFile(handle, buffer, (u32) count, &written)) || written != count) ok = false;
+    }
+    if (ferror(file)) ok = false;
+    fclose(file);
+    bool finishOk = ok && R_SUCCEEDED(AM_FinishCiaInstall(handle));
+    if (!ok) AM_CancelCIAInstall(handle);
+    amExit();
+    return finishOk;
+}
+
+static bool replace3dsx(const char* sourcePath) {
+    // Keep the current 3DSX as a backup until the next successful launch.
+    char backupPath[128];
+    snprintf(backupPath, sizeof(backupPath), "%s.bak", INSTALLED_3DSX_PATH);
+    remove(backupPath);
+    rename(INSTALLED_3DSX_PATH, backupPath);
+    FILE* src = fopen(sourcePath, "rb");
+    if (!src) { rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    FILE* dst = fopen(INSTALLED_3DSX_PATH ".tmp", "wb");
+    if (!dst) { fclose(src); rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    bool ok = true;
+    uint8_t buffer[4096];
+    size_t count;
+    while (ok && (count = fread(buffer, 1, sizeof(buffer), src)) > 0)
+        if (fwrite(buffer, 1, count, dst) != count) ok = false;
+    if (ferror(src)) ok = false;
+    if (fflush(dst) || fsync(fileno(dst))) ok = false;
+    fclose(src); fclose(dst);
+    if (!ok) { remove(INSTALLED_3DSX_PATH ".tmp"); rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    if (rename(INSTALLED_3DSX_PATH ".tmp", INSTALLED_3DSX_PATH) != 0) { remove(INSTALLED_3DSX_PATH ".tmp"); rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    return true;
+}
+
+static bool mkdirs(const char* path) {
+    char tmp[256];
+    strncpy(tmp, path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = 0;
+    for (char* p = tmp + 1; *p; ++p) {
+        if (*p == '/') {
+            *p = 0;
+            mkdir(tmp, 0700);
+            *p = '/';
+        }
+    }
+    return mkdir(tmp, 0700) == 0 || errno == EEXIST;
+}
+
+static bool downloadHttpsFile(const char* host, const char* path, const char* outputPath, uint64_t* outDownloaded, uint64_t* outTotal) {
+    if (outDownloaded) *outDownloaded = 0;
+    if (outTotal) *outTotal = 0;
+    if (!tlsInitialized && !tlsInitialize()) return false;
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags >= 0) fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+    struct hostent* he = gethostbyname(host);
+    if (!he || !he->h_addr_list[0]) { close(sock); return false; }
+    struct sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(443);
+    memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+
+    uint64_t connectDeadline = osGetTime() + 8000;
+    while (connect(sock, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
+        if (errno != EINPROGRESS && errno != EALREADY && errno != EWOULDBLOCK) { close(sock); return false; }
+        if (osGetTime() >= connectDeadline) { close(sock); return false; }
+        svcSleepThread(1000000);
+    }
+
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_init(&ssl);
+    if (mbedtls_ssl_setup(&ssl, &tlsConfig) || mbedtls_ssl_set_hostname(&ssl, host)) {
+        mbedtls_ssl_free(&ssl); close(sock); return false;
+    }
+    mbedtls_ssl_set_bio(&ssl, &sock, tlsSocketSend, tlsSocketReceive, NULL);
+
+    uint64_t handshakeDeadline = osGetTime() + 8000;
+    int result;
+    while ((result = mbedtls_ssl_handshake(&ssl)) != 0) {
+        if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            mbedtls_ssl_free(&ssl); close(sock); return false;
+        }
+        if (osGetTime() >= handshakeDeadline) { mbedtls_ssl_free(&ssl); close(sock); return false; }
+        svcSleepThread(1000000);
+    }
+    if (mbedtls_ssl_get_verify_result(&ssl) != 0) { mbedtls_ssl_free(&ssl); close(sock); return false; }
+
+    char request[512];
+    int requestLength = snprintf(request, sizeof(request),
+        "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: Emerald-Online-3DS/" APP_VERSION "\r\n\r\n",
+        path, host);
+    if (requestLength < 1 || !updateWriteBytes(sock, &ssl, (const unsigned char*) request, (size_t) requestLength)) {
+        mbedtls_ssl_free(&ssl); close(sock); return false;
+    }
+
+    char response[4096];
+    size_t responseLength = 0;
+    uint64_t headerDeadline = osGetTime() + 8000;
+    while (!strstr(response, "\r\n\r\n") && responseLength < sizeof(response) - 1 && osGetTime() < headerDeadline) {
+        int got = updateReadBytes(sock, &ssl, (unsigned char*) response + responseLength, sizeof(response) - 1 - responseLength, headerDeadline);
+        if (got <= 0) { mbedtls_ssl_free(&ssl); close(sock); return false; }
+        responseLength += (size_t) got;
+        response[responseLength] = 0;
+    }
+    if (strncmp(response, "HTTP/1.1 200", 12) && strncmp(response, "HTTP/1.0 200", 12)) {
+        mbedtls_ssl_free(&ssl); close(sock); return false;
+    }
+
+    long long contentLength = -1;
+    const char* cl = strstr(response, "Content-Length:");
+    if (!cl) cl = strstr(response, "content-length:");
+    if (cl) contentLength = strtoll(cl + 15, nullptr, 10);
+    const char* body = strstr(response, "\r\n\r\n");
+    if (!body) { mbedtls_ssl_free(&ssl); close(sock); return false; }
+    body += 4;
+    size_t bodyPrefix = responseLength - (size_t) (body - response);
+    if (outTotal && contentLength > 0) *outTotal = (uint64_t) contentLength;
+
+    if (!mkdirs(outputPath)) { mbedtls_ssl_free(&ssl); close(sock); return false; }
+    FILE* file = fopen(outputPath, "wb");
+    if (!file) { mbedtls_ssl_free(&ssl); close(sock); return false; }
+
+    bool ok = true;
+    if (bodyPrefix > 0) {
+        if (fwrite(body, 1, bodyPrefix, file) != bodyPrefix) ok = false;
+        if (outDownloaded) *outDownloaded += bodyPrefix;
+    }
+
+    uint64_t bodyDeadline = osGetTime() + 120000;
+    uint8_t buffer[8192];
+    while (ok) {
+        int got = updateReadBytes(sock, &ssl, buffer, sizeof(buffer), bodyDeadline);
+        if (got < 0) { ok = false; break; }
+        if (got == 0) break;
+        if (fwrite(buffer, 1, (size_t) got, file) != (size_t) got) ok = false;
+        if (outDownloaded) *outDownloaded += (size_t) got;
+    }
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    fclose(file);
+
+    mbedtls_ssl_close_notify(&ssl);
+    mbedtls_ssl_free(&ssl);
+    close(sock);
+
+    if (!ok) remove(outputPath);
+    return ok;
+}
+
+static bool parseReleaseJson(const char* json, size_t length) {
+    const char* end = json + length;
+    if (!findJsonValue(json, end, "version")) return false;
+    jsonStringBounded(json, end, "version", updateLatestVersion, sizeof(updateLatestVersion));
+    jsonStringBounded(json, end, "cia_url", updateCiaUrl, sizeof(updateCiaUrl));
+    jsonStringBounded(json, end, "threedsx_url", update3dsxUrl, sizeof(update3dsxUrl));
+    jsonStringBounded(json, end, "sha256_cia", updateCiaSha256, sizeof(updateCiaSha256));
+    jsonStringBounded(json, end, "sha256_threedsx", update3dsxSha256, sizeof(update3dsxSha256));
+    return updateLatestVersion[0] != 0;
+}
+
+static void checkForUpdate(void) {
+    updateState = UPDATE_CHECKING;
+    updateSetStatus("CHECKING FOR UPDATE...");
+    char host[128] = "";
+    char path[128] = "/api/release";
+    if (strncmp(serverHost, "https://", 8) == 0) snprintf(host, sizeof(host), "%s", serverHost + 8);
+    else snprintf(host, sizeof(host), "%s", serverHost);
+
+    char tmpPath[128];
+    snprintf(tmpPath, sizeof(tmpPath), "%s/release.json", UPDATE_DIRECTORY);
+    uint64_t downloaded = 0, total = 0;
+    if (!downloadHttpsFile(host, path, tmpPath, &downloaded, &total)) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus("UPDATE CHECK FAILED");
+        return;
+    }
+    FILE* file = fopen(tmpPath, "rb");
+    if (!file) { updateState = UPDATE_ERROR; updateSetStatus("UPDATE CHECK FAILED"); return; }
+    char json[2048];
+    size_t len = fread(json, 1, sizeof(json) - 1, file);
+    fclose(file);
+    remove(tmpPath);
+    if (len == 0 || !parseReleaseJson(json, len)) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus("UPDATE RESPONSE INVALID");
+        return;
+    }
+    if (compareVersion(updateLatestVersion, APP_VERSION) <= 0) {
+        updateState = UPDATE_IDLE;
+        updateSetStatus("UP TO DATE - %s", APP_VERSION);
+        return;
+    }
+    updateState = UPDATE_AVAILABLE;
+    updateSetStatus("UPDATE %s AVAILABLE", updateLatestVersion);
+}
+
+static void startUpdateDownload(void) {
+    updateState = UPDATE_DOWNLOADING;
+    updateProgress = 0;
+    updateTotal = 0;
+    updateSetStatus("DOWNLOADING...");
+
+    // Prefer CIA install when AM is available; otherwise stage 3DSX replacement.
+    updateIsCia = true;
+    const char* url = updateCiaUrl;
+    const char* expectedHash = updateCiaSha256;
+    const char* outputPath = UPDATE_CIA_PATH;
+    if (!url[0] || !expectedHash[0]) {
+        updateIsCia = false;
+        url = update3dsxUrl;
+        expectedHash = update3dsxSha256;
+        outputPath = UPDATE_3DSX_PATH;
+    }
+
+    char host[128] = "";
+    char path[256] = "/";
+    if (strncmp(url, "https://", 8) == 0) {
+        const char* rest = url + 8;
+        const char* slash = strchr(rest, '/');
+        if (slash) {
+            snprintf(host, sizeof(host), "%.*s", (int)(slash - rest), rest);
+            snprintf(path, sizeof(path), "%s", slash);
+        } else {
+            snprintf(host, sizeof(host), "%s", rest);
+        }
+    } else if (strncmp(url, "http://", 7) == 0) {
+        const char* rest = url + 7;
+        const char* slash = strchr(rest, '/');
+        if (slash) {
+            snprintf(host, sizeof(host), "%.*s", (int)(slash - rest), rest);
+            snprintf(path, sizeof(path), "%s", slash);
+        } else {
+            snprintf(host, sizeof(host), "%s", rest);
+        }
+    } else {
+        updateState = UPDATE_ERROR;
+        updateSetStatus("BAD UPDATE URL");
+        return;
+    }
+
+    if (!downloadHttpsFile(host, path, outputPath, &updateProgress, &updateTotal)) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus("DOWNLOAD FAILED");
+        return;
+    }
+
+    updateState = UPDATE_VERIFYING;
+    updateSetStatus("VERIFYING...");
+    char hash[65];
+    if (!sha256File(outputPath, hash) || !hexEqualCaseInsensitive(hash, expectedHash)) {
+        remove(outputPath);
+        updateState = UPDATE_ERROR;
+        updateSetStatus("HASH MISMATCH");
+        return;
+    }
+
+    updateState = UPDATE_READY;
+    updateSetStatus("READY - TAP INSTALL");
+}
+
+static void installUpdate(void) {
+    updateState = UPDATE_INSTALLING;
+    updateSetStatus("INSTALLING...");
+    bool ok = updateIsCia ? installCia(UPDATE_CIA_PATH) : replace3dsx(UPDATE_3DSX_PATH);
+    if (!ok) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus("INSTALL FAILED");
+        return;
+    }
+    updateState = UPDATE_DONE;
+    updateSetStatus("DONE - EXIT & RELAUNCH");
 }
 
 static unsigned countDexFlags(const uint8_t* flags) {
@@ -960,7 +1373,7 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "teleport") ? PAGE_TELEPORT : PAGE_ONLINE;
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "teleport") ? PAGE_TELEPORT : !strcmp(equals, "update") ? PAGE_UPDATE : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
             strcpy(linkRoom, equals);
@@ -2182,6 +2595,41 @@ static void drawTeleportPage(void) {
         drawText(15, 64, .29f, C2D_Color32(255,220,130,255), "%.46s", teleportStatus);
 }
 
+static void drawUpdatePage(void) {
+    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "CURRENT VERSION: %s", APP_VERSION);
+    if (updateLatestVersion[0] && updateState != UPDATE_IDLE && updateState != UPDATE_CHECKING) {
+        drawText(14, 62, .30f, C2D_Color32(160,232,255,255), "LATEST: %s", updateLatestVersion);
+    }
+
+    if (updateState == UPDATE_DOWNLOADING || updateState == UPDATE_VERIFYING) {
+        float pct = updateTotal > 0 ? (float) updateProgress / (float) updateTotal : 0.0f;
+        if (pct > 1.0f) pct = 1.0f;
+        C2D_DrawRectSolid(20, 110, 0, 280, 20, C2D_Color32(45,55,51,255));
+        C2D_DrawRectSolid(22, 112, 0, (unsigned) (276 * pct), 16, C2D_Color32(35,145,88,255));
+        drawText(110, 138, .32f, C2D_Color32(220,245,235,255), "%llu / %llu KB", updateProgress / 1024, updateTotal / 1024);
+    }
+
+    if (updateState == UPDATE_IDLE || updateState == UPDATE_CHECKING || updateState == UPDATE_AVAILABLE || updateState == UPDATE_ERROR) {
+        C2D_DrawRectSolid(10, 166, 0, 300, 24, C2D_Color32(45,105,76,255));
+        drawText(80, 171, .34f, C2D_Color32(255,255,255,255), "CHECK FOR UPDATE");
+    }
+    if (updateState == UPDATE_AVAILABLE) {
+        C2D_DrawRectSolid(10, 194, 0, 300, 24, C2D_Color32(35,145,88,255));
+        drawText(108, 199, .34f, C2D_Color32(255,255,255,255), "DOWNLOAD");
+    }
+    if (updateState == UPDATE_READY) {
+        C2D_DrawRectSolid(10, 194, 0, 300, 24, C2D_Color32(35,145,88,255));
+        drawText(120, 199, .34f, C2D_Color32(255,255,255,255), "INSTALL");
+    }
+    if (updateState == UPDATE_DONE) {
+        C2D_DrawRectSolid(10, 194, 0, 300, 24, C2D_Color32(45,105,76,255));
+        drawText(70, 199, .34f, C2D_Color32(255,255,255,255), "EXIT & RELAUNCH");
+    }
+
+    if (updateStatus[0] && (!updateStatusUntil || osGetTime() < updateStatusUntil))
+        drawText(15, 92, .32f, C2D_Color32(255,220,130,255), "%.46s", updateStatus);
+}
+
 static void drawConnectionDot(float x, float y) {
     uint32_t color;
     if (onlineMode == ONLINE_ACTIVE) color = C2D_Color32(50, 205, 50, 255);
@@ -2201,9 +2649,10 @@ static void drawPageIndicators(float y) {
         C2D_Color32(130, 200, 80, 255),  // Map
         C2D_Color32(160, 160, 160, 255), // Stats
         C2D_Color32(200, 130, 60, 255),  // Teleport
+        C2D_Color32(200, 100, 160, 255), // Update
     };
-    const float startX = 160 - (8 * 14) / 2.0f;
-    for (unsigned page = 0; page < 8; ++page) {
+    const float startX = 160 - (9 * 14) / 2.0f;
+    for (unsigned page = 0; page < 9; ++page) {
         float cx = startX + page * 14 + 4;
         uint32_t dotColor = (page == (unsigned) bottomPage) ? C2D_Color32(255, 255, 255, 255) : colors[page];
         C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
@@ -2222,11 +2671,13 @@ static void drawBottom(void) {
         bottomPage == PAGE_BAG ? "BAG - LOCAL ONLY" :
         bottomPage == PAGE_MAP ? "MAP & TRAINER RADAR" :
         bottomPage == PAGE_STATS ? "PLAYER STATS & CONSENT" :
-        bottomPage == PAGE_TELEPORT ? "TELEPORT" : "EMERALD ONLINE";
+        bottomPage == PAGE_TELEPORT ? "TELEPORT" :
+        bottomPage == PAGE_UPDATE ? "SYSTEM UPDATE" : "EMERALD ONLINE";
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
     drawConnectionDot(306, 16);
     drawText(280, 14, .30f, C2D_Color32(180,220,205,255), "Y >");
     drawPageIndicators(31);
+    if (bottomPage == PAGE_UPDATE) { drawUpdatePage(); return; }
     if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
     if (bottomPage == PAGE_USERS) { drawOnlineUsersPage(); return; }
     if (bottomPage == PAGE_CHAT) { drawChatPage(); return; }
@@ -2510,7 +2961,7 @@ int main(void) {
         heldKeys = hidKeysHeld();
         uint32_t down = hidKeysDown();
         if (down & KEY_X) onlineToggle();
-        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 8);
+        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 9);
         if (down & KEY_TOUCH) {
             touchPosition touch;
             hidTouchRead(&touch);
@@ -2565,6 +3016,14 @@ int main(void) {
                     char packet[96];
                     snprintf(packet, sizeof(packet), "{\"type\":\"teleport\",\"destination_id\":\"%s\"}\n", dest->id);
                     onlineSend(packet);
+                }
+            } else if (bottomPage == PAGE_UPDATE) {
+                if (touch.py >= 166 && touch.py < 190 && (updateState == UPDATE_IDLE || updateState == UPDATE_CHECKING || updateState == UPDATE_AVAILABLE || updateState == UPDATE_ERROR)) {
+                    checkForUpdate();
+                } else if (touch.py >= 194 && touch.py < 218) {
+                    if (updateState == UPDATE_AVAILABLE) startUpdateDownload();
+                    else if (updateState == UPDATE_READY) installUpdate();
+                    else if (updateState == UPDATE_DONE) quitRequested = true;
                 }
             } else if (bottomPage == PAGE_ONLINE && touch.py >= 202) sendEmote(touch.px / 81);
             else if (bottomPage == PAGE_ONLINE && touch.py >= 46 && touch.py < 90) openBrowserPairing();

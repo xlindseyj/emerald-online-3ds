@@ -103,6 +103,34 @@ async function readPublicStatus() {
   return { ok: services.every(service => service.status === 'operational'), checkedAt: new Date().toISOString(), release: packageInfo.version, services };
 }
 
+function readReleaseChecksums() {
+  const sums = {};
+  try {
+    const content = fs.readFileSync(checksumsPath, 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+/);
+      if (parts.length >= 2) sums[parts[1]] = parts[0];
+    }
+  } catch {
+    return sums;
+  }
+  return sums;
+}
+
+function readReleaseInfo() {
+  const checksums = readReleaseChecksums();
+  return {
+    version: packageInfo.version,
+    cia_url: `${publicBase}/emerald-online-3ds.cia`,
+    threedsx_url: `${publicBase}/emerald-online-3ds.3dsx`,
+    sha256_cia: checksums['emerald-online-3ds.cia'] ?? null,
+    sha256_threedsx: checksums['emerald-online-3ds.3dsx'] ?? null,
+    release_notes_url: `${publicBase}/`
+  };
+}
+
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535 ||
     !Number.isSafeInteger(gamePort) || gamePort < 1 || gamePort > 65535 ||
     !Number.isSafeInteger(statusPort) || statusPort < 1 || statusPort > 65535 ||
@@ -274,6 +302,11 @@ const server = http.createServer(async (req, res) => {
     const result = await readPublicStatus();
     res.writeHead(result.ok ? 200 : 503, securityHeaders({ 'content-type': 'application/json', 'cache-control': 'no-store' }));
     res.end(JSON.stringify(result));
+    return;
+  }
+  if (pathname === '/api/release') {
+    res.writeHead(200, securityHeaders({ 'content-type': 'application/json', 'cache-control': 'no-store' }));
+    res.end(JSON.stringify(readReleaseInfo()));
     return;
   }
   res.writeHead(404, securityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));

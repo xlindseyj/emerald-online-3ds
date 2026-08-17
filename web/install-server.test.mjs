@@ -145,6 +145,16 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(checksums.status, 200);
   assert.match(await checksums.text(), /emerald-online-3ds\.cia/);
 
+  const release = await fetch(`${base}/api/release`);
+  assert.equal(release.status, 200);
+  const releaseBody = await release.json();
+  assert.equal(releaseBody.version, releaseVersion);
+  assert.equal(releaseBody.cia_url, 'https://emeraldonline3ds.com/emerald-online-3ds.cia');
+  assert.equal(releaseBody.threedsx_url, 'https://emeraldonline3ds.com/emerald-online-3ds.3dsx');
+  assert.match(releaseBody.sha256_cia, /^[a-f0-9]{64}$/);
+  assert.match(releaseBody.sha256_threedsx, /^[a-f0-9]{64}$/);
+  assert.equal(releaseBody.release_notes_url, 'https://emeraldonline3ds.com/');
+
   const welcome = await new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${installPort}/game`);
     const timeout = setTimeout(() => reject(new Error('WebSocket welcome timeout')), 2000);
