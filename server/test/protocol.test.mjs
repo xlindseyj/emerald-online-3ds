@@ -69,7 +69,7 @@ test('rejects state before hello', async t => {
   assert.equal((await next(m => m.type === 'error')).code, 'invalid_hello');
 });
 
-test('chat is delivered only to trainers in the same map', async t => {
+test('map chat stays map-local and global chat reaches all authenticated trainers', async t => {
   const { server } = createPresenceServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
   const port = server.address().port, a = await connect(port), b = await connect(port), c = await connect(port);
   t.after(() => { a.destroy(); b.destroy(); c.destroy(); });
@@ -83,12 +83,21 @@ test('chat is delivered only to trainers in the same map', async t => {
   a.write('{"type":"chat","text":"Meet by the grass!"}\n');
   const delivered = await nextA(m => m.type === 'chat');
   assert.equal(delivered.text, 'Meet by the grass!');
+  assert.equal(delivered.scope, 'map');
   assert.match(delivered.sentAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal((await nextB(m => m.type === 'chat')).name, 'May');
   a.write('{"type":"chat","text":"too fast"}\n');
   assert.equal((await nextA(m => m.code === 'chat_rate_limited')).type, 'error');
   c.write('{"type":"chat","text":"Town only"}\n');
   assert.equal((await nextC(m => m.type === 'chat')).text, 'Town only');
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  a.write('{"type":"chat","scope":"global","text":"Hello everyone!"}\n');
+  assert.equal((await nextA(m => m.type === 'chat' && m.scope === 'global')).text, 'Hello everyone!');
+  assert.equal((await nextB(m => m.type === 'chat' && m.scope === 'global')).name, 'May');
+  assert.equal((await nextC(m => m.type === 'chat' && m.scope === 'global')).map, 'route101');
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  a.write('{"type":"chat","scope":"nearby","text":"invalid scope"}\n');
+  assert.equal((await nextA(m => m.code === 'invalid_chat')).type, 'error');
 });
 
 test('emotes are allowlisted, rate limited, and isolated by map', async t => {

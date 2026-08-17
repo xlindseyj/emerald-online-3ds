@@ -152,12 +152,28 @@ fetch('/api/status',{cache:'no-store'}).then(async response=>{const data=await r
 
 page = page
   .replace(
+    'presence, roster, same-map chat, emotes, pairing, and forums are available.',
+    'presence, roster, switchable map/global chat, emotes, pairing, and forums are available.'
+  )
+  .replace(
+    'Gameplay snapshots, chat, and emotes remain map-local.',
+    'Gameplay snapshots and emotes remain map-local. Chat is session-only: Map Chat stays map-local, while Global Chat is visible to every authenticated online trainer.'
+  )
+  .replace(
+    'Routine map chat is relayed without server storage.',
+    'Routine Map and Global Chat are relayed without server storage.'
+  )
+  .replace(
+    'Map Chat keeps a session-only, current-map list with sender, UTC timestamp, message, paging, and a Compose control.',
+    'Chat switches between session-only Map and Global views, uses larger rows, and opens a full message when tapped.'
+  )
+  .replace(
     'Native RFU/Union Room battles and trades remain a private opt-in experiment and are not claimed working.',
     'A complete two-Azahar RFU/Union Room trade now passes, including the native animation, save, restart, and party exchange. Physical 3DS trading, battles, interruption recovery, audio, and hardware performance remain private acceptance work.'
   )
   .replace(
     '<div class="shots">',
-    '<div class="shots"><figure><img src="/release-media/0.8.7-trading-board.png" alt="CODEX offering Torchic for a Water-type Pokemon on Emerald\'s native Union Room Trading Board" loading="lazy"><figcaption>Two isolated Azahar clients found the same native Trading Board offer through the public relay.</figcaption></figure><figure><img src="/release-media/0.8.7-union-room-trade.png" alt="Native Pokemon Emerald Union Room trade animation sending Marill" loading="lazy"><figcaption>The v0.8.7 acceptance run completed Emerald\'s native trade animation, automatic save, restart, and exchanged-party verification.</figcaption></figure>'
+    '<div class="shots"><figure><img src="/release-media/0.8.8-map-global-chat.png" alt="Emerald Online 3DS Chat page with Map Chat and Global Chat scope buttons, large message text, and tap-to-read guidance" loading="lazy"><figcaption>Version 0.8.8 switches between Map and Global Chat, shows three larger message rows per page, and opens the full text when a row is tapped.</figcaption></figure><figure><img src="/release-media/0.8.7-trading-board.png" alt="CODEX offering Torchic for a Water-type Pokemon on Emerald\'s native Union Room Trading Board" loading="lazy"><figcaption>Two isolated Azahar clients found the same native Trading Board offer through the public relay.</figcaption></figure><figure><img src="/release-media/0.8.7-union-room-trade.png" alt="Native Pokemon Emerald Union Room trade animation sending Marill" loading="lazy"><figcaption>The v0.8.7 acceptance run completed Emerald\'s native trade animation, automatic save, restart, and exchanged-party verification.</figcaption></figure>'
   )
   .replace(
     'ROM-derived gameplay pixels and private save information are not used as website media.',

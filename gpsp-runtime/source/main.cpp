@@ -54,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.8.7"
+#define APP_VERSION "0.8.8"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
@@ -89,6 +89,8 @@ static unsigned bagPocket;
 static unsigned bagPage;
 static unsigned onlineUserPage;
 static unsigned chatPage;
+static bool globalChat;
+static int chatDetailIndex = -1;
 static char itemNames[EMERALD_ITEM_COUNT][15];
 static bool itemNamesLoaded;
 static bool dynarecEnabled = true;
@@ -265,6 +267,7 @@ struct ChatMessage {
     char map[33];
     char time[7];
     char text[81];
+    bool global;
 };
 static ChatMessage chatHistory[24];
 static unsigned chatHistoryCount;
@@ -1415,10 +1418,11 @@ static void parseOnlineLine(char* line) {
         return;
     }
     if (jsonTypeIs(line, "chat")) {
-        char name[13] = {}, text[81] = {}, map[33] = {}, sentAt[32] = {};
+        char name[13] = {}, text[81] = {}, map[33] = {}, sentAt[32] = {}, scope[8] = {};
         if (!jsonString(line, "name", name, sizeof(name)) || !jsonString(line, "text", text, sizeof(text))) return;
         jsonString(line, "map", map, sizeof(map));
         jsonString(line, "sentAt", sentAt, sizeof(sentAt));
+        jsonString(line, "scope", scope, sizeof(scope));
         strcpy(lastChatName, name);
         strcpy(lastChatText, text);
         if (chatHistoryCount == 24) {
@@ -1429,6 +1433,7 @@ static void parseOnlineLine(char* line) {
         strcpy(message->name, name);
         strcpy(message->map, map);
         strcpy(message->text, text);
+        message->global = !strcmp(scope, "global");
         if (strlen(sentAt) >= 16 && sentAt[10] == 'T' && sentAt[13] == ':')
             snprintf(message->time, sizeof(message->time), "%c%c:%c%cZ", sentAt[11], sentAt[12], sentAt[14], sentAt[15]);
         else strcpy(message->time, "NOW");
@@ -1643,11 +1648,11 @@ static void openChat(void) {
     SwkbdState keyboard;
     char text[81] = {};
     swkbdInit(&keyboard, SWKBD_TYPE_NORMAL, 2, 80);
-    swkbdSetHintText(&keyboard, "Message trainers on this map");
+    swkbdSetHintText(&keyboard, globalChat ? "Message all online trainers" : "Message trainers on this map");
     if (swkbdInputText(&keyboard, text, sizeof(text)) != SWKBD_BUTTON_CONFIRM || !text[0]) return;
     for (char* p = text; *p; ++p) if (*p == '"' || *p == '\\' || (unsigned char)*p < 0x20) *p = ' ';
     char packet[144];
-    snprintf(packet, sizeof(packet), "{\"type\":\"chat\",\"text\":\"%s\"}\n", text);
+    snprintf(packet, sizeof(packet), "{\"type\":\"chat\",\"scope\":\"%s\",\"text\":\"%s\"}\n", globalChat ? "global" : "map", text);
     onlineSend(packet);
 }
 
@@ -1938,37 +1943,70 @@ static void drawOnlineUsersPage(void) {
     drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
 }
 
-static unsigned currentMapChatIndices(unsigned indices[24]) {
-    if (!presence.valid) return 0;
+static unsigned currentChatIndices(unsigned indices[24]) {
+    if (!globalChat && !presence.valid) return 0;
     char map[33];
     snprintf(map, sizeof(map), "%u-%u", presence.mapGroup, presence.mapNum);
     unsigned count = 0;
     for (unsigned index = 0; index < chatHistoryCount; ++index)
-        if (!strcmp(chatHistory[index].map, map)) indices[count++] = index;
+        if (globalChat ? chatHistory[index].global : (!chatHistory[index].global && !strcmp(chatHistory[index].map, map)))
+            indices[count++] = index;
     return count;
 }
 
-static void drawMapChatPage(void) {
+static void drawChatDetail(const ChatMessage* message) {
+    drawText(16, 74, .42f, C2D_Color32(160,232,255,255), "%.12s", message->name);
+    drawText(238, 76, .33f, C2D_Color32(190,220,210,255), "%s", message->time);
+    drawText(16, 96, .31f, C2D_Color32(255,213,128,255), "%s FROM MAP %.16s", message->global ? "GLOBAL" : "MAP", message->map);
+    const char* at = message->text;
+    for (unsigned row = 0; row < 3 && *at; ++row) {
+        size_t remaining = strlen(at), length = remaining > 34 ? 34 : remaining;
+        if (remaining > length) {
+            size_t split = length;
+            while (split > 20 && at[split] != ' ') --split;
+            if (split > 20) length = split;
+        }
+        char line[35] = {};
+        memcpy(line, at, length);
+        drawText(16, 123 + row * 25, .42f, C2D_Color32(255,255,255,255), "%s", line);
+        at += length;
+        while (*at == ' ') ++at;
+    }
+    C2D_DrawRectSolid(10, 216, 0, 300, 24, C2D_Color32(45,105,76,255));
+    drawText(126, 221, .34f, C2D_Color32(255,255,255,255), "BACK");
+}
+
+static void drawChatPage(void) {
     unsigned indices[24];
-    const unsigned count = currentMapChatIndices(indices);
-    const unsigned pageCount = count ? (count + 3) / 4 : 1;
+    const unsigned count = currentChatIndices(indices);
+    const unsigned pageCount = count ? (count + 2) / 3 : 1;
     if (chatPage >= pageCount) chatPage = pageCount - 1;
-    if (presence.valid)
-        drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "%u MSG - MAP %u-%u - SESSION ONLY - UTC", count, presence.mapGroup, presence.mapNum);
-    else drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "CURRENT MAP - SESSION ONLY - TIMES ARE UTC");
-    const unsigned start = chatPage * 4;
-    for (unsigned row = 0; row < 4; ++row) {
-        const float y = 61 + row * 37;
-        C2D_DrawRectSolid(10, y, 0, 300, 33, C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+    C2D_DrawRectSolid(10, 42, 0, 145, 24, globalChat ? C2D_Color32(45,55,51,255) : C2D_Color32(35,145,88,255));
+    C2D_DrawRectSolid(165, 42, 0, 145, 24, globalChat ? C2D_Color32(35,145,88,255) : C2D_Color32(45,55,51,255));
+    drawText(58, 47, .35f, C2D_Color32(255,255,255,255), "MAP CHAT");
+    drawText(204, 47, .35f, C2D_Color32(255,255,255,255), "GLOBAL CHAT");
+    if (chatDetailIndex >= 0 && (unsigned) chatDetailIndex < chatHistoryCount) {
+        drawChatDetail(&chatHistory[chatDetailIndex]);
+        return;
+    }
+    if (globalChat)
+        drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "%u GLOBAL MSG - SESSION ONLY - UTC - TAP TO READ", count);
+    else if (presence.valid)
+        drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "%u MSG - MAP %u-%u - UTC - TAP TO READ", count, presence.mapGroup, presence.mapNum);
+    else drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "CURRENT MAP - SESSION ONLY - TIMES ARE UTC");
+    const unsigned start = chatPage * 3;
+    for (unsigned row = 0; row < 3; ++row) {
+        const float y = 86 + row * 40;
+        C2D_DrawRectSolid(10, y, 0, 300, 36, C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
         const unsigned visible = start + row;
         if (visible >= count) continue;
         const ChatMessage* message = &chatHistory[indices[visible]];
-        drawText(18, y + 3, .35f, C2D_Color32(160,232,255,255), "%.12s", message->name);
-        drawText(263, y + 3, .31f, C2D_Color32(190,220,210,255), "%s", message->time);
-        drawText(18, y + 18, .28f, C2D_Color32(255,255,255,255), "%.80s", message->text);
+        drawText(18, y + 3, .38f, C2D_Color32(160,232,255,255), "%.12s", message->name);
+        drawText(263, y + 4, .32f, C2D_Color32(190,220,210,255), "%s", message->time);
+        drawText(18, y + 20, .34f, C2D_Color32(255,255,255,255), "%.38s", message->text);
     }
     if (!count)
-        drawText(79, 117, .39f, C2D_Color32(180,205,200,255), presence.valid ? "No messages on this map yet" : "Waiting for the overworld...");
+        drawText(64, 132, .39f, C2D_Color32(180,205,200,255), globalChat ? "No global messages this session" : presence.valid ? "No messages on this map yet" : "Waiting for the overworld...");
     C2D_DrawRectSolid(10, 216, 0, 94, 24, chatPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(113, 216, 0, 94, 24, onlineMode == ONLINE_ACTIVE && presence.valid ? C2D_Color32(35,145,88,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(216, 216, 0, 94, 24, chatPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
@@ -1984,7 +2022,7 @@ static void drawBottom(void) {
     C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
     C2D_TextBufClear(textBuffer);
     const char* title = bottomPage == PAGE_USERS ? "ONLINE USERS - READ ONLY" :
-        bottomPage == PAGE_CHAT ? "MAP CHAT" :
+        bottomPage == PAGE_CHAT ? "CHAT" :
         bottomPage == PAGE_PARTY ? "PARTY - LOCAL ONLY" :
         bottomPage == PAGE_BAG ? "BAG - LOCAL ONLY" :
         bottomPage == PAGE_MAP ? "MAP & TRAINER RADAR" :
@@ -1992,7 +2030,7 @@ static void drawBottom(void) {
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
     drawText(280,14,.30f,C2D_Color32(180,220,205,255),"Y >");
     if (bottomPage == PAGE_USERS) { drawOnlineUsersPage(); return; }
-    if (bottomPage == PAGE_CHAT) { drawMapChatPage(); return; }
+    if (bottomPage == PAGE_CHAT) { drawChatPage(); return; }
     if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
     if (bottomPage == PAGE_MAP) { drawMapPage(); return; }
     if (bottomPage == PAGE_BAG) { drawBagPage(); return; }
@@ -2276,10 +2314,21 @@ int main(void) {
                 const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
                 if (touch.px < 160) { if (onlineUserPage) --onlineUserPage; }
                 else if (onlineUserPage + 1 < pageCount) ++onlineUserPage;
+            } else if (bottomPage == PAGE_CHAT && touch.py >= 40 && touch.py < 68) {
+                globalChat = touch.px >= 160;
+                chatPage = 0;
+                chatDetailIndex = -1;
+            } else if (bottomPage == PAGE_CHAT && chatDetailIndex >= 0) {
+                if (touch.py >= 210) chatDetailIndex = -1;
+            } else if (bottomPage == PAGE_CHAT && touch.py >= 86 && touch.py < 207) {
+                unsigned indices[24];
+                const unsigned count = currentChatIndices(indices);
+                const unsigned visible = chatPage * 3 + (touch.py - 86) / 40;
+                if (visible < count) chatDetailIndex = (int) indices[visible];
             } else if (bottomPage == PAGE_CHAT && touch.py >= 210) {
                 unsigned indices[24];
-                const unsigned count = currentMapChatIndices(indices);
-                const unsigned pageCount = count ? (count + 3) / 4 : 1;
+                const unsigned count = currentChatIndices(indices);
+                const unsigned pageCount = count ? (count + 2) / 3 : 1;
                 if (chatPage >= pageCount) chatPage = pageCount - 1;
                 if (touch.px < 108) { if (chatPage) --chatPage; }
                 else if (touch.px < 212) openChat();

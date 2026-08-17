@@ -559,5 +559,80 @@
         "caption": "The two-client v0.8.7 run completed the native animation, automatic save, restart, and exchanged-party verification."
       }
     ]
+  },
+  {
+    "version": "0.8.8",
+    "releasedAt": "2026-08-17T01:30:00Z",
+    "title": "Readable Map and Global Chat",
+    "status": "Current experimental beta",
+    "summary": "Adds an explicit Map Chat and Global Chat switch, larger message rows, and a tap-to-read full-message view while preserving session-only relay privacy and the existing opt-in RFU boundary.",
+    "highlights": [
+      "Adds separate Map Chat and Global Chat buttons to the lower-screen Chat page; map messages remain isolated to the current map and global messages reach all authenticated online trainers.",
+      "Increases sender and message text size, uses three readable rows per page, and lets users tap a row to open the complete message with sender, timestamp, scope, and source map.",
+      "Keeps all routine chat memory-only and session-only: the server validates the selected scope, rate-limits messages, and does not persist their contents.",
+      "Retains the verified two-Azahar Union Room trade path while recording the current native battle communication failure as an open Gate 4 defect."
+    ],
+    "verification": [
+      "The server suite verifies backward-compatible map-default messages, same-map isolation, global delivery across different maps, rate limiting, and rejection of invalid scopes.",
+      "Runtime source coverage verifies both scope buttons, three-row paging, larger message text, tap-to-read detail rendering, scope-aware composition, and session-only history.",
+      "The 3DS runtime compiles successfully with devkitARM after the Chat interface changes.",
+      "A two-Azahar native battle selected both parties and reached the LINZ-versus-CODEX screen before the peer received Emerald's communication error; the relay showed no packet-rate rejection."
+    ],
+    "knownIssues": [
+      "Native RFU battle acceptance is blocked: one two-Azahar peer received Emerald's communication error immediately after party exchange while the other reached the VS screen.",
+      "Physical 3DS battle/trade, interruption recovery, save-integrity, audio, latency, and performance acceptance remain open; public link invitations and battle/trade rankings stay disabled.",
+      "Old 3DS frame rate has previously measured 48-52 FPS in the current Gate 4 scenario; the 60 FPS acceptance target is not yet met.",
+      "Remote trainer overlays can appear in front of foreground objects such as tree canopies or signs because ROM-derived priority data is not sent to the service."
+    ],
+    "upgradeNotes": [
+      "Back up and preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, online.cfg, and link-backups when replacing the 3DSX or reinstalling the CIA.",
+      "Global Chat is visible to every authenticated trainer currently online; select Map Chat when the message should remain limited to trainers on the current map.",
+      "Normal users should not add link_room. Gate 4 testers must use a fresh unpredictable shared room and independent save backups.",
+      "Copying a CIA onto the SD card does not update an installed HOME Menu title; reinstall it through FBI."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "b1894328c97fc7fe5c1cc525a1a079edf244e80a1a4b193d603bd16ec9b3a726",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "a242107124b7f851e2519a04b92f3942d0d1b90c3b37552e6dd0eac86058b6ab",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "22b413d2f1a5ec6b794942dd3de057e2cdf4b262f694fdd136fd32a797e924f2",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.8 makes session chat easier to navigate and read on the Nintendo 3DS lower screen."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Back up every private file and reinstall the current CIA through FBI; copying the CIA alone does not update the installed title."
+      },
+      {
+        "url": "/release-media/0.8.4-online-users.png",
+        "alt": "Read-only global Online Users list on the 3DS lower screen",
+        "caption": "The global roster remains read-only and shows the current map and tile coordinates for connected trainers."
+      },
+      {
+        "url": "/release-media/0.8.8-map-global-chat.png",
+        "alt": "Map Chat and Global Chat scope buttons with larger session message text on the 3DS lower screen",
+        "caption": "Authentic 0.8.8 Azahar capture cropped to the project-owned lower screen; the selected Map Chat view shows the new scope switch, three-row layout, UTC timestamp, and tap-to-read guidance without private player data."
+      },
+      {
+        "url": "/release-media/0.8.7-union-room-trade.png",
+        "alt": "Native Emerald Union Room trade animation sending Marill",
+        "caption": "The verified two-client trade remains emulator evidence only; Gate 4 physical acceptance is still open."
+      }
+    ]
   }
 ]

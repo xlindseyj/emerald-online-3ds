@@ -237,8 +237,11 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       if (Date.now() - client.lastChat < 1000) return send(socket, { type: 'error', code: 'chat_rate_limited' });
       client.lastChat = Date.now();
       metrics.chats++;
-      const chat = { type: 'chat', id: client.id, name: client.name, map: client.state.map, sentAt: new Date(client.lastChat).toISOString(), text: msg.text };
-      for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, chat);
+      const scope = msg.scope === 'global' ? 'global' : 'map';
+      const chat = { type: 'chat', scope, id: client.id, name: client.name, map: client.state.map, sentAt: new Date(client.lastChat).toISOString(), text: msg.text };
+      for (const peer of clients.values()) {
+        if (peer.name && peer.state && (scope === 'global' || peer.state.map === client.state.map)) send(peer.socket, chat);
+      }
       return;
     }
     if (msg.type === 'emote') {

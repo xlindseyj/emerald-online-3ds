@@ -15,20 +15,19 @@ const rawCommunityPublications = JSON.parse(fs.readFileSync(path.join(root, 'rel
 
 test('release catalog produces structured, image-safe official posts', () => {
   const catalog = validateReleaseCatalog(rawCatalog);
-  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7']);
+  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7', '0.8.8']);
   const current = catalog.at(-1);
   const topic = formatReleaseTopic(current);
-  assert.match(topic.title, /v0\.8\.7/);
+  assert.match(topic.title, /v0\.8\.8/);
   assert.match(topic.body, /## Highlights/);
-  assert.match(topic.body, /RFU\/Union Room/);
-  assert.match(topic.body, /trade path now passes in two Azahar clients/);
+  assert.match(topic.body, /Map Chat and Global Chat/);
+  assert.match(topic.body, /battle acceptance is blocked/);
   assert.match(topic.body, /\[CIA\]\(\/emerald-online-3ds\.cia\)/);
   const rendered = renderMarkdown(topic.body);
   assert.match(rendered, /<img src="\/logo\.png"/);
   assert.match(rendered, /<img src="\/qr\.svg"/);
   assert.match(rendered, /<img src="\/release-media\/0\.8\.4-online-users\.png"/);
-  assert.match(rendered, /<img src="\/release-media\/0\.8\.4-map-chat\.png"/);
-  assert.match(rendered, /<img src="\/release-media\/0\.8\.7-trading-board\.png"/);
+  assert.match(rendered, /<img src="\/release-media\/0\.8\.8-map-global-chat\.png"/);
   assert.match(rendered, /<img src="\/release-media\/0\.8\.7-union-room-trade\.png"/);
   assert.match(rendered, /<h2>Highlights<\/h2>/);
   assert.match(rendered, /<ul><li>/);
@@ -91,9 +90,21 @@ test('confirmed FPS issue publishes idempotently with the recovery workaround', 
   assert.equal(published.author_identity_id, null);
 });
 
+test('confirmed RFU battle failure is published without widening the trade claim', () => {
+  const issues = validateKnownIssueCatalog(rawKnownIssues);
+  const issue = issues.find(item => item.key === 'rfu-union-room-battle-communication-error');
+  assert.ok(issue);
+  const topic = formatKnownIssueTopic(issue);
+  assert.match(topic.title, /Union Room battle/);
+  assert.match(topic.body, /native VS screen/);
+  assert.match(topic.body, /zero link packet rate-limit rejections/);
+  assert.match(topic.body, /Do not use native RFU battles/);
+  assert.match(topic.body, /Do not post ROM data/);
+});
+
 test('official guides and status pages populate every forum purpose idempotently', async () => {
   const publications = validateCommunityPublicationCatalog(rawCommunityPublications);
-  assert.equal(publications.length, 11);
+  assert.equal(publications.length, 12);
   assert.deepEqual(new Set(publications.map(item => item.category)), new Set([
     'announcements', 'installation-help', 'service-status', 'beta-testing',
     'development-code', 'feature-ideas', 'multiplayer-help', 'general'
@@ -103,6 +114,7 @@ test('official guides and status pages populate every forum purpose idempotently
   const trade = publications.find(item => item.key === 'union-room-trade-testing');
   const status = publications.find(item => item.key === 'live-service-status');
   const privacy = publications.find(item => item.key === 'privacy-and-data');
+  const chat = publications.find(item => item.key === 'map-and-global-chat');
   assert.match(renderMarkdown(install.body), /<img src="\/qr\.svg"/);
   assert.match(install.body, /a9dec84dfe7f62ab2220bafaef7479da0929d066ece16a6885f6226db19085af/);
   assert.match(install.body, /server=live\.emeraldonline3ds\.com/);
@@ -117,6 +129,9 @@ test('official guides and status pages populate every forum purpose idempotently
   assert.match(privacy.body, /five-minute code/);
   assert.match(privacy.body, /not stored in the database/);
   assert.match(privacy.body, /30 idle days/);
+  assert.match(chat.body, /Map Chat/);
+  assert.match(chat.body, /Global Chat/);
+  assert.match(chat.body, /tap a message row/i);
 
   const store = new MemoryCommunityStore();
   let firstTopicId;

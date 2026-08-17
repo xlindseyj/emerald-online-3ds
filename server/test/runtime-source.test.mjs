@@ -149,7 +149,7 @@ test('gpSP bottom screen exposes local-only bag data and a same-map trainer rada
   assert.doesNotMatch(bagSource, /onlineSend|stats_snapshot|fetch|send\(/);
 });
 
-test('gpSP bottom screen exposes paged global users and session-only map chat lists', () => {
+test('gpSP bottom screen exposes paged users plus readable map and global chat lists', () => {
   assert.match(gpspSource, /PAGE_USERS/);
   assert.match(gpspSource, /PAGE_CHAT/);
   assert.match(gpspSource, /ONLINE USERS - READ ONLY/);
@@ -159,18 +159,23 @@ test('gpSP bottom screen exposes paged global users and session-only map chat li
   assert.match(gpspSource, /%.14s  %d,%d/);
   assert.match(gpspSource, /pageCount = onlineUserCount \? \(onlineUserCount \+ 5\) \/ 6 : 1/);
   assert.match(gpspSource, /MAP CHAT/);
+  assert.match(gpspSource, /GLOBAL CHAT/);
+  assert.match(gpspSource, /scope.*global/);
   assert.match(gpspSource, /SESSION ONLY - (?:UTC|TIMES ARE UTC)/);
   assert.match(gpspSource, /ChatMessage chatHistory\[24\]/);
   assert.match(gpspSource, /message->name/);
   assert.match(gpspSource, /message->time/);
   assert.match(gpspSource, /message->text/);
-  assert.match(gpspSource, /currentMapChatIndices/);
+  assert.match(gpspSource, /currentChatIndices/);
+  assert.match(gpspSource, /drawChatDetail/);
+  assert.match(gpspSource, /TAP TO READ/);
+  assert.match(gpspSource, /chatPage \* 3/);
   assert.match(gpspSource, /COMPOSE/);
   assert.match(gpspSource, /bottomPage \+ 1\) % 7/);
   assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
   assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
   const usersStart = gpspSource.indexOf('static void drawOnlineUsersPage');
-  const usersEnd = gpspSource.indexOf('static unsigned currentMapChatIndices', usersStart);
+  const usersEnd = gpspSource.indexOf('static unsigned currentChatIndices', usersStart);
   assert.doesNotMatch(gpspSource.slice(usersStart, usersEnd), /openChat|sendEmote|onlineSend/);
 });
 

@@ -58,7 +58,7 @@ export function formatKnownIssueTopic(issue) {
   for (const item of issue.workaround) lines.push(`- ${item}`);
   lines.push('', '## Help us narrow it down');
   for (const item of issue.requestedEvidence) lines.push(`- ${item}`);
-  lines.push('', '---', '', 'Reply with sanitized results. Do not post ROM data, save files, identity.cfg, recovery codes, screenshots containing personal information, or copyrighted game assets. This workaround is not considered a fix; the issue remains open until frame pacing is stable across supported devices and scenes.');
+  lines.push('', '---', '', 'Reply with sanitized results. Do not post ROM data, save files, identity.cfg, recovery codes, screenshots containing personal information, or copyrighted game assets. A workaround is not considered a fix; the issue remains open until the reported behavior no longer reproduces across the affected test matrix.');
   const body = lines.join('\n');
   if (body.length > 10000) throw new Error(`known issue ${issue.key} exceeds forum limit`);
   return { title: `Known issue: ${issue.title}`, body };

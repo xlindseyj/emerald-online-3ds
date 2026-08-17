@@ -5,6 +5,7 @@ const NAME = /^[\x20-!#-\[\]-~]{1,12}$/;
 const MAP = /^[a-z0-9_-]{1,32}$/;
 const FACINGS = new Set(['up', 'down', 'left', 'right']);
 const CHAT = /^[\x20-!#-\[\]-~]{1,80}$/;
+const CHAT_SCOPES = new Set(['map', 'global']);
 const EMOTES = new Set(['wave', 'battle', 'trade', 'gg']);
 const SESSION = /^[a-f0-9]{32}$/i;
 const IDENTITY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -87,7 +88,8 @@ export function validateState(msg, previousSeq = -1) {
 }
 
 export function validateChat(msg) {
-	return msg?.type === 'chat' && typeof msg.text === 'string' && CHAT.test(msg.text);
+	return msg?.type === 'chat' && typeof msg.text === 'string' && CHAT.test(msg.text) &&
+		(msg.scope === undefined || CHAT_SCOPES.has(msg.scope));
 }
 
 export function validateEmote(msg) {

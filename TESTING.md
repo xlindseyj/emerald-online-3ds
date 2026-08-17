@@ -1,6 +1,6 @@
 # Hardware smoke test
 
-The current public release is 0.8.7 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes Online Users and Map Chat in the lower-page cycle and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
+The current public release is 0.8.8 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes Online Users plus switchable Map and Global Chat in the lower-page cycle and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
 
@@ -8,10 +8,10 @@ Verify every public artifact against `release/SHA256SUMS`; it is the authoritati
 
 - Runtime link path: an explicitly configured private link room now selects gpSP's Emerald RFU backend. The frontend drains packets inside gpSP wait callbacks and once per emulated frame during a live session, preserves temporary RFU host-scan transitions, clears explicit withdrawal/disconnect state, requests New 3DS CPU/L2 acceleration where available, and suppresses external overlays on native multiplayer maps.
 - Interactive Azahar acceptance: two isolated Azahar 2126.0 clients entered Emerald's native Union Room, saw the native trainer avatars, shared a Trading Board offer, and exchanged a level 13 Torchic from CODEX for a level 6 Marill from LINZ. The native animation and automatic save completed on both clients. After restart, CODEX loaded a party containing two Marill and LINZ loaded a party containing two Torchic, proving the exchange persisted without duplication or loss in that two-emulator run.
-- Route constraint: use the Wireless Club / Union Room upstairs in a Pokémon Center. The Direct Corner cable attendants are not supported by the v0.8.7 RFU test path.
+- Route constraint: use the Wireless Club / Union Room upstairs in a Pokémon Center. The Direct Corner cable attendants are not supported by the v0.8.8 RFU test path.
 - Automated and release verification: 60 tests passed, three PostgreSQL-only tests were skipped in the non-database run, the release audit passed, and the staged secret scan found no leaks. The current CIA, 3DSX, and source hashes are `fbbb8f99b47d9443e4d8145d5ef0dd7aef3877e11af818cb6376f4bd201171f3`, `66db704f409dae82078662ddb9bd189ef363bd8eff7bebc5111af2abedd82641`, and `494877949e55693a0bfdefda5a314d4f7032e22b3961eac47b4eebcf0bcd36c8`.
 - Production recheck: deployment image `sha256:b4865ad3e7075f812a7aad303fe17c6ce1ed15f83f19e4e092a7ea24c81016f9` is Ready with zero application-container restarts. The public health endpoint reports protocol 2 and database ready; the live status API reports the website, forums, multiplayer WSS gateway, and downloads Operational. All three downloaded public artifacts match the hashes above.
-- Remaining Gate 4 acceptance: complete a two-client native battle, then repeat the native battle and trade with the physical Old 3DS XL and a second client. Record interrupted-session recovery, both save comparisons after restart, public-WSS latency/loss behavior, v0.8.7 FPS, audio, and HOME lifecycle. Do not begin Gate 5 or enable invitations/rankings until these physical criteria pass.
+- Remaining Gate 4 acceptance: resolve the two-Azahar communication failure after native battle party exchange, then repeat battle and trade with the physical Old 3DS XL and a second client. Record interrupted-session recovery, both save comparisons after restart, public-WSS latency/loss behavior, v0.8.8 FPS, audio, and HOME lifecycle. Do not begin Gate 5 or enable invitations/rankings until these physical criteria pass.
 
 ## Release 0.8.4 global roster and Map Chat (2026-08-16)
 
@@ -116,12 +116,12 @@ Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abf
 
 ## Gate 4 Cable Club acceptance
 
-1. Preserve an independent copy of both saves. Use release 0.8.7 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
+1. Preserve an independent copy of both saves. Use release 0.8.8 on both clients and verify both artifacts against the current `release/SHA256SUMS`.
 2. Copy `release/online-link-spike.example.cfg` to each private SD application directory as `online.cfg`. Change `name` and replace `TEST-2345` with the same unpredictable room code on both clients.
 3. Confirm each client reaches `ONLINE`; the first should show `LINK <room> WAITING`.
 4. Confirm both show `LINK <room> ACTIVE - BACKUP OK`. Do not continue if either screen reports a backup failure.
 5. Confirm `link-backups/` contains a new timestamped 128 KiB save on both clients and never retains more than the newest three.
-6. Enter the Wireless Club / Union Room, complete one battle, exit cleanly, restart both clients, and compare the two saves with their pre-link backups. Do not use the Direct Corner attendants with the v0.8.7 RFU path.
+6. Enter the Wireless Club / Union Room, complete one battle, exit cleanly, restart both clients, and compare the two saves with their pre-link backups. Do not use the Direct Corner attendants with the v0.8.8 RFU path.
 7. Repeat with one complete trade. Confirm the intended Pokémon moved exactly once, both games save, both restart, and no duplication/loss occurred.
 8. Repeat while interrupting before handshake, during battle, during trade before confirmation, and immediately after confirmation. Restore from the automatic backup if either save is invalid.
 9. Repeat on LAN and public WSS while recording the on-screen TX/RX counters, latency observations, disconnects, FPS, and audio stability.

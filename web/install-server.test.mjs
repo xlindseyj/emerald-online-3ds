@@ -104,7 +104,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
     assert.equal(screenshot.headers.get('content-type'), 'image/png');
     assert.ok(Number(screenshot.headers.get('content-length')) > 50000);
   }
-  for (const image of ['0.8.4-online-users.png', '0.8.4-map-chat.png']) {
+  for (const image of ['0.8.4-online-users.png', '0.8.4-map-chat.png', '0.8.8-map-global-chat.png']) {
     const screenshot = await fetch(`${base}/release-media/${image}`);
     assert.equal(screenshot.status, 200);
     assert.equal(screenshot.headers.get('content-type'), 'image/png');
