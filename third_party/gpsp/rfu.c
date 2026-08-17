@@ -19,6 +19,10 @@
 
 #include "common.h"
 
+#if defined(_3DS)
+#include <stdio.h>
+#endif
+
 // Debug print logic:
 #ifdef RFU_DEBUG
   #define RFU_DEBUG_LOG(...) printf(__VA_ARGS__)
@@ -32,6 +36,7 @@
 
 #define RFU_DEF_TIMEOUT              32   // Expressed as frames (~533ms)
 #define RFU_DEF_RTXMAX                4   // Up to 4 transmissions per send
+#define RFU_PACKET_QUEUE_SIZE        16   // Absorb short relay/emulator scheduling bursts.
 
 
 // Unpacks big endian integers used for signaling
@@ -122,6 +127,59 @@ static u8 rfu_cmd, rfu_plen;
 static u32 rfu_timeout_cycles, rfu_resp_timeout;
 static u8 rfu_timeout, rfu_rtx_max;
 
+/*
+ * Keep the RFU diagnostic deliberately aggregate-only. Emerald's battle
+ * setup exchanges enough packets that per-packet logging changes timing and
+ * obscures the failure we are trying to measure. These counters let a test
+ * build distinguish queue loss from adapter timeout/state problems without
+ * recording any payload data.
+ */
+static struct {
+  u32 host_tx;
+  u32 client_tx;
+  u32 host_rx;
+  u32 client_rx;
+  u32 host_drop;
+  u32 client_drop;
+  u32 host_read;
+  u32 client_read;
+  u32 wait_data;
+  u32 wait_no_response;
+  u32 wait_timeout;
+  u32 rtx_suppressed;
+  u32 max_host_queue;
+  u32 max_client_queue;
+  u32 frames;
+} rfu_diag;
+
+#if defined(_3DS)
+static void rfu_diag_log(const char *event) {
+  FILE *file = fopen("sdmc:/3ds/emerald-online-3ds/rfu-debug.log", "a");
+  if (!file)
+    return;
+  fprintf(file,
+          "%s state=%lu host_tx=%lu client_tx=%lu host_rx=%lu client_rx=%lu "
+          "host_drop=%lu client_drop=%lu host_read=%lu client_read=%lu "
+          "wait_data=%lu wait_no_response=%lu wait_timeout=%lu rtx_suppressed=%lu "
+          "max_host_q=%lu max_client_q=%lu frames=%lu\n",
+          event, (unsigned long)rfu_state,
+          (unsigned long)rfu_diag.host_tx, (unsigned long)rfu_diag.client_tx,
+          (unsigned long)rfu_diag.host_rx, (unsigned long)rfu_diag.client_rx,
+          (unsigned long)rfu_diag.host_drop, (unsigned long)rfu_diag.client_drop,
+          (unsigned long)rfu_diag.host_read, (unsigned long)rfu_diag.client_read,
+          (unsigned long)rfu_diag.wait_data,
+          (unsigned long)rfu_diag.wait_no_response,
+          (unsigned long)rfu_diag.wait_timeout,
+          (unsigned long)rfu_diag.rtx_suppressed,
+          (unsigned long)rfu_diag.max_host_queue,
+          (unsigned long)rfu_diag.max_client_queue,
+          (unsigned long)rfu_diag.frames);
+  fclose(file);
+}
+#else
+#define rfu_diag_log(event) ((void)(event))
+#endif
+
 static struct {
   u32 buf[23];
   u8 blen;
@@ -138,7 +196,7 @@ static struct {
     struct {
       u32 datalen;   // Byte count of data waiting to be polled.
       u8  data[16];  // Data received from client.
-    } pkts[4];
+    } pkts[RFU_PACKET_QUEUE_SIZE];
   } clients[4];      // Connected clients IDs (zero means empty slot).
 } rfu_host;
 
@@ -146,11 +204,11 @@ static struct {
   u16 devid;         // Device ID assigned to the client (by the host?)
   u16 clnum;         // Client number (0 to 3)
   u16 host_id;       // Client ID for the host device.
-  // Store host recevied packets (up to 8!)
+  // Store packets received from the host.
   struct {
     u16 hblen;       // Bytes received from the host.
     u8 hdata[128];   // Data received from the host (accumulated).
-  } pkts[4];
+  } pkts[RFU_PACKET_QUEUE_SIZE];
 } rfu_client;
 
 typedef struct {
@@ -229,6 +287,10 @@ static void rfu_net_send_data(int client_id, u32 ptype, u32 h, const u32 *pload,
 // pin flip in the external reset pin. We reset the device to a known state.
 void rfu_reset() {
   RFU_DEBUG_LOG("RFU reset!\n");
+  if (rfu_diag.host_tx || rfu_diag.client_tx || rfu_diag.host_rx ||
+      rfu_diag.client_rx || rfu_diag.wait_timeout)
+    rfu_diag_log("reset");
+  memset(&rfu_diag, 0, sizeof(rfu_diag));
   // Reset FSMs to a known state
   rfu_prev_data = 0;
   rfu_cnt = 0;
@@ -459,17 +521,17 @@ static s32 rfu_process_command() {
       memcpy(rfu_tx_buf.buf, &rfu_buf[1], (rfu_plen - 1)*sizeof(u32));
     }
 
-    /* fallthrough */
-  case RFU_CMD_RTX_WAIT:
     if (rfu_state == RFU_STATE_HOST) {
       // Host sends a package to all clients.
       RFU_DEBUG_LOG("Host sending %d bytes / %d words to clients\n",
                     rfu_tx_buf.blen, rfu_plen - 1);
       if (rfu_tx_buf.blen <= 90) {
         for (i = 0; i < 4; i++)
-          if (rfu_host.clients[i].devid)
+          if (rfu_host.clients[i].devid) {
             rfu_net_send_data(rfu_host.clients[i].client_id,
               NET_RFU_HOST_SEND, rfu_tx_buf.blen, rfu_tx_buf.buf, rfu_tx_buf.blen);
+            rfu_diag.host_tx++;
+          }
       }
     }
     else if (rfu_state == RFU_STATE_CLIENT) {
@@ -481,10 +543,24 @@ static s32 rfu_process_command() {
         rfu_net_send_data(rfu_client.host_id, NET_RFU_CLIENT_SEND,
           (rfu_tx_buf.blen << 24) | (rfu_client.clnum << 16) | rfu_client.devid,
           rfu_tx_buf.buf, rfu_tx_buf.blen);
+        rfu_diag.client_tx++;
       }
     }
     else
       return -1;   // We are not connected nor a host
+    break;
+
+  case RFU_CMD_RTX_WAIT:
+    /*
+     * RFU_CMD_RTX_WAIT asks the adapter to repeat the last RF frame. The
+     * frontend transport used by this runtime is reliable and ordered, so
+     * forwarding every retry as a new application packet creates duplicates
+     * that the four-slot wireless receive path cannot represent. Keep the
+     * adapter wait semantics but do not duplicate an already delivered frame.
+     */
+    if (rfu_state != RFU_STATE_HOST && rfu_state != RFU_STATE_CLIENT)
+      return -1;
+    rfu_diag.rtx_suppressed++;
     break;
 
   case RFU_CMD_RECV_DATA:
@@ -504,8 +580,9 @@ static s32 rfu_process_command() {
           rfu_buf[0] |= dlen << (8 + i * 5);
           // Discard front packet
           memmove(&rfu_host.clients[i].pkts[0], &rfu_host.clients[i].pkts[1],
-                  3 * sizeof(rfu_host.clients[i].pkts[0]));
-          rfu_host.clients[i].pkts[3].datalen = 0;
+                  (RFU_PACKET_QUEUE_SIZE - 1) * sizeof(rfu_host.clients[i].pkts[0]));
+          rfu_host.clients[i].pkts[RFU_PACKET_QUEUE_SIZE - 1].datalen = 0;
+          rfu_diag.host_read++;
         }
       }
       // Copy data into words into the RFU buffer.
@@ -522,8 +599,11 @@ static s32 rfu_process_command() {
         rfu_buf[cnt++] = leupack32(&rfu_client.pkts[0].hdata[j*4]);
 
       // Move to the next packet
-      memmove(&rfu_client.pkts[0], &rfu_client.pkts[1], sizeof(rfu_client.pkts[0]) * 3);
-      rfu_client.pkts[3].hblen = 0;
+      memmove(&rfu_client.pkts[0], &rfu_client.pkts[1],
+              sizeof(rfu_client.pkts[0]) * (RFU_PACKET_QUEUE_SIZE - 1));
+      rfu_client.pkts[RFU_PACKET_QUEUE_SIZE - 1].hblen = 0;
+      if (dlen)
+        rfu_diag.client_read++;
       return cnt;
     }
     break;
@@ -685,6 +765,10 @@ void rfu_frame_update() {
   // If device is in reset state, do nothing really.
   if (rfu_comstate != RFU_COMSTATE_RESET) {
     u32 i;
+    rfu_diag.frames++;
+    if ((rfu_state == RFU_STATE_HOST || rfu_state == RFU_STATE_CLIENT) &&
+        (rfu_diag.frames % 300) == 0)
+      rfu_diag_log("periodic");
     // Account for peer expiration.
     for (i = 0; i < MAX_RFU_PEERS; i++) {
       if (rfu_peer_bcst[i].valid) {
@@ -831,14 +915,18 @@ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id) {
           rfu_net_send_cmd(client_id, NET_RFU_CLIENT_ACK,
                            rfu_client.devid | (rfu_client.clnum << 16));
           // Receive data from the host. Queue que packet if possible
-          for (i = 0; i < 4; i++) {
+          for (i = 0; i < RFU_PACKET_QUEUE_SIZE; i++) {
             if (!rfu_client.pkts[i].hblen) {
               memcpy(&rfu_client.pkts[i].hdata, payl, blen);
               rfu_client.pkts[i].hblen = blen;
+              rfu_diag.client_rx++;
+              if (i + 1 > rfu_diag.max_client_queue)
+                rfu_diag.max_client_queue = i + 1;
               RFU_DEBUG_LOG("Recv host packet (%d bytes) Q[#%d]\n", blen, i);
               return;
             }
           }
+          rfu_diag.client_drop++;
           RFU_DEBUG_LOG("Client dropped a host packet\n");
         }
       }
@@ -855,14 +943,18 @@ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id) {
         // Validate the slot with device ID
         if (rfu_host.clients[clid].devid == cdevid) {
           rfu_host.clients[clid].clttl = 0;   // Account for packet reception
-          for (i = 0; i < 4; i++) {
+          for (i = 0; i < RFU_PACKET_QUEUE_SIZE; i++) {
             if (!rfu_host.clients[clid].pkts[i].datalen) {
               memcpy(rfu_host.clients[clid].pkts[i].data, payl, blen);
               rfu_host.clients[clid].pkts[i].datalen = blen;
+              rfu_diag.host_rx++;
+              if (i + 1 > rfu_diag.max_host_queue)
+                rfu_diag.max_host_queue = i + 1;
               RFU_DEBUG_LOG("Recv client packet (%d bytes) Q[#%d]\n", blen, i);
               return;
             }
           }
+          rfu_diag.host_drop++;
           RFU_DEBUG_LOG("Host dropped a client packet\n");
         }
       }
@@ -921,6 +1013,7 @@ bool rfu_update(unsigned cycles) {
         rfu_cnt = 0;
         rfu_plen = 2;
         rfu_comstate = RFU_COMSTATE_WAITRESP;
+        rfu_diag.wait_data++;
       }
       else if (rfu_state == RFU_STATE_HOST && !rfu_resp_timeout) {
         // We "retransmitted" the message N times (not really, but the equivalent
@@ -931,6 +1024,7 @@ bool rfu_update(unsigned cycles) {
         rfu_cnt = 0;
         rfu_plen = 3;
         rfu_comstate = RFU_COMSTATE_WAITRESP;
+        rfu_diag.wait_no_response++;
       }
       else if (!rfu_timeout_cycles) {
         // We ran out of time, just return an "error" code
@@ -939,6 +1033,7 @@ bool rfu_update(unsigned cycles) {
         rfu_cnt = 0;
         rfu_plen = 2;
         rfu_comstate = RFU_COMSTATE_WAITRESP;
+        rfu_diag.wait_timeout++;
         RFU_DEBUG_LOG("Wait command resp: timeout\n");
       }
     }

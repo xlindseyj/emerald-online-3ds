@@ -34,6 +34,9 @@ test('PostgreSQL admin sessions inherit moderator authorization', { skip: !datab
   const enrollment = await store.enroll();
   t.after(() => store.deleteIdentity(enrollment.identityId));
   await pool.query("INSERT INTO identity_roles(identity_id, role) VALUES($1, 'admin')", [enrollment.identityId]);
+  const deviceAuth = await store.authenticate(enrollment.identityId, enrollment.token);
+  assert.equal(deviceAuth.is_admin, true);
+  assert.equal(deviceAuth.is_moderator, true);
   const pairing = await store.startPairing();
   await store.approvePairing(enrollment.identityId, enrollment.credentialId, pairing.code);
   const browser = await store.consumePairing(pairing.code, pairing.requestToken);

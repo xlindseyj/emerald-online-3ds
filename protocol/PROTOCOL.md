@@ -17,8 +17,10 @@ Returning clients authenticate with the server-issued identity and token:
 
 ```json
 {"type":"hello","version":2,"name":"May","identity":"00000000-0000-4000-8000-000000000000","token":"64-lowercase-hex-digits","avatar":"girl"}
-{"type":"welcome","version":2,"id":"00000000-0000-4000-8000-000000000000","fingerprint":"A1B2C3D4E5"}
+{"type":"welcome","version":2,"id":"00000000-0000-4000-8000-000000000000","fingerprint":"A1B2C3D4E5","role":"player"}
 ```
+
+The `role` field is one of `player`, `moderator`, or `admin` and reflects the authenticated identity's staff roles.
 
 Recovery invalidates every existing device credential and browser session, consumes the recovery code, and issues one replacement credential:
 
@@ -51,15 +53,17 @@ After authentication, clients may send:
 {"type":"ping","at":1234}
 ```
 
-Server messages include `snapshot`, `online_users`, `chat`, `emote`, `pong`, and `error`. Coordinates are integer tile coordinates from 0 through 4095. Names are 1-12 printable ASCII characters. Chat is 1-80 printable ASCII characters; quotes and backslashes are excluded. Chat is same-map only and limited to one message per second. Each delivered chat includes a server-generated ISO 8601 `sentAt` timestamp. Emotes are `wave`, `battle`, `trade`, or `gg`, same-map only, and limited to one every two seconds. Facing is `up`, `down`, `left`, or `right`. Sequence numbers must increase.
+Server messages include `snapshot`, `online_users`, `chat`, `emote`, `pong`, `teleport_locations`, `teleport_result`, and `error`. Coordinates are integer tile coordinates from 0 through 4095. Names are 1-12 printable ASCII characters. Chat is 1-80 printable ASCII characters; quotes and backslashes are excluded. Chat is same-map only and limited to one message per second. Each delivered chat includes a server-generated ISO 8601 `sentAt` timestamp. Emotes are `wave`, `battle`, `trade`, or `gg`, same-map only, and limited to one every two seconds. Facing is `up`, `down`, `left`, or `right`. Sequence numbers must increase.
 
 `snapshot` remains strictly same-map and excludes the receiving trainer. `online_users` is a separate global, read-only presence feed containing every authenticated connection, including the receiver. It deliberately exposes only the opaque connection ID, display name, current map, and tile coordinates; it never includes ROM, save, party, inventory, account token, or browser data. A connected trainer that has not sent a valid state yet has an empty map and coordinates of `-1`.
 
 The global feed is sorted by display name and opaque ID, divided into at most 16 users per line, and coalesced to at most one refresh per second:
 
 ```json
-{"type":"online_users","page":0,"pages":1,"total":2,"users":[{"id":"00000000-0000-4000-8000-000000000000","name":"May","map":"0-9","x":14,"y":13},{"id":"00000000-0000-4000-8000-000000000002","name":"Wally","map":"0-17","x":6,"y":9}]}
+{"type":"online_users","page":0,"pages":1,"total":2,"users":[{"id":"00000000-0000-4000-8000-000000000000","name":"May","map":"0-9","x":14,"y":13,"role":"player"},{"id":"00000000-0000-4000-8000-000000000002","name":"Wally","map":"0-17","x":6,"y":9,"role":"player"}]}
 ```
+
+Each user entry includes a `role` of `player`, `moderator`, or `admin`.
 
 The 3DS keeps a bounded chat list only in memory for the current runtime session and filters it to the current map. Routine chat is not written to the server database.
 
@@ -68,6 +72,24 @@ Clients should send a `ping` at least every 20 seconds while stationary. The 3DS
 `avatar` is `boy` or `girl`. The runtime derives it from Emerald's SaveBlock2 player gender. Clients render remote trainers from their own private sprite atlas; sprite pixels and ROM/save contents are never sent.
 
 Snapshots are presence hints, not authoritative save data. Clients must not trust them for battles, trades, inventory, progression, or leaderboard proof.
+
+## Teleport
+
+Authenticated clients may request a list of teleport destinations and then ask the server to approve a warp. The server owns every destination and filters custom coordinates by staff role, so hidden locations are never sent to a device until the server has verified the authenticated identity.
+
+```json
+{"type":"teleport_locations"}
+{"type":"teleport_locations","destinations":[{"id":"gym:rustboro","name":"Rustboro Gym","kind":"gym"},{"id":"mom","name":"Mom's House","kind":"mom"},{"id":"player:00000000-0000-4000-8000-000000000000","name":"May","kind":"player"},{"id":"custom:00000000-0000-4000-8000-000000000001","name":"Mod rally point","kind":"custom"}],"custom_visible":true}
+```
+
+`custom_visible` is `true` only when the authenticated identity is a moderator or admin. The destination list never includes coordinates; those are returned only when the server approves an individual `teleport` request.
+
+```json
+{"type":"teleport","destination_id":"gym:rustboro"}
+{"type":"teleport_result","ok":true,"map_group":3,"map_num":7,"x":8,"y":12,"facing":"down"}
+```
+
+A failed warp returns `ok:false` and a `code` such as `teleport_unauthorized`, `teleport_not_found`, or `teleport_player_unavailable`. Player destinations resolve against the current online roster and are rejected when the target has no valid state.
 
 ## Experimental Gate 4 link spike
 

@@ -83,7 +83,7 @@ static unsigned measuredFps;
 static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
-enum BottomPage { PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS };
+enum BottomPage { PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_STATS, PAGE_TELEPORT };
 static BottomPage bottomPage = PAGE_ONLINE;
 static unsigned bagPocket;
 static unsigned bagPage;
@@ -166,6 +166,7 @@ static char identityId[37];
 static char identityToken[65];
 static char credentialId[37];
 static char identityFingerprint[11];
+static char trainerRole[10] = "player";
 static char recoveryCode[25];
 static char receiveBuffer[4097];
 static size_t receiveLength;
@@ -256,6 +257,7 @@ struct OnlineUser {
     int16_t x;
     int16_t y;
     bool positioned;
+    char role[10];
 };
 static OnlineUser onlineUsers[64];
 static unsigned onlineUserCount;
@@ -271,6 +273,21 @@ struct ChatMessage {
 };
 static ChatMessage chatHistory[24];
 static unsigned chatHistoryCount;
+
+struct TeleportDestination {
+    char id[65];
+    char name[33];
+    char kind[16];
+};
+static TeleportDestination teleportDestinations[64];
+static unsigned teleportDestinationCount;
+static bool teleportCustomVisible;
+static unsigned teleportCategory;
+static unsigned teleportScroll;
+static int teleportSelectedIndex = -1;
+static uint64_t teleportStatusUntil;
+static char teleportStatus[48] = "";
+static bool teleportLocationsRequested;
 
 static void logPrintf(enum retro_log_level level, const char* fmt, ...) {
     (void) level;
@@ -577,6 +594,24 @@ static GamePresence readPresence(void) {
     }
     if (current.valid) previous = current;
     return current;
+}
+
+static void applyTeleport(uint8_t mapGroup, uint8_t mapNum, int16_t x, int16_t y, uint8_t facing) {
+    if (!gbaEwram || !gbaIwram) return;
+    uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
+    if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return;
+    size_t offset = saveBlock - 0x02000000;
+    gbaEwram[offset + 0] = (uint8_t)(x & 0xFF);
+    gbaEwram[offset + 1] = (uint8_t)((x >> 8) & 0xFF);
+    gbaEwram[offset + 2] = (uint8_t)(y & 0xFF);
+    gbaEwram[offset + 3] = (uint8_t)((y >> 8) & 0xFF);
+    gbaEwram[offset + 4] = mapGroup;
+    gbaEwram[offset + 5] = mapNum;
+    // TODO: trigger Emerald to reload the map after coordinates change.
+    // The current implementation writes gSaveBlock1Ptr location fields.
+    // A follow-up step will identify the IWRAM warp flag or call the
+    // SetWarpDestination/WarpIntoMap Thumb functions to force a transition.
+    (void) facing;
 }
 
 static unsigned countDexFlags(const uint8_t* flags) {
@@ -925,7 +960,7 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : PAGE_ONLINE;
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "teleport") ? PAGE_TELEPORT : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
             strcpy(linkRoom, equals);
@@ -1022,6 +1057,7 @@ static void onlineDisconnect(void) {
     receiveLength = 0;
     webSocketLength = 0;
     onlineAuthenticated = false;
+    teleportLocationsRequested = false;
     memset(&lastSentPresence, 0, sizeof(lastSentPresence));
     if (onlineEnabled) nextReconnect = osGetTime() + 3000;
 }
@@ -1083,6 +1119,10 @@ static bool sendStatsSnapshot(void) {
 
 static void syncStatsAfterAuthentication(void) {
     onlineAuthenticated = true;
+    if (!teleportLocationsRequested) {
+        onlineSend("{\"type\":\"teleport_locations\"}\n");
+        teleportLocationsRequested = true;
+    }
     if (linkConfigured && !linkJoined) {
         char packet[160];
         snprintf(packet, sizeof(packet), "{\"type\":\"link_spike_join\",\"room\":\"%s\",\"core\":\"gpSP v1.0\"}\n", linkRoom);
@@ -1283,7 +1323,7 @@ static void stopLink(const char* status) {
 
 static void parseOnlineLine(char* line) {
     if (jsonTypeIs(line, "enrolled") || jsonTypeIs(line, "identity_recovered")) {
-        char id[37] = {}, token[65] = {}, credential[37] = {}, fingerprint[11] = {}, recovery[25] = {};
+        char id[37] = {}, token[65] = {}, credential[37] = {}, fingerprint[11] = {}, recovery[25] = {}, role[10] = {};
         if (!jsonString(line, "id", id, sizeof(id)) || !jsonString(line, "token", token, sizeof(token)) ||
             !jsonString(line, "credentialId", credential, sizeof(credential)) || !isHexString(token, 64)) return;
         strcpy(identityId, id);
@@ -1291,14 +1331,69 @@ static void parseOnlineLine(char* line) {
         strcpy(credentialId, credential);
         if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
         if (jsonString(line, "recoveryCode", recovery, sizeof(recovery))) strcpy(recoveryCode, recovery);
+        if (jsonString(line, "role", role, sizeof(role))) snprintf(trainerRole, sizeof(trainerRole), "%s", role);
+        else strcpy(trainerRole, "player");
         if (!saveIdentity()) onlineLastError = EIO;
         syncStatsAfterAuthentication();
         return;
     }
     if (jsonTypeIs(line, "welcome")) {
-        char fingerprint[11] = {};
+        char fingerprint[11] = {}, role[10] = {};
         if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
+        if (jsonString(line, "role", role, sizeof(role))) snprintf(trainerRole, sizeof(trainerRole), "%s", role);
+        else strcpy(trainerRole, "player");
         syncStatsAfterAuthentication();
+        return;
+    }
+    if (jsonTypeIs(line, "teleport_locations")) {
+        teleportDestinationCount = 0;
+        teleportCustomVisible = false;
+        teleportSelectedIndex = -1;
+        const char* lineEnd = line + strlen(line);
+        const char* dests = findJsonValue(line, lineEnd, "destinations");
+        if (dests && dests < lineEnd && *dests == '[') ++dests;
+        while (dests && teleportDestinationCount < 64) {
+            dests = skipJsonSpace(dests, lineEnd);
+            if (dests >= lineEnd || *dests == ']') break;
+            if (*dests != '{') return;
+            const char* objectEnd = findJsonObjectEnd(dests, lineEnd);
+            if (!objectEnd) return;
+            TeleportDestination* dest = &teleportDestinations[teleportDestinationCount];
+            if (!jsonStringBounded(dests, objectEnd, "id", dest->id, sizeof(dest->id)) ||
+                !jsonStringBounded(dests, objectEnd, "name", dest->name, sizeof(dest->name))) break;
+            jsonStringBounded(dests, objectEnd, "kind", dest->kind, sizeof(dest->kind));
+            ++teleportDestinationCount;
+            dests = skipJsonSpace(objectEnd, lineEnd);
+            if (dests < lineEnd && *dests == ',') ++dests;
+        }
+        char visible[8] = {};
+        if (jsonString(line, "customVisible", visible, sizeof(visible)) || jsonString(line, "custom_visible", visible, sizeof(visible)))
+            teleportCustomVisible = !strcmp(visible, "true");
+        return;
+    }
+    if (jsonTypeIs(line, "teleport_result")) {
+        if (!jsonInt(line, "ok", 0)) {
+            char code[32] = {};
+            jsonString(line, "code", code, sizeof(code));
+            snprintf(teleportStatus, sizeof(teleportStatus), "WARP FAILED: %.30s", code);
+            teleportStatusUntil = osGetTime() + 5000;
+            return;
+        }
+        int mapGroup = jsonInt(line, "map_group", -1);
+        int mapNum = jsonInt(line, "map_num", -1);
+        int x = jsonInt(line, "x", -1);
+        int y = jsonInt(line, "y", -1);
+        char facing[8] = {};
+        jsonString(line, "facing", facing, sizeof(facing));
+        uint8_t facingValue = !strcmp(facing, "up") ? 2 : !strcmp(facing, "left") ? 3 : !strcmp(facing, "right") ? 4 : 1;
+        if (mapGroup < 0 || mapGroup > 255 || mapNum < 0 || mapNum > 255 || x < 0 || x > 4095 || y < 0 || y > 4095) {
+            snprintf(teleportStatus, sizeof(teleportStatus), "WARP FAILED: BAD COORDS");
+            teleportStatusUntil = osGetTime() + 5000;
+            return;
+        }
+        applyTeleport((uint8_t)mapGroup, (uint8_t)mapNum, (int16_t)x, (int16_t)y, facingValue);
+        snprintf(teleportStatus, sizeof(teleportStatus), "WARPED TO %d,%d", x, y);
+        teleportStatusUntil = osGetTime() + 5000;
         return;
     }
     if (jsonTypeIs(line, "stats_consent_saved")) {
@@ -1407,6 +1502,7 @@ static void parseOnlineLine(char* line) {
             jsonStringBounded(user, objectEnd, "map", candidate.map, sizeof(candidate.map));
             candidate.x = jsonIntBounded(user, objectEnd, "x", -1);
             candidate.y = jsonIntBounded(user, objectEnd, "y", -1);
+            if (!jsonStringBounded(user, objectEnd, "role", candidate.role, sizeof(candidate.role))) strcpy(candidate.role, "player");
             candidate.positioned = candidate.map[0] && candidate.x >= 0 && candidate.y >= 0;
             onlineUsers[onlineUserCount++] = candidate;
             user = skipJsonSpace(objectEnd, lineEnd);
@@ -1917,10 +2013,23 @@ static void drawStatsPage(void) {
     }
 }
 
+static uint32_t roleColor(const char* role) {
+    if (!strcmp(role, "admin")) return C2D_Color32(218, 165, 32, 255);
+    if (!strcmp(role, "moderator")) return C2D_Color32(34, 160, 120, 255);
+    return C2D_Color32(80, 95, 90, 255);
+}
+
+static const char* roleLabel(const char* role) {
+    if (!strcmp(role, "admin")) return "ADMIN";
+    if (!strcmp(role, "moderator")) return "MOD";
+    return "PLAYER";
+}
+
 static void drawOnlineUsersPage(void) {
     drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "GLOBAL MAP / TILE POSITIONS - %u ONLINE", onlineUserCount);
-    drawText(18, 61, .34f, C2D_Color32(160,232,255,255), "TRAINER");
-    drawText(178, 61, .34f, C2D_Color32(160,232,255,255), "MAP / TILE");
+    drawText(14, 61, .33f, C2D_Color32(160,232,255,255), "TRAINER");
+    drawText(150, 61, .33f, C2D_Color32(160,232,255,255), "TYPE");
+    drawText(218, 61, .33f, C2D_Color32(160,232,255,255), "MAP/TILE");
     const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
     if (onlineUserPage >= pageCount) onlineUserPage = pageCount - 1;
     const unsigned start = onlineUserPage * 6;
@@ -1930,10 +2039,15 @@ static void drawOnlineUsersPage(void) {
         const unsigned index = start + row;
         if (index >= onlineUserCount) continue;
         const OnlineUser* user = &onlineUsers[index];
-        drawText(18, y + 3, .37f, C2D_Color32(255,255,255,255), "%.12s", user->name);
+        drawText(14, y + 3, .35f, C2D_Color32(255,255,255,255), "%.12s", user->name);
+        const uint32_t typeColor = roleColor(user->role);
+        C2D_DrawRectSolid(144, y + 2, .05f, 62, 15, typeColor);
+        const char* label = roleLabel(user->role);
+        float labelWidth = strlen(label) * 6.0f; // approximate for .28f font
+        drawText(175 - labelWidth / 2, y + 3, .28f, C2D_Color32(255,255,255,255), "%s", label);
         if (user->positioned)
-            drawText(163, y + 3, .32f, C2D_Color32(190,225,210,255), "%.14s  %d,%d", user->map, user->x, user->y);
-        else drawText(205, y + 3, .31f, C2D_Color32(180,205,200,255), "WAITING");
+            drawText(214, y + 3, .30f, C2D_Color32(190,225,210,255), "%.10s %d,%d", user->map, user->x, user->y);
+        else drawText(236, y + 3, .29f, C2D_Color32(180,205,200,255), "WAITING");
     }
     if (!onlineUserCount)
         drawText(71, 126, .40f, C2D_Color32(180,205,200,255), onlineMode == ONLINE_ACTIVE ? "Waiting for the online roster..." : "Connect online to view users");
@@ -2015,6 +2129,87 @@ static void drawChatPage(void) {
     drawText(244, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
 }
 
+static bool teleportKindMatches(const char* kind) {
+    if (teleportCategory == 0) return true;
+    if (teleportCategory == 1) return !strcmp(kind, "gym");
+    if (teleportCategory == 2) return !strcmp(kind, "location");
+    if (teleportCategory == 3) return !strcmp(kind, "player");
+    if (teleportCategory == 4) return !strcmp(kind, "mom");
+    if (teleportCategory == 5) return !strcmp(kind, "custom");
+    return false;
+}
+
+static void drawTeleportPage(void) {
+    const char* categories[] = {"ALL", "GYMS", "LOCS", "PLAYERS", "MOM", "CUSTOM"};
+    const unsigned categoryCount = teleportCustomVisible ? 6 : 5;
+    const float tabWidth = 300.0f / categoryCount;
+    for (unsigned i = 0; i < categoryCount; ++i) {
+        float x = 10 + i * tabWidth;
+        C2D_DrawRectSolid(x + 1, 42, 0, tabWidth - 2, 22, i == teleportCategory ? C2D_Color32(34,126,82,255) : C2D_Color32(43,61,55,255));
+        drawText(x + 5, 47, .24f, C2D_Color32(255,255,255,255), "%s", categories[i]);
+    }
+    if (!teleportDestinationCount) {
+        drawText(70, 110, .42f, C2D_Color32(190,210,200,255), onlineMode == ONLINE_ACTIVE ? "Waiting for destinations..." : "Connect online to teleport");
+        return;
+    }
+    unsigned filtered[64];
+    unsigned filteredCount = 0;
+    for (unsigned i = 0; i < teleportDestinationCount; ++i)
+        if (teleportKindMatches(teleportDestinations[i].kind)) filtered[filteredCount++] = i;
+    const unsigned maxRows = 7;
+    if (teleportScroll + maxRows > filteredCount && filteredCount > maxRows) teleportScroll = filteredCount - maxRows;
+    if (teleportScroll >= filteredCount) teleportScroll = 0;
+    for (unsigned row = 0; row < maxRows; ++row) {
+        const float y = 70 + row * 20;
+        const unsigned visible = teleportScroll + row;
+        bool selected = visible < filteredCount && (int)filtered[visible] == teleportSelectedIndex;
+        C2D_DrawRectSolid(10, y, 0, 300, 18, selected ? C2D_Color32(34,126,82,255) : C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        if (visible >= filteredCount) continue;
+        const TeleportDestination* dest = &teleportDestinations[filtered[visible]];
+        drawText(14, y + 3, .32f, C2D_Color32(255,255,255,255), "%.26s", dest->name);
+        drawText(250, y + 3, .28f, C2D_Color32(190,220,210,255), "%.8s", dest->kind);
+    }
+    if (teleportSelectedIndex >= 0 && (unsigned)teleportSelectedIndex < teleportDestinationCount) {
+        C2D_DrawRectSolid(10, 216, 0, 300, 24, C2D_Color32(35,145,88,255));
+        drawText(110, 221, .34f, C2D_Color32(255,255,255,255), "TELEPORT");
+    } else {
+        C2D_DrawRectSolid(10, 216, 0, 145, 24, teleportScroll ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+        C2D_DrawRectSolid(165, 216, 0, 145, 24, teleportScroll + maxRows < filteredCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+        drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "PREVIOUS");
+        drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
+    }
+    if (teleportStatus[0] && (!teleportStatusUntil || osGetTime() < teleportStatusUntil))
+        drawText(15, 64, .29f, C2D_Color32(255,220,130,255), "%.46s", teleportStatus);
+}
+
+static void drawConnectionDot(float x, float y) {
+    uint32_t color;
+    if (onlineMode == ONLINE_ACTIVE) color = C2D_Color32(50, 205, 50, 255);
+    else if (onlineMode == ONLINE_CONNECTING) color = C2D_Color32(255, 165, 0, 255);
+    else if (onlineEnabled) color = C2D_Color32(220, 50, 50, 255);
+    else color = C2D_Color32(120, 120, 120, 255);
+    C2D_DrawEllipseSolid(x, y, .1f, 8, 8, color);
+}
+
+static void drawPageIndicators(float y) {
+    static const uint32_t colors[] = {
+        C2D_Color32(80, 164, 245, 255),  // Online
+        C2D_Color32(80, 164, 245, 255),  // Users
+        C2D_Color32(80, 164, 245, 255),  // Chat
+        C2D_Color32(130, 200, 80, 255),  // Party
+        C2D_Color32(130, 200, 80, 255),  // Bag
+        C2D_Color32(130, 200, 80, 255),  // Map
+        C2D_Color32(160, 160, 160, 255), // Stats
+        C2D_Color32(200, 130, 60, 255),  // Teleport
+    };
+    const float startX = 160 - (8 * 14) / 2.0f;
+    for (unsigned page = 0; page < 8; ++page) {
+        float cx = startX + page * 14 + 4;
+        uint32_t dotColor = (page == (unsigned) bottomPage) ? C2D_Color32(255, 255, 255, 255) : colors[page];
+        C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
+    }
+}
+
 static void drawBottom(void) {
     C2D_TargetClear(bottomTarget, C2D_Color32(11, 36, 26, 255));
     C2D_SceneBegin(bottomTarget);
@@ -2026,9 +2221,13 @@ static void drawBottom(void) {
         bottomPage == PAGE_PARTY ? "PARTY - LOCAL ONLY" :
         bottomPage == PAGE_BAG ? "BAG - LOCAL ONLY" :
         bottomPage == PAGE_MAP ? "MAP & TRAINER RADAR" :
-        bottomPage == PAGE_STATS ? "PLAYER STATS & CONSENT" : "EMERALD ONLINE";
+        bottomPage == PAGE_STATS ? "PLAYER STATS & CONSENT" :
+        bottomPage == PAGE_TELEPORT ? "TELEPORT" : "EMERALD ONLINE";
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
-    drawText(280,14,.30f,C2D_Color32(180,220,205,255),"Y >");
+    drawConnectionDot(306, 16);
+    drawText(280, 14, .30f, C2D_Color32(180,220,205,255), "Y >");
+    drawPageIndicators(31);
+    if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
     if (bottomPage == PAGE_USERS) { drawOnlineUsersPage(); return; }
     if (bottomPage == PAGE_CHAT) { drawChatPage(); return; }
     if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
@@ -2063,7 +2262,12 @@ static void drawBottom(void) {
     C2D_DrawRectSolid(10, 46, 0, 300, 43, C2D_Color32(25,74,54,255));
         drawText(20, 52, .43f, C2D_Color32(160,232,255,255), "%s", trainerName);
         if (identityFingerprint[0]) drawText(126, 52, .32f, C2D_Color32(185,215,205,255), "ID %s", identityFingerprint);
-    drawText(250, 52, .43f, C2D_Color32(200,220,220,255), "%u FPS", measuredFps);
+        if (strcmp(trainerRole, "player")) {
+            uint32_t localRoleColor = roleColor(trainerRole);
+            C2D_DrawRectSolid(198, 49, .05f, 52, 18, localRoleColor);
+            drawText(224, 52, .28f, C2D_Color32(255,255,255,255), "%s", roleLabel(trainerRole));
+        }
+    drawText(270, 52, .43f, C2D_Color32(200,220,220,255), "%u FPS", measuredFps);
     if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), "MAP %u-%u   TILE %d,%d", presence.mapGroup, presence.mapNum, presence.x, presence.y);
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
         if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
@@ -2306,7 +2510,7 @@ int main(void) {
         heldKeys = hidKeysHeld();
         uint32_t down = hidKeysDown();
         if (down & KEY_X) onlineToggle();
-        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 7);
+        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 8);
         if (down & KEY_TOUCH) {
             touchPosition touch;
             hidTouchRead(&touch);
@@ -2341,6 +2545,27 @@ int main(void) {
                 if (touch.py >= 40 && touch.py < 72) { bagPocket = touch.px / 64; if (bagPocket > 4) bagPocket = 4; bagPage = 0; }
                 else if (touch.py >= 210 && touch.px < 160) { if (bagPage) --bagPage; }
                 else if (touch.py >= 210 && touch.px >= 160) ++bagPage;
+            } else if (bottomPage == PAGE_TELEPORT) {
+                const unsigned categoryCount = teleportCustomVisible ? 6 : 5;
+                const float tabWidth = 300.0f / categoryCount;
+                if (touch.py >= 42 && touch.py < 64) {
+                    unsigned cat = (unsigned)((touch.px - 10) / tabWidth);
+                    if (cat < categoryCount) { teleportCategory = cat; teleportScroll = 0; teleportSelectedIndex = -1; }
+                } else if (touch.py >= 70 && touch.py < 210) {
+                    const unsigned maxRows = 7;
+                    unsigned filtered[64];
+                    unsigned filteredCount = 0;
+                    for (unsigned i = 0; i < teleportDestinationCount; ++i)
+                        if (teleportKindMatches(teleportDestinations[i].kind)) filtered[filteredCount++] = i;
+                    int row = (int)((touch.py - 70) / 20);
+                    unsigned visible = teleportScroll + row;
+                    if (row >= 0 && visible < filteredCount) teleportSelectedIndex = (int)filtered[visible];
+                } else if (touch.py >= 216 && teleportSelectedIndex >= 0 && teleportSelectedIndex < (int)teleportDestinationCount) {
+                    const TeleportDestination* dest = &teleportDestinations[teleportSelectedIndex];
+                    char packet[96];
+                    snprintf(packet, sizeof(packet), "{\"type\":\"teleport\",\"destination_id\":\"%s\"}\n", dest->id);
+                    onlineSend(packet);
+                }
             } else if (bottomPage == PAGE_ONLINE && touch.py >= 202) sendEmote(touch.px / 81);
             else if (bottomPage == PAGE_ONLINE && touch.py >= 46 && touch.py < 90) openBrowserPairing();
             else if (bottomPage == PAGE_ONLINE && touch.px < 155 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_USERS;

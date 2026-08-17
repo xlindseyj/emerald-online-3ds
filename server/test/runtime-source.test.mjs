@@ -156,7 +156,13 @@ test('gpSP bottom screen exposes paged users plus readable map and global chat l
   assert.match(gpspSource, /GLOBAL MAP \/ TILE POSITIONS - %u ONLINE/);
   assert.match(gpspSource, /jsonTypeIs\(line, "online_users"\)/);
   assert.match(gpspSource, /OnlineUser onlineUsers\[64\]/);
-  assert.match(gpspSource, /%.14s  %d,%d/);
+  assert.match(gpspSource, /char role\[10\]/);
+  assert.match(gpspSource, /jsonStringBounded\(user, objectEnd, "role", candidate\.role/);
+  assert.match(gpspSource, /TRAINER/);
+  assert.match(gpspSource, /TYPE/);
+  assert.match(gpspSource, /MAP\/TILE/);
+  assert.match(gpspSource, /roleLabel/);
+  assert.match(gpspSource, /roleColor/);
   assert.match(gpspSource, /pageCount = onlineUserCount \? \(onlineUserCount \+ 5\) \/ 6 : 1/);
   assert.match(gpspSource, /MAP CHAT/);
   assert.match(gpspSource, /GLOBAL CHAT/);
@@ -171,12 +177,31 @@ test('gpSP bottom screen exposes paged users plus readable map and global chat l
   assert.match(gpspSource, /TAP TO READ/);
   assert.match(gpspSource, /chatPage \* 3/);
   assert.match(gpspSource, /COMPOSE/);
-  assert.match(gpspSource, /bottomPage \+ 1\) % 7/);
+  assert.match(gpspSource, /bottomPage \+ 1\) % 8/);
   assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
   assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
+  assert.match(gpspSource, /!strcmp\(equals, "teleport"\) \? PAGE_TELEPORT/);
+  assert.match(gpspSource, /drawConnectionDot/);
+  assert.match(gpspSource, /ONLINE_ACTIVE/);
+  assert.match(gpspSource, /drawPageIndicators/);
   const usersStart = gpspSource.indexOf('static void drawOnlineUsersPage');
   const usersEnd = gpspSource.indexOf('static unsigned currentChatIndices', usersStart);
   assert.doesNotMatch(gpspSource.slice(usersStart, usersEnd), /openChat|sendEmote|onlineSend/);
+});
+
+test('gpSP teleport page is server-verified and writes GBA location fields', () => {
+  assert.match(gpspSource, /PAGE_TELEPORT/);
+  assert.match(gpspSource, /"TELEPORT"/);
+  assert.match(gpspSource, /drawTeleportPage/);
+  assert.match(gpspSource, /TeleportDestination teleportDestinations\[64\]/);
+  assert.match(gpspSource, /teleportCustomVisible/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "teleport_locations"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "teleport_result"\)/);
+  assert.match(gpspSource, /\\"type\\":\\"teleport\\",\\"destination_id\\":\\"%s\\"/);
+  assert.match(gpspSource, /\\"type\\":\\"teleport_locations\\"/);
+  assert.match(gpspSource, /applyTeleport/);
+  assert.match(gpspSource, /gbaEwram\[offset \+ 4\] = mapGroup/);
+  assert.match(gpspSource, /gbaEwram\[offset \+ 5\] = mapNum/);
 });
 
 test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups', () => {

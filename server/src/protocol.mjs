@@ -17,6 +17,7 @@ const STAT_FIELDS = new Set(['pokedex_seen', 'pokedex_caught', 'badges', 'fronti
 const LINK_ROOM = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const LINK_CORE = 'gpSP v1.0';
 const LINK_DATA = /^(?:[a-f0-9]{2}){1,512}$/i;
+const DESTINATION_ID = /^[a-z][a-z0-9_-]*:[A-Za-z0-9_-]{1,64}$|^mom$/;
 
 export function validateHello(msg) {
   if (msg?.type !== 'hello' || !NAME.test(msg.name) || (msg.avatar !== undefined && !AVATARS.has(msg.avatar))) return false;
@@ -94,6 +95,14 @@ export function validateChat(msg) {
 
 export function validateEmote(msg) {
 	return msg?.type === 'emote' && EMOTES.has(msg.emote);
+}
+
+export function validateTeleportLocations(msg) {
+  return msg?.type === 'teleport_locations';
+}
+
+export function validateTeleport(msg) {
+  return msg?.type === 'teleport' && DESTINATION_ID.test(msg.destination_id ?? '');
 }
 
 export function encode(msg) { return `${JSON.stringify(msg)}\n`; }

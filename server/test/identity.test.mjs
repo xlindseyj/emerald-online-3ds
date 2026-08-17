@@ -118,3 +118,24 @@ test('authenticated 3DS approval rotates a five-minute code into a browser sessi
   assert.equal((await identityStore.authenticateBrowserSession(browser.token)).fingerprint, enrolled.fingerprint);
   assert.equal(await identityStore.consumePairing(pairing.code, pairing.requestToken), null);
 });
+
+test('only admins can assign or revoke moderator and admin roles', async () => {
+  const store = new MemoryIdentityStore();
+  const adminEnrollment = await store.enroll();
+  const modEnrollment = await store.enroll();
+  const playerEnrollment = await store.enroll();
+  store.identities.get(adminEnrollment.identityId).isAdmin = true;
+
+  assert.equal(await store.assignRole(adminEnrollment.fingerprint, modEnrollment.fingerprint, 'moderator'), true);
+  assert.equal(store.identities.get(modEnrollment.identityId).isModerator, true);
+  assert.equal(await store.assignRole(modEnrollment.fingerprint, playerEnrollment.fingerprint, 'moderator'), false);
+
+  assert.equal(await store.assignRole(adminEnrollment.fingerprint, playerEnrollment.fingerprint, 'admin'), true);
+  assert.equal(store.identities.get(playerEnrollment.identityId).isAdmin, true);
+  assert.equal(await store.revokeRole(adminEnrollment.fingerprint, playerEnrollment.fingerprint, 'admin'), true);
+  assert.equal(store.identities.get(playerEnrollment.identityId).isAdmin, false);
+
+  assert.equal(await store.assignRole('BADFINGER', modEnrollment.fingerprint, 'moderator'), false);
+  assert.equal(await store.assignRole(adminEnrollment.fingerprint, 'BADFINGER', 'moderator'), false);
+  assert.equal(await store.assignRole(adminEnrollment.fingerprint, modEnrollment.fingerprint, 'owner'), false);
+});

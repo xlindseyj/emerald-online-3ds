@@ -6,10 +6,12 @@ import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { PostgresIdentityStore } from './identity-store.mjs';
 import { PostgresStatsStore } from './stats-store.mjs';
+import { PostgresTeleportStore, MemoryTeleportStore } from './teleport-store.mjs';
 import { renderPrometheusMetrics } from './metrics.mjs';
-import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, encode } from './protocol.mjs';
+import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, validateTeleportLocations, validateTeleport, encode } from './protocol.mjs';
+import { listBuiltInDestinations, resolveBuiltInDestination } from './teleport-store.mjs';
 
-export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, rosterIntervalMs = 1000, identityStore = null, statsStore = null } = {}) {
+export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, rosterIntervalMs = 1000, identityStore = null, statsStore = null, teleportStore = null } = {}) {
   const clients = new Map();
   const linkRooms = new Map();
   const rosterPageSize = 16;
@@ -35,7 +37,8 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       name: client.name,
       map: client.state?.map ?? '',
       x: client.state?.x ?? -1,
-      y: client.state?.y ?? -1
+      y: client.state?.y ?? -1,
+      role: client.isAdmin ? 'admin' : client.isModerator ? 'moderator' : 'player'
     })).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const pages = Math.max(1, Math.ceil(users.length / rosterPageSize));
     for (const client of clients.values()) {
@@ -136,6 +139,8 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     client.identityId = auth.identity_id ?? null;
     client.credentialId = auth.credential_id ?? null;
     client.fingerprint = auth.fingerprint ?? null;
+    client.isAdmin = auth.is_admin === true;
+    client.isModerator = auth.is_moderator === true;
     client.protocolVersion = msg.version;
     client.name = msg.name;
     client.avatar = msg.avatar === 'girl' ? 'girl' : 'boy';
@@ -145,6 +150,38 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     replaceCredentialConnection(client);
     rosterDirty = true;
   };
+  const playerDestination = (peer) => peer && peer.name && peer.state && peer.state.x >= 0 && peer.state.y >= 0
+    ? { id: `player:${peer.id}`, name: peer.name, kind: 'player', map_group: peer.state.map.split('-')[0], map_num: peer.state.map.split('-')[1], x: peer.state.x, y: peer.state.y, facing: peer.state.facing }
+    : null;
+  const listTeleportDestinations = async (client) => {
+    const destinations = listBuiltInDestinations();
+    for (const peer of clients.values()) {
+      if (peer !== client && peer.name) {
+        const dest = playerDestination(peer);
+        if (dest) destinations.push({ id: dest.id, name: dest.name, kind: dest.kind });
+      }
+    }
+    const customVisible = client.isAdmin || client.isModerator;
+    if (customVisible && teleportStore) {
+      const custom = await teleportStore.listCustomDestinations();
+      destinations.push(...custom);
+    }
+    return { destinations, customVisible };
+  };
+  const resolveTeleportDestination = async (client, destinationId) => {
+    if (destinationId === 'mom') return resolveBuiltInDestination(destinationId);
+    if (destinationId.startsWith('gym:') || destinationId.startsWith('location:')) return resolveBuiltInDestination(destinationId);
+    if (destinationId.startsWith('player:')) {
+      const peerId = destinationId.slice(7);
+      const peer = [...clients.values()].find(c => c.id === peerId);
+      return playerDestination(peer);
+    }
+    if (destinationId.startsWith('custom:')) {
+      if (!client.isAdmin && !client.isModerator) return { unauthorized: true };
+      return teleportStore ? await teleportStore.resolveCustomDestination(destinationId) : null;
+    }
+    return null;
+  };
   const handleMessage = async (client, msg) => {
     const { socket } = client;
     if (!client.name) {
@@ -153,7 +190,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
         const enrollment = await identityStore.enroll({ withRecovery: msg.recovery === true });
         finishAuthentication(client, msg, { identity_id: enrollment.identityId, credential_id: enrollment.credentialId, fingerprint: enrollment.fingerprint });
         metrics.enrollments++;
-        send(socket, { type: 'enrolled', version: VERSION, id: enrollment.identityId, credentialId: enrollment.credentialId, token: enrollment.token, fingerprint: enrollment.fingerprint, ...(enrollment.recoveryCode ? { recoveryCode: enrollment.recoveryCode } : {}) });
+        send(socket, { type: 'enrolled', version: VERSION, id: enrollment.identityId, credentialId: enrollment.credentialId, token: enrollment.token, fingerprint: enrollment.fingerprint, role: enrollment.is_admin ? 'admin' : enrollment.is_moderator ? 'moderator' : 'player', ...(enrollment.recoveryCode ? { recoveryCode: enrollment.recoveryCode } : {}) });
         return;
       }
       if (validateRecover(msg)) {
@@ -162,7 +199,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
         if (!recovered) { metrics.authenticationFailures++; return fail(socket, 'recovery_failed'); }
         finishAuthentication(client, msg, { identity_id: recovered.identityId, credential_id: recovered.credentialId, fingerprint: recovered.fingerprint });
         metrics.recoveries++;
-        send(socket, { type: 'identity_recovered', version: VERSION, id: recovered.identityId, credentialId: recovered.credentialId, token: recovered.token, fingerprint: recovered.fingerprint });
+        send(socket, { type: 'identity_recovered', version: VERSION, id: recovered.identityId, credentialId: recovered.credentialId, token: recovered.token, fingerprint: recovered.fingerprint, role: recovered.is_admin ? 'admin' : recovered.is_moderator ? 'moderator' : 'player' });
         return;
       }
       if (!validateHello(msg)) return fail(socket, 'invalid_hello');
@@ -171,7 +208,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
         const auth = await identityStore.authenticate(msg.identity, msg.token);
         if (!auth) { metrics.authenticationFailures++; return fail(socket, 'authentication_failed'); }
         finishAuthentication(client, msg, auth);
-        send(socket, { type: 'welcome', version: VERSION, id: client.id, fingerprint: client.fingerprint });
+        send(socket, { type: 'welcome', version: VERSION, id: client.id, fingerprint: client.fingerprint, role: client.isAdmin ? 'admin' : client.isModerator ? 'moderator' : 'player' });
         return;
       }
       if (msg.version !== LEGACY_VERSION) return fail(socket, 'unsupported_version');
@@ -253,6 +290,31 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       for (const peer of clients.values()) if (peer.name && peer.state?.map === client.state.map) send(peer.socket, emote);
       return;
     }
+    if (msg.type === 'teleport_locations') {
+      if (!validateTeleportLocations(msg)) return send(socket, { type: 'error', code: 'invalid_teleport_locations' });
+      const { destinations, customVisible } = await listTeleportDestinations(client);
+      send(socket, { type: 'teleport_locations', destinations, customVisible });
+      return;
+    }
+    if (msg.type === 'teleport') {
+      if (!validateTeleport(msg)) return send(socket, { type: 'error', code: 'invalid_teleport' });
+      const destination = await resolveTeleportDestination(client, msg.destination_id);
+      if (destination?.unauthorized) return send(socket, { type: 'teleport_result', ok: false, code: 'teleport_unauthorized' });
+      if (!destination) return send(socket, { type: 'teleport_result', ok: false, code: 'teleport_not_found' });
+      if (destination.kind === 'custom' && !client.isAdmin && !client.isModerator) return send(socket, { type: 'teleport_result', ok: false, code: 'teleport_unauthorized' });
+      if (destination.kind === 'player' && (!destination.x || !destination.y)) return send(socket, { type: 'teleport_result', ok: false, code: 'teleport_player_unavailable' });
+      if (teleportStore && client.identityId) await teleportStore.auditTeleport(client.identityId, msg.destination_id, { name: destination.name, kind: destination.kind });
+      send(socket, {
+        type: 'teleport_result',
+        ok: true,
+        map_group: Number(destination.map_group),
+        map_num: Number(destination.map_num),
+        x: Number(destination.x),
+        y: Number(destination.y),
+        facing: destination.facing ?? 'down'
+      });
+      return;
+    }
     if (!validateState(msg, client.seq)) return fail(socket, 'invalid_state');
     client.seq = msg.seq;
     client.state = { map: msg.map, x: msg.x, y: msg.y, facing: msg.facing, avatar: msg.avatar === 'girl' ? 'girl' : client.avatar };
@@ -307,7 +369,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
   return { server, clients, metrics, status };
 }
 
-export async function startServers({ identityStore: identityStoreOverride = null, statsStore: statsStoreOverride = null } = {}) {
+export async function startServers({ identityStore: identityStoreOverride = null, statsStore: statsStoreOverride = null, teleportStore: teleportStoreOverride = null } = {}) {
   const host = process.env.GAME_HOST ?? '0.0.0.0';
   const port = Number(process.env.GAME_PORT ?? 3210);
   const healthPort = Number(process.env.HEALTH_PORT ?? 3211);
@@ -321,6 +383,7 @@ export async function startServers({ identityStore: identityStoreOverride = null
   let pool = null;
   let identityStore = identityStoreOverride;
   let statsStore = statsStoreOverride;
+  let teleportStore = teleportStoreOverride;
   const databaseConfig = process.env.DATABASE_URL
     ? { connectionString: process.env.DATABASE_URL }
     : process.env.PGHOST
@@ -334,8 +397,10 @@ export async function startServers({ identityStore: identityStoreOverride = null
     await pool.query('SELECT 1');
     identityStore = new PostgresIdentityStore(pool, process.env.IDENTITY_PEPPER);
     statsStore = new PostgresStatsStore(pool);
+    if (!teleportStore) teleportStore = new PostgresTeleportStore(pool);
   }
-  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore, statsStore });
+  if (!teleportStore) teleportStore = new MemoryTeleportStore();
+  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore, statsStore, teleportStore });
   await new Promise(resolve => presence.server.listen(port, host, resolve));
   const health = http.createServer((req, res) => {
     if (req.url === '/metrics') {

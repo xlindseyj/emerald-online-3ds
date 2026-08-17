@@ -4,6 +4,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const TOKEN = /^[0-9a-f]{64}$/i;
 const RECOVERY = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){4}$/;
 const PAIRING = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
+const FINGERPRINT = /^[A-F0-9]{10}$/;
+const ROLES = new Set(['moderator', 'admin']);
 const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function credentialHash(pepper, token) {
@@ -68,7 +70,7 @@ export class PostgresIdentityStore {
       if (code) await client.query('INSERT INTO identity_recovery (identity_id, salt, verifier) VALUES ($1, $2, $3)', [identityId, salt, verifier]);
       await client.query("INSERT INTO security_events (identity_id, event_type, ip_hash, expires_at) VALUES ($1, 'identity_enrolled', $2, now() + interval '7 days')", [identityId, ipHash]);
       await client.query('COMMIT');
-      return { identityId, credentialId, token, fingerprint: displayFingerprint, recoveryCode: code };
+      return { identityId, credentialId, token, fingerprint: displayFingerprint, recoveryCode: code, is_admin: false, is_moderator: false };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -82,7 +84,9 @@ export class PostgresIdentityStore {
       `UPDATE device_credentials c SET last_used_at = now()
        FROM identities i WHERE c.identity_id = $1 AND c.token_hash = $2
        AND c.revoked_at IS NULL AND i.id = c.identity_id AND i.deleted_at IS NULL
-       RETURNING c.id AS credential_id, i.id AS identity_id, i.fingerprint`,
+       RETURNING c.id AS credential_id, i.id AS identity_id, i.fingerprint,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='admin') AS is_admin,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role IN ('moderator', 'admin')) AS is_moderator`,
       [identityId, hash]
     );
     return result.rows[0] ?? null;
@@ -94,7 +98,10 @@ export class PostgresIdentityStore {
     try {
       await client.query('BEGIN');
       const result = await client.query(
-        `SELECT r.salt, r.verifier, i.fingerprint FROM identity_recovery r
+        `SELECT r.salt, r.verifier, i.fingerprint,
+           EXISTS (SELECT 1 FROM identity_roles r2 WHERE r2.identity_id=i.id AND r2.role='admin') AS is_admin,
+           EXISTS (SELECT 1 FROM identity_roles r2 WHERE r2.identity_id=i.id AND r2.role IN ('moderator', 'admin')) AS is_moderator
+         FROM identity_recovery r
          JOIN identities i ON i.id = r.identity_id
          WHERE r.identity_id = $1 AND r.used_at IS NULL AND i.deleted_at IS NULL FOR UPDATE`,
         [identityId]
@@ -110,7 +117,11 @@ export class PostgresIdentityStore {
       await client.query('INSERT INTO device_credentials (id, identity_id, token_hash) VALUES ($1, $2, $3)', [credentialId, identityId, credentialHash(this.pepper, token)]);
       await client.query("INSERT INTO security_events (identity_id, event_type, expires_at) VALUES ($1, 'identity_recovered', now() + interval '7 days')", [identityId]);
       await client.query('COMMIT');
-      return { identityId, credentialId, token, fingerprint: result.rows[0].fingerprint };
+      return {
+        identityId, credentialId, token, fingerprint: result.rows[0].fingerprint,
+        is_admin: result.rows[0].is_admin === true,
+        is_moderator: result.rows[0].is_moderator === true
+      };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -229,28 +240,80 @@ export class PostgresIdentityStore {
     const result = await this.pool.query('DELETE FROM identities WHERE id = $1 RETURNING id', [identityId]);
     return result.rowCount === 1;
   }
+
+  async assignRole(actorFingerprint, targetFingerprint, role) {
+    if (!FINGERPRINT.test(actorFingerprint ?? '') || !FINGERPRINT.test(targetFingerprint ?? '') || !ROLES.has(role ?? '')) return false;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const actor = await client.query(
+        "SELECT i.id, EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='admin') AS is_admin FROM identities i WHERE i.fingerprint=$1 AND i.deleted_at IS NULL",
+        [actorFingerprint]
+      );
+      if (!actor.rowCount || !actor.rows[0].is_admin) { await client.query('ROLLBACK'); return false; }
+      const target = await client.query('SELECT id FROM identities WHERE fingerprint=$1 AND deleted_at IS NULL', [targetFingerprint]);
+      if (!target.rowCount) { await client.query('ROLLBACK'); return false; }
+      const targetIdentityId = target.rows[0].id;
+      await client.query('INSERT INTO identity_roles (identity_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING', [targetIdentityId, role]);
+      await client.query(
+        "INSERT INTO moderation_audit (actor_identity_id, target_identity_id, action, details) VALUES ($1, $2, 'role_assigned', $3)",
+        [actor.rows[0].id, targetIdentityId, JSON.stringify({ role })]
+      );
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async revokeRole(actorFingerprint, targetFingerprint, role) {
+    if (!FINGERPRINT.test(actorFingerprint ?? '') || !FINGERPRINT.test(targetFingerprint ?? '') || !ROLES.has(role ?? '')) return false;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const actor = await client.query(
+        "SELECT i.id, EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='admin') AS is_admin FROM identities i WHERE i.fingerprint=$1 AND i.deleted_at IS NULL",
+        [actorFingerprint]
+      );
+      if (!actor.rowCount || !actor.rows[0].is_admin) { await client.query('ROLLBACK'); return false; }
+      const target = await client.query('SELECT id FROM identities WHERE fingerprint=$1 AND deleted_at IS NULL', [targetFingerprint]);
+      if (!target.rowCount) { await client.query('ROLLBACK'); return false; }
+      const targetIdentityId = target.rows[0].id;
+      await client.query('DELETE FROM identity_roles WHERE identity_id=$1 AND role=$2', [targetIdentityId, role]);
+      await client.query(
+        "INSERT INTO moderation_audit (actor_identity_id, target_identity_id, action, details) VALUES ($1, $2, 'role_revoked', $3)",
+        [actor.rows[0].id, targetIdentityId, JSON.stringify({ role })]
+      );
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  }
 }
 
 export class MemoryIdentityStore {
-  constructor() { this.pepper = crypto.randomBytes(32); this.identities = new Map(); this.pairings = new Map(); this.browserSessions = new Map(); }
+  constructor() { this.pepper = crypto.randomBytes(32); this.identities = new Map(); this.pairings = new Map(); this.browserSessions = new Map(); this.audit = []; }
   async enroll({ withRecovery = false } = {}) {
     const identityId = crypto.randomUUID(), credentialId = crypto.randomUUID(), token = crypto.randomBytes(32).toString('hex');
     const code = withRecovery ? recoveryCode() : null, salt = code ? crypto.randomBytes(16) : null;
-    const record = { identityId, fingerprint: fingerprint(identityId), credentials: new Map([[credentialId, credentialHash(this.pepper, token)]]), recoverySalt: salt, recoveryVerifier: code ? await scrypt(code, salt) : null };
+    const record = { identityId, fingerprint: fingerprint(identityId), credentials: new Map([[credentialId, credentialHash(this.pepper, token)]]), recoverySalt: salt, recoveryVerifier: code ? await scrypt(code, salt) : null, isAdmin: false, isModerator: false };
     this.identities.set(identityId, record);
-    return { identityId, credentialId, token, fingerprint: record.fingerprint, recoveryCode: code };
+    return { identityId, credentialId, token, fingerprint: record.fingerprint, recoveryCode: code, is_admin: false, is_moderator: false };
   }
   async authenticate(identityId, token) {
     const record = this.identities.get(identityId); if (!record || !TOKEN.test(token ?? '')) return null;
     const hash = credentialHash(this.pepper, token);
-    for (const [credentialId, stored] of record.credentials) if (crypto.timingSafeEqual(hash, stored)) return { identity_id: identityId, credential_id: credentialId, fingerprint: record.fingerprint };
+    for (const [credentialId, stored] of record.credentials) if (crypto.timingSafeEqual(hash, stored)) return { identity_id: identityId, credential_id: credentialId, fingerprint: record.fingerprint, is_admin: record.isAdmin === true, is_moderator: record.isModerator === true };
     return null;
   }
   async recover(identityId, code) {
     const record = this.identities.get(identityId); if (!record?.recoveryVerifier || !RECOVERY.test(code ?? '')) return null;
     const candidate = await scrypt(code, record.recoverySalt); if (!crypto.timingSafeEqual(candidate, record.recoveryVerifier)) return null;
     const credentialId = crypto.randomUUID(), token = crypto.randomBytes(32).toString('hex'); record.credentials.clear(); record.credentials.set(credentialId, credentialHash(this.pepper, token)); record.recoveryVerifier = null;
-    return { identityId, credentialId, token, fingerprint: record.fingerprint };
+    return { identityId, credentialId, token, fingerprint: record.fingerprint, is_admin: record.isAdmin === true, is_moderator: record.isModerator === true };
   }
   async revoke(identityId, credentialId) { return this.identities.get(identityId)?.credentials.delete(credentialId) ?? false; }
   async startPairing() {
@@ -286,4 +349,20 @@ export class MemoryIdentityStore {
   async revokeBrowserSession(token) { const session = this.browserSessions.get(token); if (!session || session.revoked) return false; session.revoked = true; return true; }
   async exportIdentity(identityId) { const r = this.identities.get(identityId); return r ? { id: r.identityId, fingerprint: r.fingerprint, active_device_credentials: r.credentials.size } : null; }
   async deleteIdentity(identityId) { return this.identities.delete(identityId); }
+  async assignRole(actorFingerprint, targetFingerprint, role) {
+    if (!FINGERPRINT.test(actorFingerprint ?? '') || !FINGERPRINT.test(targetFingerprint ?? '') || !ROLES.has(role ?? '')) return false;
+    const actor = [...this.identities.values()].find(r => r.fingerprint === actorFingerprint); if (!actor || actor.isAdmin !== true) return false;
+    const target = [...this.identities.values()].find(r => r.fingerprint === targetFingerprint); if (!target) return false;
+    if (role === 'admin') target.isAdmin = true; else target.isModerator = true;
+    this.audit.push({ action: 'role_assigned', actor_identity_id: actor.identityId, target_identity_id: target.identityId, role, created_at: Date.now() });
+    return true;
+  }
+  async revokeRole(actorFingerprint, targetFingerprint, role) {
+    if (!FINGERPRINT.test(actorFingerprint ?? '') || !FINGERPRINT.test(targetFingerprint ?? '') || !ROLES.has(role ?? '')) return false;
+    const actor = [...this.identities.values()].find(r => r.fingerprint === actorFingerprint); if (!actor || actor.isAdmin !== true) return false;
+    const target = [...this.identities.values()].find(r => r.fingerprint === targetFingerprint); if (!target) return false;
+    if (role === 'admin') target.isAdmin = false; else target.isModerator = false;
+    this.audit.push({ action: 'role_revoked', actor_identity_id: actor.identityId, target_identity_id: target.identityId, role, created_at: Date.now() });
+    return true;
+  }
 }
