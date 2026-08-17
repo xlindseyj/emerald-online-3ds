@@ -5,7 +5,7 @@ import { MemoryIdentityStore } from '../server/src/identity-store.mjs';
 import { MemoryCommunityStore } from '../server/src/community-store.mjs';
 import { MemoryStatsStore } from '../server/src/stats-store.mjs';
 import { createCommunityApp } from './community-app.mjs';
-import { communityPage } from './community-page.mjs';
+import { communityPage, communityScript } from './community-page.mjs';
 import { formatReleaseTopic, releaseContentHash, validateReleaseCatalog } from '../server/src/release-catalog.mjs';
 import { communityPublicationContentHash, validateCommunityPublicationCatalog } from '../server/src/community-publication-catalog.mjs';
 import fs from 'node:fs';
@@ -58,6 +58,8 @@ test('community page is public, anonymous, and explains 3DS pairing', async t =>
   assert.match(body, /Not affiliated with Nintendo/);
   assert.doesNotMatch(body, /Lindsey|LWS/);
   assert.match(body, /Leaderboards/);
+  assert.match(body, /id="defectfields" class="composer hidden" disabled/);
+  assert.match(communityScript, /fields\.disabled=!isDefect/);
 });
 
 test('profiles and leaderboards are paired-only and stats deletion requires CSRF plus confirmation', async t => {
