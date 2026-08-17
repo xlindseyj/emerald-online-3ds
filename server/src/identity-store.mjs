@@ -197,7 +197,8 @@ export class PostgresIdentityStore {
        FROM identities i WHERE b.token_hash=$1 AND b.identity_id=i.id AND b.revoked_at IS NULL
        AND b.expires_at > now() AND b.last_used_at > now() - interval '30 days' AND i.deleted_at IS NULL
        RETURNING b.id AS session_id, i.id AS identity_id, i.fingerprint,
-         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='moderator') AS is_moderator`,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='admin') AS is_admin,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role IN ('moderator', 'admin')) AS is_moderator`,
       [purposeHash(this.pepper, 'browser-session', token)]
     );
     const session = result.rows[0];
@@ -279,7 +280,8 @@ export class MemoryIdentityStore {
     if (!session || session.revoked || session.expiresAt <= Date.now() || !this.identities.has(session.identityId)) return null;
     session.expiresAt = Date.now() + 2592000000;
     const identity = this.identities.get(session.identityId);
-    return { session_id: session.sessionId, identity_id: session.identityId, fingerprint: identity.fingerprint, is_moderator: identity.isModerator === true, csrf_token: this.browserCsrf(token) };
+    const isAdmin = identity.isAdmin === true;
+    return { session_id: session.sessionId, identity_id: session.identityId, fingerprint: identity.fingerprint, is_admin: isAdmin, is_moderator: isAdmin || identity.isModerator === true, csrf_token: this.browserCsrf(token) };
   }
   async revokeBrowserSession(token) { const session = this.browserSessions.get(token); if (!session || session.revoked) return false; session.revoked = true; return true; }
   async exportIdentity(identityId) { const r = this.identities.get(identityId); return r ? { id: r.identityId, fingerprint: r.fingerprint, active_device_credentials: r.credentials.size } : null; }

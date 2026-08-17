@@ -202,6 +202,17 @@ test('new defects stay paired-only until a moderator confirms them', async t => 
   assert.equal((await publicTopic.json()).topic.defect_status, 'confirmed');
 });
 
+test('admin sessions inherit moderator access and expose the admin role', async t => {
+  const { base, identityStore } = await startApp(t);
+  const enrollment = await identityStore.enroll();
+  identityStore.identities.get(enrollment.identityId).isAdmin = true;
+  const auth = await pair(base, identityStore, enrollment);
+  const session = await (await request(base, '/api/community/session', auth)).json();
+  assert.equal(session.admin, true);
+  assert.equal(session.moderator, true);
+  assert.equal((await request(base, '/api/community/moderation/overview', auth)).status, 200);
+});
+
 test('paired topic creation is rate limited per identity', async t => {
   const { base, identityStore } = await startApp(t);
   const enrollment = await identityStore.enroll();

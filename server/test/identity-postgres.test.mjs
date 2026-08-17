@@ -26,3 +26,18 @@ test('PostgreSQL identity lifecycle persists only credential verifiers', { skip:
   assert.equal(await store.deleteIdentity(enrollment.identityId), true);
   assert.equal((await pool.query('SELECT count(*)::int AS count FROM device_credentials WHERE identity_id=$1', [enrollment.identityId])).rows[0].count, 0);
 });
+
+test('PostgreSQL admin sessions inherit moderator authorization', { skip: !databaseUrl }, async t => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresIdentityStore(pool, 'test-only-pepper-with-at-least-thirty-two-bytes');
+  const enrollment = await store.enroll();
+  t.after(() => store.deleteIdentity(enrollment.identityId));
+  await pool.query("INSERT INTO identity_roles(identity_id, role) VALUES($1, 'admin')", [enrollment.identityId]);
+  const pairing = await store.startPairing();
+  await store.approvePairing(enrollment.identityId, enrollment.credentialId, pairing.code);
+  const browser = await store.consumePairing(pairing.code, pairing.requestToken);
+  const session = await store.authenticateBrowserSession(browser.token);
+  assert.equal(session.is_admin, true);
+  assert.equal(session.is_moderator, true);
+});

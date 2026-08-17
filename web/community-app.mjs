@@ -156,7 +156,8 @@ export function createCommunityApp({ identityStore, communityStore, statsStore =
         if (!PAIRING.test(code) || !TOKEN.test(body.requestToken ?? '')) return send(res, 400, { ok: false, error: 'invalid_pairing_request' }), true;
         const paired = await identityStore.consumePairing(code, body.requestToken);
         if (!paired) return send(res, 409, { ok: false, error: 'pairing_pending_or_expired' }), true;
-        send(res, 200, { ok: true, fingerprint: paired.fingerprint, csrfToken: paired.csrfToken }, { 'set-cookie': sessionCookie(paired.token) });
+        const session = await identityStore.authenticateBrowserSession(paired.token);
+        send(res, 200, { ok: true, fingerprint: paired.fingerprint, admin: session?.is_admin === true, moderator: session?.is_moderator === true, csrfToken: paired.csrfToken }, { 'set-cookie': sessionCookie(paired.token) });
         return true;
       }
 
@@ -165,7 +166,7 @@ export function createCommunityApp({ identityStore, communityStore, statsStore =
           rateLimited(res, auth, 'all-writes', 60, 60000)) return true;
       if (pathname === '/api/community/session' && req.method === 'GET') {
         const sanctions = auth.session ? await communityStore.activeSanctions(auth.session) : [];
-        send(res, 200, { ok: true, paired: Boolean(auth.session), ...(auth.session ? { fingerprint: auth.session.fingerprint, moderator: auth.session.is_moderator, csrfToken: auth.session.csrf_token, sanctions } : {}) });
+        send(res, 200, { ok: true, paired: Boolean(auth.session), ...(auth.session ? { fingerprint: auth.session.fingerprint, admin: auth.session.is_admin === true, moderator: auth.session.is_moderator === true, csrfToken: auth.session.csrf_token, sanctions } : {}) });
         return true;
       }
       if (pathname === '/api/community/session/logout' && req.method === 'POST') {
