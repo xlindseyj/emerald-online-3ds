@@ -49,6 +49,46 @@ function newerSlot(left, right) {
   return left.counter >= right.counter ? left : right;
 }
 
+function encodeTrainerName(name) {
+  if (typeof name !== 'string' || !/^[A-Z]{1,7}$/.test(name)) {
+    throw new Error('test trainer name must contain 1-7 uppercase ASCII letters');
+  }
+  const encoded = Buffer.alloc(8, 0xFF);
+  for (let index = 0; index < name.length; index += 1) encoded[index] = 0xBB + name.charCodeAt(index) - 0x41;
+  return encoded;
+}
+
+export function rewriteEmeraldTrainerIdentity(value, { name, trainerId }) {
+  if (!Buffer.isBuffer(value)) throw new Error('Emerald identity rewrite requires a Buffer');
+  if (value.length !== SAVE_BYTES && value.length !== SAVE_BYTES + EMULATOR_FOOTER_BYTES) {
+    throw new Error(`private Emerald save must be 131072 or 131584 bytes, received ${value.length}`);
+  }
+  if (!Number.isSafeInteger(trainerId) || trainerId < 0 || trainerId > 0xFFFFFFFF) {
+    throw new Error('test trainer ID must be an unsigned 32-bit integer');
+  }
+
+  const rewritten = Buffer.from(value);
+  const encodedName = encodeTrainerName(name);
+  let rewrittenSections = 0;
+  for (let slot = 0; slot < 2; slot += 1) {
+    for (let sectorIndex = 0; sectorIndex < SECTORS_PER_SLOT; sectorIndex += 1) {
+      const offset = (slot * SECTORS_PER_SLOT + sectorIndex) * SECTOR_BYTES;
+      const id = rewritten.readUInt16LE(offset + 0xFF4);
+      const signature = rewritten.readUInt32LE(offset + 0xFF8);
+      if (id !== 0 || signature !== SECTOR_SIGNATURE) continue;
+      const data = rewritten.subarray(offset, offset + SECTOR_DATA_BYTES);
+      if (rewritten.readUInt16LE(offset + 0xFF6) !== checksum(data, SECTION_SIZES[0])) continue;
+      encodedName.copy(rewritten, offset);
+      rewritten.writeUInt32LE(trainerId, offset + 0x0A);
+      rewritten.writeUInt16LE(checksum(data, SECTION_SIZES[0]), offset + 0xFF6);
+      rewrittenSections += 1;
+    }
+  }
+  if (!rewrittenSections) throw new Error('private Emerald save has no checksum-valid trainer section');
+  inspectEmeraldSave(rewritten);
+  return rewritten;
+}
+
 export function inspectEmeraldSave(value) {
   if (!Buffer.isBuffer(value)) throw new Error('Emerald save inspection requires a Buffer');
   if (value.length !== SAVE_BYTES && value.length !== SAVE_BYTES + EMULATOR_FOOTER_BYTES) {

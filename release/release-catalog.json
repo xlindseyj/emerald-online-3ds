@@ -417,7 +417,7 @@
     "version": "0.8.4",
     "releasedAt": "2026-08-16T18:18:31Z",
     "title": "Global roster and timestamped Map Chat",
-    "status": "Current beta",
+    "status": "Historical beta — superseded",
     "summary": "Adds dedicated touch-paged lower-screen lists for every connected trainer and for current-map chat, while keeping trainer overlays and message delivery map-local and retaining no routine chat on the server.",
     "highlights": [
       "Online Users lists every authenticated connection with its display name, current map, and tile coordinates; rows are read-only but retain opaque IDs internally for future actions.",
@@ -479,5 +479,85 @@
       }
     ],
     "sourceCommit": "5fee00b"
+  },
+  {
+    "version": "0.8.7",
+    "releasedAt": "2026-08-16T22:28:44Z",
+    "title": "RFU Union Room trade verified in Azahar",
+    "status": "Current experimental beta",
+    "summary": "Moves the private Gate 4 link experiment to gpSP's Emerald RFU backend, services packets inside its tight response window, and completes a native two-Azahar Union Room trade through save and restart while leaving normal presence, chat, and offline play unchanged.",
+    "highlights": [
+      "Uses gpSP's Emerald RFU backend for opt-in link rooms; testers must use Emerald's RFU/Union Room route rather than the unsupported Direct Corner path.",
+      "Drains nonblocking link packets from gpSP's receive callback and polls once per emulated frame during an active link session instead of waiting for the normal 100 ms presence interval.",
+      "Preserves Emerald's temporary RFU host scan cycles while clearing explicit peer withdrawal or disconnect state, preventing discovery from being broken by a routine HOST_STOP.",
+      "Suppresses online presence overlays on Emerald's native multiplayer maps and requests the New 3DS CPU/L2 speedup where supported."
+    ],
+    "verification": [
+      "Automated source coverage checks RFU selection, per-frame linked polling, callback receive draining, New 3DS speedup, native-multiplayer overlay suppression, and scan-safe peer cleanup.",
+      "Two isolated Azahar 2126.0 clients discovered native avatars and a Trading Board offer, exchanged Torchic for Marill, completed Emerald's automatic save, restarted, and reloaded parties containing two Marill on CODEX and two Torchic on LINZ.",
+      "The ROM-free CIA and 3DSX were rebuilt with the version 0.8.7 stamp, and the corresponding-source archive contains the exact runtime and modified gpSP source.",
+      "The release checksum manifest covers all three current public artifacts and the privacy-focused release audit validates the source archive and forum catalogs."
+    ],
+    "knownIssues": [
+      "The RFU/Union Room trade path now passes in two Azahar clients, but a battle, interruption recovery, latency, audio, and physical 3DS save-integrity acceptance run remain open.",
+      "Public link invitations and battle/trade rankings remain disabled.",
+      "Old 3DS frame rate has previously measured 48-52 FPS in the current Gate 4 scenario; version 0.8.7 physical performance and audio still need to be recorded.",
+      "Remote trainer overlays can appear in front of foreground objects such as tree canopies or signs because ROM-derived priority data is not sent to the service."
+    ],
+    "upgradeNotes": [
+      "Replace any intermediate 0.8.5 or 0.8.6 test build; version 0.8.7 is the current artifact set.",
+      "Back up and preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, online.cfg, and link-backups when replacing the 3DSX or reinstalling the CIA.",
+      "Normal users should not add link_room. Gate 4 testers must use a fresh unpredictable shared room and independent save backups.",
+      "Copying a CIA onto the SD card does not update an installed HOME Menu title; reinstall it through FBI."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "fbbb8f99b47d9443e4d8145d5ef0dd7aef3877e11af818cb6376f4bd201171f3",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "66db704f409dae82078662ddb9bd189ef363bd8eff7bebc5111af2abedd82641",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "494877949e55693a0bfdefda5a314d4f7032e22b3961eac47b4eebcf0bcd36c8",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.7 updates the private RFU feasibility path while keeping the normal public presence service compatible."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Back up every private file and reinstall the current CIA through FBI; copying the CIA alone does not update the installed title."
+      },
+      {
+        "url": "/release-media/0.8.4-online-users.png",
+        "alt": "Read-only global Online Users list on the 3DS lower screen",
+        "caption": "The current build retains the global roster, map-local presence isolation, and the project-owned lower-screen interface."
+      },
+      {
+        "url": "/release-media/0.8.4-map-chat.png",
+        "alt": "Timestamped current-map chat on the 3DS lower screen",
+        "caption": "Routine chat remains session-only and is not stored by the server."
+      },
+      {
+        "url": "/release-media/0.8.7-trading-board.png",
+        "alt": "Native Emerald Union Room Trading Board offer relayed between two Azahar clients",
+        "caption": "LINZ found CODEX's Torchic-for-Water offer on Emerald's native Trading Board through the public relay."
+      },
+      {
+        "url": "/release-media/0.8.7-union-room-trade.png",
+        "alt": "Native Emerald Union Room trade animation sending Marill",
+        "caption": "The two-client v0.8.7 run completed the native animation, automatic save, restart, and exchanged-party verification."
+      }
+    ]
   }
 ]

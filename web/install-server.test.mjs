@@ -70,6 +70,13 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.match(pageBody, /not affiliated with, endorsed by, or sponsored by Nintendo/);
   assert.match(pageBody, /does not host, provide, sell, or distribute ROMs/);
   assert.match(pageBody, /Back up your save before use/);
+  assert.match(pageBody, /a9dec84dfe7f62ab2220bafaef7479da0929d066ece16a6885f6226db19085af/);
+  assert.match(pageBody, /server=live\.emeraldonline3ds\.com/);
+  assert.match(pageBody, /complete two-Azahar RFU\/Union Room trade now passes/);
+  assert.match(pageBody, /0\.8\.7-trading-board\.png/);
+  assert.match(pageBody, /0\.8\.7-union-room-trade\.png/);
+  assert.match(pageBody, /Authenticated online players can see your display name, current map, and tile coordinates/);
+  assert.match(pageBody, /community\?guide=privacy-and-data/);
   assert.match(pageBody, /src="\/logo\.png"/);
   assert.match(pageBody, /release-media\/community-forums\.png/);
   assert.match(pageBody, /release-media\/online-dashboard\.png/);

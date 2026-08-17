@@ -175,6 +175,7 @@ static t_client_broadcast rfu_peer_bcst[MAX_RFU_PEERS];
 #define NET_RFU_HOST_SEND       0x05    // Host to client data send
 #define NET_RFU_CLIENT_SEND     0x06    // Client to host data send
 #define NET_RFU_CLIENT_ACK      0x07    // Client ACKs host received data.
+#define NET_RFU_BROADCAST_STOP  0x08    // Host stopped advertising this session.
 
 // Callbacks used to send and force-receive data.
 void netpacket_send(uint16_t client_id, const void *buf, size_t len);
@@ -792,6 +793,12 @@ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id) {
       break;
 
     case NET_RFU_DISCONNECT:
+      // A disconnected host is no longer a discoverable room. The broadcast
+      // table is indexed by frontend client ID, so clear it immediately when
+      // the device ID matches rather than waiting up to 255 video frames.
+      if (client_id < MAX_RFU_PEERS &&
+          rfu_peer_bcst[client_id].device_id == (hdata & 0xffff))
+        memset(&rfu_peer_bcst[client_id], 0, sizeof(rfu_peer_bcst[client_id]));
       if (rfu_state == RFU_STATE_HOST) {
         // Clear the client from the list
         u32 clnum = (hdata >> 16) & 0x3;
@@ -803,6 +810,14 @@ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id) {
         // Go back to idle state!
         memset(&rfu_client, 0, sizeof(rfu_client));
         rfu_state = RFU_STATE_IDLE;
+      }
+      break;
+
+    case NET_RFU_BROADCAST_STOP:
+      if (client_id < MAX_RFU_PEERS &&
+          rfu_peer_bcst[client_id].device_id == (hdata & 0xffff)) {
+        RFU_DEBUG_LOG("Host #%d stopped broadcast devID %02x\n", client_id, hdata);
+        memset(&rfu_peer_bcst[client_id], 0, sizeof(rfu_peer_bcst[client_id]));
       }
       break;
 

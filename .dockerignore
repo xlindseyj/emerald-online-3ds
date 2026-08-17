@@ -22,6 +22,7 @@
 !release/SHA256SUMS
 !release/release-catalog.json
 !release/known-issues.json
+!release/community-pages.json
 
 # Defense in depth: private/legal-copy inputs must never enter an image layer.
 *.gba

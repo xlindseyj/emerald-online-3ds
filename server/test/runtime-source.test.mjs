@@ -6,6 +6,7 @@ import path from 'node:path';
 const gpspSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/main.cpp'), 'utf8');
 const svchaxSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ctr_svchax.c'), 'utf8');
 const gpspMainSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/main.c'), 'utf8');
+const gpspRfuSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/rfu.c'), 'utf8');
 
 test('gpSP replacement is a dedicated direct-boot dynarec frontend', () => {
   assert.match(gpspSource, /ROM_PATH "sdmc:\/3ds\/emerald-online-3ds\/emerald\.gba"/);
@@ -98,13 +99,15 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(gpspSource, /"HI", "!", "<>", "GG"/);
 });
 
-test('gpSP frontend suppresses remote trainers outside the verified Emerald overworld', () => {
+test('gpSP reports native-map coordinates but suppresses overlay trainers outside the verified overworld', () => {
   assert.match(gpspSource, /EMERALD_GMAIN_OFFSET = 0x22C0/);
   assert.match(gpspSource, /EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET \+ 0x4/);
   assert.match(gpspSource, /EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET \+ 0x439/);
   assert.match(gpspSource, /EMERALD_CB2_OVERWORLD_THUMB = 0x08085E5D/);
   assert.match(gpspSource, /callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle/);
-  assert.match(gpspSource, /if \(!gbaEwram \|\| !gbaIwram \|\| !isEmeraldOverworld\(\)\) return current/);
+  assert.match(gpspSource, /isEmeraldNativeMultiplayerMap/);
+  assert.match(gpspSource, /mapGroup == 25.*mapNum >= 24.*mapNum <= 27.*mapNum == 60/s);
+  assert.match(gpspSource, /static GamePresence readPresence[\s\S]*callback2 != EMERALD_CB2_OVERWORLD_THUMB \|\| inBattle\) return current/);
   assert.match(gpspSource, /if \(!isEmeraldOverworld\(\) \|\| !presence\.valid\) return/);
 });
 
@@ -171,8 +174,9 @@ test('gpSP bottom screen exposes paged global users and session-only map chat li
   assert.doesNotMatch(gpspSource.slice(usersStart, usersEnd), /openChat|sendEmote|onlineSend/);
 });
 
-test('gpSP experimental link mode registers netpacket callbacks and gates startup on rotating save backups', () => {
-  assert.match(gpspSource, /gpsp_serial.*linkConfigured \? "mul_poke" : "disabled"/s);
+test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups', () => {
+  assert.match(gpspSource, /gpsp_serial.*linkConfigured \? "rfu" : "disabled"/s);
+  assert.doesNotMatch(gpspSource, /gpsp_serial.*linkConfigured \? "mul_poke"/s);
   assert.match(gpspSource, /RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE/);
   assert.match(gpspSource, /frontendNetpacketSend/);
   assert.match(gpspSource, /link_spike_join/);
@@ -187,6 +191,28 @@ test('gpSP experimental link mode registers netpacket callbacks and gates startu
   const backup = gpspSource.indexOf('backupSaveForLink()', start);
   assert.ok(start >= 0 && backup > start && callback > backup, 'save backup must complete before the core netpacket session starts');
   assert.match(gpspSource, /LINK %s ACTIVE - BACKUP OK/);
+});
+
+test('gpSP services RFU packets inside wait callbacks and requests New 3DS speedup', () => {
+  assert.match(gpspSource, /frontendNetpacketPollReceive[\s\S]*linkStarted[\s\S]*receiveOnlineTraffic\(\)/);
+  assert.match(gpspSource, /nextOnlinePoll = now \+ \(linkStarted \? 1 : 100\)/);
+  assert.match(gpspSource, /osSetSpeedupEnable\(true\)/);
+});
+
+test('gpSP RFU preserves transient scans while clearing genuine peer withdrawals', () => {
+  assert.match(gpspRfuSource, /NET_RFU_BROADCAST_STOP/);
+  const hostStop = gpspRfuSource.indexOf('case RFU_CMD_HOST_STOP:');
+  const hostAccept = gpspRfuSource.indexOf('case RFU_CMD_HOST_ACCEPT:', hostStop);
+  assert.ok(hostStop >= 0 && hostAccept > hostStop, 'host stop command must be present');
+  assert.doesNotMatch(
+    gpspRfuSource.slice(hostStop, hostAccept),
+    /NET_RFU_BROADCAST_STOP/,
+    'Emerald cycles host stop while scanning, so it must not withdraw the active advertisement'
+  );
+  const receiveStop = gpspRfuSource.indexOf('case NET_RFU_BROADCAST_STOP:');
+  const clearPeer = gpspRfuSource.indexOf('memset(&rfu_peer_bcst[client_id]', receiveStop);
+  assert.ok(receiveStop >= 0 && clearPeer > receiveStop, 'room withdrawal must clear the matching peer advertisement');
+  assert.match(gpspRfuSource, /case NET_RFU_DISCONNECT:[\s\S]*rfu_peer_bcst\[client_id\]\.device_id == \(hdata & 0xffff\)[\s\S]*memset\(&rfu_peer_bcst\[client_id\]/);
 });
 
 test('gpSP does not touch unmapped 3DS translation caches in interpreter mode', () => {

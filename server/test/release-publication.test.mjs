@@ -15,17 +15,21 @@ const rawCommunityPublications = JSON.parse(fs.readFileSync(path.join(root, 'rel
 
 test('release catalog produces structured, image-safe official posts', () => {
   const catalog = validateReleaseCatalog(rawCatalog);
-  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4']);
+  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7']);
   const current = catalog.at(-1);
   const topic = formatReleaseTopic(current);
-  assert.match(topic.title, /v0\.8\.4/);
+  assert.match(topic.title, /v0\.8\.7/);
   assert.match(topic.body, /## Highlights/);
+  assert.match(topic.body, /RFU\/Union Room/);
+  assert.match(topic.body, /trade path now passes in two Azahar clients/);
   assert.match(topic.body, /\[CIA\]\(\/emerald-online-3ds\.cia\)/);
   const rendered = renderMarkdown(topic.body);
   assert.match(rendered, /<img src="\/logo\.png"/);
   assert.match(rendered, /<img src="\/qr\.svg"/);
   assert.match(rendered, /<img src="\/release-media\/0\.8\.4-online-users\.png"/);
   assert.match(rendered, /<img src="\/release-media\/0\.8\.4-map-chat\.png"/);
+  assert.match(rendered, /<img src="\/release-media\/0\.8\.7-trading-board\.png"/);
+  assert.match(rendered, /<img src="\/release-media\/0\.8\.7-union-room-trade\.png"/);
   assert.match(rendered, /<h2>Highlights<\/h2>/);
   assert.match(rendered, /<ul><li>/);
   assert.match(rendered, /href="\/emerald-online-3ds\.cia"/);
@@ -89,19 +93,30 @@ test('confirmed FPS issue publishes idempotently with the recovery workaround', 
 
 test('official guides and status pages populate every forum purpose idempotently', async () => {
   const publications = validateCommunityPublicationCatalog(rawCommunityPublications);
-  assert.equal(publications.length, 9);
+  assert.equal(publications.length, 11);
   assert.deepEqual(new Set(publications.map(item => item.category)), new Set([
     'announcements', 'installation-help', 'service-status', 'beta-testing',
     'development-code', 'feature-ideas', 'multiplayer-help', 'general'
   ]));
   const install = publications.find(item => item.key === 'install-on-3ds');
   const emulator = publications.find(item => item.key === 'test-with-azahar');
+  const trade = publications.find(item => item.key === 'union-room-trade-testing');
   const status = publications.find(item => item.key === 'live-service-status');
+  const privacy = publications.find(item => item.key === 'privacy-and-data');
   assert.match(renderMarkdown(install.body), /<img src="\/qr\.svg"/);
+  assert.match(install.body, /a9dec84dfe7f62ab2220bafaef7479da0929d066ece16a6885f6226db19085af/);
+  assert.match(install.body, /server=live\.emeraldonline3ds\.com/);
   assert.match(renderMarkdown(emulator.body), /release-media\/0\.8\.4-online-users\.png/);
   assert.match(renderMarkdown(emulator.body), /release-media\/0\.8\.4-map-chat\.png/);
+  assert.match(emulator.body, /RFU\/Union Room/);
+  assert.match(renderMarkdown(trade.body), /release-media\/0\.8\.7-trading-board\.png/);
+  assert.match(renderMarkdown(trade.body), /release-media\/0\.8\.7-union-room-trade\.png/);
+  assert.match(trade.body, /automatic save, restart, and exchanged-party verification/);
   assert.match(status.body, /https:\/\/emeraldonline3ds\.com\/community/);
   assert.match(status.body, /wss:\/\/live\.emeraldonline3ds\.com\/game/);
+  assert.match(privacy.body, /five-minute code/);
+  assert.match(privacy.body, /not stored in the database/);
+  assert.match(privacy.body, /30 idle days/);
 
   const store = new MemoryCommunityStore();
   let firstTopicId;

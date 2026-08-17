@@ -54,7 +54,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
-#define APP_VERSION "0.8.4"
+#define APP_VERSION "0.8.7"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
@@ -104,6 +104,7 @@ static char linkStatus[48] = "LINK SPIKE DISABLED";
 static const retro_netpacket_callback* coreNetpacketInterface;
 
 static bool onlineSend(const char* message);
+static bool receiveOnlineTraffic(void);
 
 static void frontendNetpacketSend(int, const void* data, size_t size, uint16_t clientId) {
     if (!linkStarted || !data || !size || size > 512) return;
@@ -121,8 +122,10 @@ static void frontendNetpacketSend(int, const void* data, size_t size, uint16_t c
 }
 
 static void frontendNetpacketPollReceive(void) {
-    // Network input is drained by onlineUpdate between retro_run calls. A
-    // blocking poll here would stall emulation and audio during link jitter.
+    // gpSP calls this while its RFU is waiting for a response. The socket is
+    // nonblocking, so drain immediately instead of deferring replies to the
+    // 100 ms presence poll and allowing Emerald's RFU handshake to time out.
+    if (linkStarted) receiveOnlineTraffic();
 }
 
 static void debugStage(const char* stage) {
@@ -279,7 +282,11 @@ static const char* optionValue(const char* key) {
     if (!strcmp(key, "gpsp_bios")) return "builtin";
     if (!strcmp(key, "gpsp_boot_mode")) return "game";
     if (!strcmp(key, "gpsp_rtc")) return "auto";
-    if (!strcmp(key, "gpsp_serial")) return linkConfigured ? "mul_poke" : "disabled";
+    // Emerald's Direct Corner is not reliable with gpSP's experimental
+    // Serial-Poke backend: the client can time out when the actual terminal
+    // exchange begins. The RFU backend is gpSP's native Emerald choice and
+    // supports the in-game Union Room trade/battle flow.
+    if (!strcmp(key, "gpsp_serial")) return linkConfigured ? "rfu" : "disabled";
     if (!strcmp(key, "gpsp_rumble")) return "disabled";
     if (!strcmp(key, "gpsp_sprlim")) return "disabled";
     if (!strcmp(key, "gpsp_sound_rate")) return "32768";
@@ -519,11 +526,25 @@ static constexpr size_t EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET + 
 static constexpr size_t EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET + 0x439;
 static constexpr uint32_t EMERALD_CB2_OVERWORLD_THUMB = 0x08085E5D;
 
+static bool isEmeraldNativeMultiplayerMap(void) {
+    if (!gbaEwram || !gbaIwram) return false;
+    const uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
+    if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return false;
+    const size_t offset = saveBlock - 0x02000000;
+    const uint8_t mapGroup = gbaEwram[offset + 4];
+    const uint8_t mapNum = gbaEwram[offset + 5];
+    // Emerald's IndoorDynamic native multiplayer maps: 2P Colosseum,
+    // Trade Center, Record Corner, 4P Colosseum, and Union Room.
+    // The game owns every avatar in these scenes; drawing presence sprites
+    // here would duplicate or obscure Emerald's RFU/link participants.
+    return mapGroup == 25 && ((mapNum >= 24 && mapNum <= 27) || mapNum == 60);
+}
+
 static bool isEmeraldOverworld(void) {
     if (!gbaIwram) return false;
     const uint32_t callback2 = read32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET);
     const bool inBattle = (gbaIwram[EMERALD_GMAIN_FLAGS_OFFSET] & 0x02) != 0;
-    return callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle;
+    return callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle && !isEmeraldNativeMultiplayerMap();
 }
 
 static char decodeEmerald(uint8_t value);
@@ -532,7 +553,10 @@ static void onlineDisconnect(void);
 static GamePresence readPresence(void) {
     static GamePresence previous = {false, 0, 0, 0, 0, 1};
     GamePresence current = {false, 0, 0, 0, 0, (uint8_t) (previous.facing ? previous.facing : 1)};
-    if (!gbaEwram || !gbaIwram || !isEmeraldOverworld()) return current;
+    if (!gbaEwram || !gbaIwram) return current;
+    const uint32_t callback2 = read32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET);
+    const bool inBattle = (gbaIwram[EMERALD_GMAIN_FLAGS_OFFSET] & 0x02) != 0;
+    if (callback2 != EMERALD_CB2_OVERWORLD_THUMB || inBattle) return current;
     uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
     if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return current;
     size_t offset = saveBlock - 0x02000000;
@@ -2162,6 +2186,11 @@ static void uploadVideo(void) {
 int main(void) {
     remove(DEBUG_LOG_PATH);
     debugStage("main");
+    // On New 3DS hardware this enables the faster CPU clock and L2 cache. It
+    // is harmless on Old 3DS and keeps RFU sessions from falling behind when
+    // TLS, emulation, and both-screen rendering are active together.
+    osSetSpeedupEnable(true);
+    debugStage("new3ds-speedup-requested");
         loadConfig();
         loadIdentity();
         loadStatsConfig();
@@ -2279,7 +2308,9 @@ int main(void) {
         // every emulated frame wastes Old 3DS CPU time without improving UI or
         // upload freshness, so refresh the cached summary once per second.
         if (now >= nextStatsRead) { saveStats = readSaveStats(); nextStatsRead = now + 1000; }
-        if (now >= nextOnlinePoll) { nextOnlinePoll = now + 100; onlineUpdate(); }
+        // RFU response windows are much tighter than ordinary presence sync.
+        // While linked, service the nonblocking socket once per emulated frame.
+        if (now >= nextOnlinePoll) { nextOnlinePoll = now + (linkStarted ? 1 : 100); onlineUpdate(); }
         if (now >= nextSaveCheck) { nextSaveCheck = now + 5000; writeSave(false); }
         if (!fpsStarted) fpsStarted = now;
         if (++fpsFrames && now - fpsStarted >= 1000) {

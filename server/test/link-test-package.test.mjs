@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { generateRoom, prepareLinkTest, validateRoom } from '../../tools/prepare-link-test.mjs';
-import { inspectEmeraldSave } from '../../tools/emerald-save.mjs';
+import { inspectEmeraldSave, rewriteEmeraldTrainerIdentity } from '../../tools/emerald-save.mjs';
 
 const projectRoot = path.resolve(import.meta.dirname, '..', '..');
 
@@ -75,4 +75,18 @@ test('Emerald save inspection requires complete checksummed slots and progressed
   corrupt.fill(0, 14 * 0x1000 + 0xFF8, 14 * 0x1000 + 0xFFC);
   assert.throws(() => inspectEmeraldSave(corrupt), /no complete checksum-valid save slot/);
   assert.throws(() => inspectEmeraldSave(Buffer.alloc(10)), /131072 or 131584 bytes/);
+});
+
+test('virtual link peers can receive a distinct checksum-valid in-game trainer identity', () => {
+  const original = validTestSave();
+  const rewritten = rewriteEmeraldTrainerIdentity(original, { name: 'TESTER', trainerId: 0x12345678 });
+  assert.notDeepEqual(rewritten, original);
+  assert.deepEqual(inspectEmeraldSave(rewritten), inspectEmeraldSave(original));
+  for (const slot of [0, 1]) {
+    const sectionOffset = slot * 14 * 0x1000;
+    assert.deepEqual([...rewritten.subarray(sectionOffset, sectionOffset + 7)], [0xCE, 0xBF, 0xCD, 0xCE, 0xBF, 0xCC, 0xFF]);
+    assert.equal(rewritten.readUInt32LE(sectionOffset + 0x0A), 0x12345678);
+  }
+  assert.throws(() => rewriteEmeraldTrainerIdentity(original, { name: 'too-long', trainerId: 1 }), /uppercase ASCII/);
+  assert.throws(() => rewriteEmeraldTrainerIdentity(original, { name: 'TEST', trainerId: -1 }), /unsigned 32-bit/);
 });
