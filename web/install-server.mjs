@@ -20,6 +20,7 @@ const threeDsxPath = path.join(root, 'release', 'emerald-online-3ds.3dsx');
 const sourceFilename = `emerald-online-3ds-source-${packageInfo.version}.tar.gz`;
 const sourcePath = path.join(root, 'release', sourceFilename);
 const checksumsPath = path.join(root, 'release', 'SHA256SUMS');
+const unistorePath = path.join(root, 'release', 'emerald-online-3ds.unistore');
 const logoPath = path.join(root, 'assets', 'emerald-online-3ds-web-logo.png');
 const iconPath = path.join(root, 'assets', 'emerald-online-3ds-icon.png');
 const releaseMediaPath = path.join(root, 'assets', 'release-media');
@@ -93,7 +94,7 @@ async function readPublicStatus() {
     readStatus().then(value => ({ ok: true, value })).catch(() => ({ ok: false, value: null })),
     boundedDatabaseCheck()
   ]);
-  const releaseFilesReady = [ciaPath, threeDsxPath, sourcePath, checksumsPath].every(filename => fs.statSync(filename, { throwIfNoEntry: false })?.isFile());
+  const releaseFilesReady = [ciaPath, threeDsxPath, sourcePath, checksumsPath, unistorePath].every(filename => fs.statSync(filename, { throwIfNoEntry: false })?.isFile());
   const services = [
     { id: 'website', name: 'Website and installer', url: `${publicBase}/`, status: 'operational' },
     { id: 'community', name: 'Community forums', url: `${publicBase}/community`, status: communityReady ? 'operational' : 'outage' },
@@ -136,7 +137,7 @@ if (!Number.isSafeInteger(port) || port < 1 || port > 65535 ||
     !Number.isSafeInteger(statusPort) || statusPort < 1 || statusPort > 65535 ||
     !Number.isSafeInteger(maxConnections) || maxConnections < 1 ||
     !Number.isSafeInteger(maxConnectionsPerIp) || maxConnectionsPerIp < 1) throw new Error('invalid installer server configuration');
-for (const artifact of [ciaPath, threeDsxPath, sourcePath, checksumsPath, logoPath, iconPath]) {
+for (const artifact of [ciaPath, threeDsxPath, sourcePath, checksumsPath, unistorePath, logoPath, iconPath]) {
   if (!fs.existsSync(artifact)) throw new Error(`release artifact missing: ${artifact}. Run npm run build:public first.`);
 }
 
@@ -274,6 +275,7 @@ const server = http.createServer(async (req, res) => {
     ['/emerald-online-3ds.3dsx', [threeDsxPath, 'emerald-online-3ds.3dsx', 'application/octet-stream']],
     ['/source', [sourcePath, sourceFilename, 'application/gzip']],
     ['/SHA256SUMS', [checksumsPath, 'SHA256SUMS', 'text/plain; charset=utf-8']],
+    ['/emerald-online-3ds.unistore', [unistorePath, 'emerald-online-3ds.unistore', 'application/json']],
   ]);
   if (downloads.has(pathname)) {
     const [filename, downloadName, contentType] = downloads.get(pathname);

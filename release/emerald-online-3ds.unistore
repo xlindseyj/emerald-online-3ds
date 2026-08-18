@@ -1,0 +1,55 @@
+{
+  "storeInfo": {
+    "title": "Emerald Online 3DS",
+    "author": "Emerald Online 3DS",
+    "description": "Public multiplayer presence for your own Pokémon Emerald cartridge dump on Nintendo 3DS.",
+    "url": "https://emeraldonline3ds.com/emerald-online-3ds.unistore",
+    "file": "emerald-online-3ds.unistore",
+    "revision": 1,
+    "version": 4
+  },
+  "storeContent": [
+    {
+      "info": {
+        "title": "Emerald Online 3DS",
+        "author": "Emerald Online 3DS",
+        "description": "Public multiplayer presence, chat, and RFU/Union Room relay for Pokémon Emerald (US) on 3DS. Release v0.8.8.",
+        "category": [
+          "game"
+        ],
+        "console": [
+          "3DS"
+        ],
+        "last_updated": "2026-08-18 at 02:21:16 (UTC)",
+        "license": "gpl-3.0",
+        "version": "v0.8.8"
+      },
+      "Emerald Online 3DS v0.8.8 (3DSX)": [
+        {
+          "type": "downloadFile",
+          "file": "https://emeraldonline3ds.com/emerald-online-3ds.3dsx",
+          "output": "%3DSX%/emerald-online-3ds.3dsx",
+          "message": "Downloading emerald-online-3ds v0.8.8 3DSX...",
+          "sha256": "356925eac4922cadc64afc7ec5a5e59d1a9fbcb6bf2b13b58477b04d969ae94b"
+        }
+      ],
+      "Emerald Online 3DS v0.8.8 (CIA)": [
+        {
+          "type": "downloadFile",
+          "file": "https://emeraldonline3ds.com/emerald-online-3ds.cia",
+          "output": "sdmc:/emerald-online-3ds.cia",
+          "message": "Downloading emerald-online-3ds v0.8.8 CIA...",
+          "sha256": "2932a0ceae6df5b90784b4e06f99de863c0020e4d0fb2410a7b6737fca0d525f"
+        },
+        {
+          "type": "installCia",
+          "file": "/emerald-online-3ds.cia"
+        },
+        {
+          "type": "deleteFile",
+          "file": "sdmc:/emerald-online-3ds.cia"
+        }
+      ]
+    }
+  ]
+}

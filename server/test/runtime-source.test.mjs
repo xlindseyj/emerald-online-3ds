@@ -91,6 +91,18 @@ test('gpSP runtime uses swkbd through a shared input helper', () => {
   assert.match(gpspSource, /teleport_custom_propose/);
 });
 
+test('gpSP input handling uses hidKeysRepeat and debounces touch', () => {
+  assert.match(gpspSource, /repeatKeys = hidKeysDownRepeat\(\)/);
+  assert.match(gpspSource, /TOUCH_DEBOUNCE_MS 150/);
+  assert.match(gpspSource, /touchDebounceUntil/);
+  assert.match(gpspSource, /\(down & KEY_TOUCH\) && now >= touchDebounceUntil/);
+  assert.match(gpspSource, /handleRepeatInput/);
+  assert.match(gpspSource, /KEY_LEFT \| KEY_CPAD_LEFT/);
+  assert.match(gpspSource, /KEY_RIGHT \| KEY_CPAD_RIGHT/);
+  assert.match(gpspSource, /KEY_UP \| KEY_CPAD_UP/);
+  assert.match(gpspSource, /KEY_DOWN \| KEY_CPAD_DOWN/);
+});
+
 test('gpSP nonblocking connect polling initializes sockaddr for Azahar', () => {
   assert.match(gpspSource, /sockaddr_in peer = \{\};\s*peer\.sin_family = AF_INET;\s*socklen_t peerSize = sizeof\(peer\);\s*if \(!getpeername/s);
 });
@@ -253,8 +265,12 @@ test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups
   assert.match(gpspSource, /size > 512/);
   assert.match(gpspSource, /backupSaveForLink\(\)/);
   assert.match(gpspSource, /LINK_BACKUP_DIRECTORY/);
+  assert.match(gpspSource, /LINK_BACKUP_RETENTION/);
   assert.match(gpspSource, /fflush\(destination\).*fsync\(fileno\(destination\)\)/s);
-  assert.match(gpspSource, /index \+ 3 < count/);
+  assert.match(gpspSource, /index \+ LINK_BACKUP_RETENTION < count/);
+  assert.match(gpspSource, /verifyEmeraldSaveFile\(SAVE_PATH\)/);
+  assert.match(gpspSource, /verifyEmeraldSaveFile\(path\)/);
+  assert.match(gpspSource, /restoreSaveFromBackup/);
   const start = gpspSource.indexOf('if (jsonTypeIs(line, "link_started"))');
   const callback = gpspSource.indexOf('coreNetpacketInterface->start((uint16_t)', start);
   const backup = gpspSource.indexOf('backupSaveForLink()', start);

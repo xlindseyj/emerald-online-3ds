@@ -148,17 +148,17 @@ This file tracks the planned improvements to `gpsp-runtime` based on a survey of
 2. Centralize TLS/HTTP client
 3. Add `swkbd` for text input
 
-### Phase 2
+### Phase 2 (done)
 4. Improve input handling with `hidKeysRepeat()` and touch debounce
 5. Add a CMake build option
 6. Publish a Universal-Updater manifest
+7. Strengthen save backup and integrity
 
 ### Phase 3
-7. Strengthen save backup and integrity
 8. Add APT sleep/resume hooks
 9. Optimize UI text rendering
+10. Improve audio threading
 
 ### Phase 4
-10. Improve audio threading
 11. Add localization support
 12. Add runtime observability

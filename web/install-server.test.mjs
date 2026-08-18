@@ -145,6 +145,30 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(checksums.status, 200);
   assert.match(await checksums.text(), /emerald-online-3ds\.cia/);
 
+  const unistore = await fetch(`${base}/emerald-online-3ds.unistore`);
+  assert.equal(unistore.status, 200);
+  assert.equal(unistore.headers.get('content-type'), 'application/json');
+  const unistoreBody = await unistore.json();
+  assert.equal(unistoreBody.storeInfo.title, 'Emerald Online 3DS');
+  assert.equal(unistoreBody.storeInfo.file, 'emerald-online-3ds.unistore');
+  assert.equal(unistoreBody.storeContent.length, 1);
+  const unistoreApp = unistoreBody.storeContent[0];
+  assert.equal(unistoreApp.info.version, `v${releaseVersion}`);
+  const unistore3dsx = unistoreApp[`Emerald Online 3DS v${releaseVersion} (3DSX)`];
+  const unistoreCia = unistoreApp[`Emerald Online 3DS v${releaseVersion} (CIA)`];
+  assert.ok(Array.isArray(unistore3dsx));
+  assert.ok(Array.isArray(unistoreCia));
+  assert.equal(unistore3dsx[0].type, 'downloadFile');
+  assert.equal(unistore3dsx[0].output, '%3DSX%/emerald-online-3ds.3dsx');
+  assert.equal(unistore3dsx[0].file, 'https://emeraldonline3ds.com/emerald-online-3ds.3dsx');
+  assert.match(unistore3dsx[0].sha256, /^[a-f0-9]{64}$/);
+  assert.equal(unistoreCia[0].type, 'downloadFile');
+  assert.equal(unistoreCia[0].output, 'sdmc:/emerald-online-3ds.cia');
+  assert.equal(unistoreCia[1].type, 'installCia');
+  assert.equal(unistoreCia[1].file, '/emerald-online-3ds.cia');
+  assert.equal(unistoreCia[2].type, 'deleteFile');
+  assert.equal(unistoreCia[2].file, 'sdmc:/emerald-online-3ds.cia');
+
   const release = await fetch(`${base}/api/release`);
   assert.equal(release.status, 200);
   const releaseBody = await release.json();

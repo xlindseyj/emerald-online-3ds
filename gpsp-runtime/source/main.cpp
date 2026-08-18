@@ -48,6 +48,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define STATS_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg"
 #define STATS_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg.tmp"
 #define LINK_BACKUP_DIRECTORY "sdmc:/3ds/emerald-online-3ds/link-backups"
+#define LINK_BACKUP_RETENTION 5
 #define DEFAULT_HOST "live.emeraldonline3ds.com"
 #define DEFAULT_PORT 443
 #define DEFAULT_WEBSOCKET_PATH "/game"
@@ -60,6 +61,7 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define UPDATE_CIA_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.cia"
 #define UPDATE_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.3dsx"
 #define INSTALLED_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/emerald-online-3ds.3dsx"
+#define TOUCH_DEBOUNCE_MS 150
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
@@ -74,6 +76,8 @@ static const uint16_t* videoPixels;
 static size_t videoPitch;
 static bool videoReady;
 static uint32_t heldKeys;
+static uint32_t repeatKeys;
+static uint64_t touchDebounceUntil;
 static bool quitRequested;
 uint8_t* gbaEwram;
 uint8_t* gbaIwram;
@@ -448,8 +452,10 @@ static int compareLinkBackups(const void* left, const void* right) {
     return strcmp(((const LinkBackupEntry*) left)->name, ((const LinkBackupEntry*) right)->name);
 }
 
+static bool verifyEmeraldSaveFile(const char* path);
+
 static bool backupSaveForLink(void) {
-    if (!writeSave(true) || (mkdir(LINK_BACKUP_DIRECTORY, 0700) && errno != EEXIST)) return false;
+    if (!writeSave(true) || !verifyEmeraldSaveFile(SAVE_PATH) || (mkdir(LINK_BACKUP_DIRECTORY, 0700) && errno != EEXIST)) return false;
     FILE* source = fopen(SAVE_PATH, "rb");
     if (!source) return false;
     char path[256];
@@ -468,7 +474,10 @@ static bool backupSaveForLink(void) {
         if (good && (fflush(destination) || fsync(fileno(destination)))) good = false;
         if (fclose(destination)) good = false;
     }
-    if (!good) { remove(path); return false; }
+    if (!good || !verifyEmeraldSaveFile(path)) {
+        remove(path);
+        return false;
+    }
 
     DIR* directory = opendir(LINK_BACKUP_DIRECTORY);
     if (!directory) return false;
@@ -482,7 +491,7 @@ static bool backupSaveForLink(void) {
     }
     closedir(directory);
     qsort(entries, count, sizeof(entries[0]), compareLinkBackups);
-    for (size_t index = 0; index + 3 < count; ++index) {
+    for (size_t index = 0; index + LINK_BACKUP_RETENTION < count; ++index) {
         const size_t prefixLength = strlen(LINK_BACKUP_DIRECTORY);
         memcpy(path, LINK_BACKUP_DIRECTORY, prefixLength);
         path[prefixLength] = '/';
@@ -490,6 +499,33 @@ static bool backupSaveForLink(void) {
         path[sizeof(path) - 1] = 0;
         remove(path);
     }
+    return true;
+}
+
+static bool restoreSaveFromBackup(const char* backupPath) {
+    if (!backupPath || !verifyEmeraldSaveFile(backupPath)) return false;
+    FILE* source = fopen(backupPath, "rb");
+    if (!source) return false;
+    FILE* destination = fopen(SAVE_PATH ".tmp", "wb");
+    if (!destination) { fclose(source); return false; }
+    bool good = true;
+    uint8_t buffer[4096];
+    size_t count;
+    while (good && (count = fread(buffer, 1, sizeof(buffer), source)) > 0)
+        if (fwrite(buffer, 1, count, destination) != count) good = false;
+    if (ferror(source)) good = false;
+    if (fflush(destination) || fsync(fileno(destination))) good = false;
+    fclose(source); fclose(destination);
+    if (!good || rename(SAVE_PATH ".tmp", SAVE_PATH) != 0) {
+        remove(SAVE_PATH ".tmp");
+        return false;
+    }
+    if (!verifyEmeraldSaveFile(SAVE_PATH)) {
+        // The active save is now corrupt; we cannot roll back automatically
+        // because backupPath was already verified. Caller must handle this.
+        return false;
+    }
+    loadSave();
     return true;
 }
 
@@ -503,6 +539,62 @@ static uint32_t read32(const uint8_t* memory, size_t offset) {
     uint32_t value;
     memcpy(&value, memory + offset, sizeof(value));
     return value;
+}
+
+static constexpr size_t EMERALD_SAVE_BYTES = 128 * 1024;
+static constexpr size_t EMERALD_EMULATOR_FOOTER_BYTES = 512;
+static constexpr size_t EMERALD_SECTOR_BYTES = 0x1000;
+static constexpr size_t EMERALD_SECTOR_DATA_BYTES = 0xF80;
+static constexpr unsigned EMERALD_SECTORS_PER_SLOT = 14;
+static constexpr uint32_t EMERALD_SECTOR_SIGNATURE = 0x08012025;
+static constexpr uint16_t EMERALD_SECTION_SIZES[EMERALD_SECTORS_PER_SLOT] = {
+    0xF2C, 0xF80, 0xF80, 0xF80, 0xF08,
+    0xF80, 0xF80, 0xF80, 0xF80, 0xF80,
+    0xF80, 0xF80, 0xF80, 0x7D0
+};
+
+static uint16_t emeraldSectorChecksum(const uint8_t* sector) {
+    uint32_t sum = 0;
+    for (size_t offset = 0; offset + 4 <= EMERALD_SECTION_SIZES[read16(sector, 0xFF4)]; offset += 4)
+        sum += read32(sector, offset);
+    return (uint16_t)(((sum >> 16) + (sum & 0xFFFF)) & 0xFFFF);
+}
+
+static bool emeraldSectorValid(const uint8_t* sector) {
+    uint16_t id = read16(sector, 0xFF4);
+    if (id >= EMERALD_SECTORS_PER_SLOT) return false;
+    uint16_t stored = read16(sector, 0xFF6);
+    uint32_t signature = read32(sector, 0xFF8);
+    return signature == EMERALD_SECTOR_SIGNATURE && stored == emeraldSectorChecksum(sector);
+}
+
+static bool verifyEmeraldSaveFile(const char* path) {
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    if (fseek(file, 0, SEEK_END)) { fclose(file); return false; }
+    long size = ftell(file);
+    if (size != (long)EMERALD_SAVE_BYTES && size != (long)(EMERALD_SAVE_BYTES + EMERALD_EMULATOR_FOOTER_BYTES)) {
+        fclose(file);
+        return false;
+    }
+    if (fseek(file, 0, SEEK_SET)) { fclose(file); return false; }
+    uint8_t* buffer = (uint8_t*) malloc(EMERALD_SAVE_BYTES);
+    if (!buffer) { fclose(file); return false; }
+    bool ok = fread(buffer, 1, EMERALD_SAVE_BYTES, file) == EMERALD_SAVE_BYTES;
+    fclose(file);
+    if (ok) {
+        ok = false;
+        for (unsigned slot = 0; slot < 2 && !ok; ++slot) {
+            bool slotValid = true;
+            for (unsigned index = 0; index < EMERALD_SECTORS_PER_SLOT && slotValid; ++index) {
+                const size_t offset = (slot * EMERALD_SECTORS_PER_SLOT + index) * EMERALD_SECTOR_BYTES;
+                if (!emeraldSectorValid(buffer + offset)) slotValid = false;
+            }
+            if (slotValid) ok = true;
+        }
+    }
+    free(buffer);
+    return ok;
 }
 
 // Supported Pokemon Emerald (US) runtime symbols. The private-ROM validator
@@ -2066,6 +2158,53 @@ static void drawBottom(void) {
     if (linkConfigured) drawText(12, 193, .24f, C2D_Color32(255,220,130,255), "%.36s TX%u RX%u", linkStatus, linkPacketsSent, linkPacketsReceived);
 }
 
+static unsigned filteredTeleportCount(void) {
+    unsigned count = 0;
+    for (unsigned i = 0; i < teleportDestinationCount; ++i)
+        if (teleportKindMatches(teleportDestinations[i].kind)) ++count;
+    return count;
+}
+
+static void handleRepeatInput(void) {
+    if (!repeatKeys) return;
+    if (repeatKeys & KEY_Y) {
+        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 9);
+        return;
+    }
+    if (bottomPage == PAGE_TELEPORT) {
+        const unsigned categoryCount = teleportCustomVisible ? 6 : 5;
+        if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) {
+            teleportCategory = (teleportCategory + categoryCount - 1) % categoryCount;
+            teleportScroll = 0;
+            teleportSelectedIndex = -1;
+        }
+        if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
+            teleportCategory = (teleportCategory + 1) % categoryCount;
+            teleportScroll = 0;
+            teleportSelectedIndex = -1;
+        }
+        const unsigned filteredCount = filteredTeleportCount();
+        const unsigned maxRows = 7;
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && teleportScroll) --teleportScroll;
+        if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && teleportScroll + maxRows < filteredCount) ++teleportScroll;
+    } else if (bottomPage == PAGE_USERS) {
+        const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && onlineUserPage) --onlineUserPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && onlineUserPage + 1 < pageCount) ++onlineUserPage;
+    } else if (bottomPage == PAGE_CHAT && chatDetailIndex < 0) {
+        unsigned indices[24];
+        const unsigned count = currentChatIndices(indices);
+        const unsigned pageCount = count ? (count + 2) / 3 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && chatPage) --chatPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && chatPage + 1 < pageCount) ++chatPage;
+    } else if (bottomPage == PAGE_BAG) {
+        if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) { bagPocket = (bagPocket + 4) % 5; bagPage = 0; }
+        if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) { bagPocket = (bagPocket + 1) % 5; bagPage = 0; }
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && bagPage) --bagPage;
+        if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) ++bagPage;
+    }
+}
+
 static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y) {
     if (avatarSheet) {
         unsigned frame;
@@ -2280,10 +2419,13 @@ int main(void) {
     while (!quitRequested && aptMainLoop()) {
         hidScanInput();
         heldKeys = hidKeysHeld();
+        repeatKeys = hidKeysDownRepeat();
         uint32_t down = hidKeysDown();
+        uint64_t now = osGetTime();
         if (down & KEY_X) onlineToggle();
-        if (down & KEY_Y) bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 9);
-        if (down & KEY_TOUCH) {
+        handleRepeatInput();
+        if ((down & KEY_TOUCH) && now >= touchDebounceUntil) {
+            touchDebounceUntil = now + TOUCH_DEBOUNCE_MS;
             touchPosition touch;
             hidTouchRead(&touch);
             if (bottomPage == PAGE_USERS && touch.py >= 210) {
@@ -2360,7 +2502,7 @@ int main(void) {
         presence = readPresence();
         recordMapTrail(presence);
         updateTrainerNameFromSave();
-        uint64_t now = osGetTime();
+        now = osGetTime();
         // Save-derived aggregates change slowly. Re-reading the Pokédex flags
         // every emulated frame wastes Old 3DS CPU time without improving UI or
         // upload freshness, so refresh the cached summary once per second.

@@ -72,6 +72,8 @@ cp "${project_root}/gpsp-runtime/emerald-online-3ds.3dsx" "${release_dir}/emeral
   sha256sum emerald-online-3ds.cia emerald-online-3ds.3dsx "emerald-online-3ds-source-${version}.tar.gz" > SHA256SUMS
 )
 
+node "${project_root}/tools/generate-unistore.mjs"
+
 node "${project_root}/server/tools/sync-release-catalog.mjs"
 node "${project_root}/server/tools/publish-releases.mjs" --validate-only
 
