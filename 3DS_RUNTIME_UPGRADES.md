@@ -13,14 +13,11 @@ This file tracks the planned improvements to `gpsp-runtime` based on a survey of
 - Easier to add new pages without touching the emulator core
 - Clear ownership for teleport, chat, update, stats, map, bag, party, and online users
 
-**Files to create (example):**
-- `gpsp-runtime/source/pages/page_teleport.cpp`
-- `gpsp-runtime/source/pages/page_update.cpp`
-- `gpsp-runtime/source/pages/page_chat.cpp`
-- `gpsp-runtime/source/pages/page_common.cpp`
-- `gpsp-runtime/source/pages/pages.h`
-- `gpsp-runtime/source/network/network.cpp`
-- `gpsp-runtime/source/input/input.cpp`
+**Files created:**
+- `gpsp-runtime/source/ui/pages.h`
+- `gpsp-runtime/source/ui/pages.cpp`
+- `gpsp-runtime/source/network/http_client.h`
+- `gpsp-runtime/source/network/http_client.cpp`
 
 ---
 
@@ -146,7 +143,7 @@ This file tracks the planned improvements to `gpsp-runtime` based on a survey of
 
 ## Phase Plan
 
-### Phase 1 (in progress)
+### Phase 1 (done)
 1. Split `main.cpp` into page modules
 2. Centralize TLS/HTTP client
 3. Add `swkbd` for text input
