@@ -4,6 +4,53 @@
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
+#define STATIC_TEXT_CACHE_SIZE 128
+#define STATIC_TEXT_BUFFER_SIZE 4096
+
+// Pre-baked static UI labels. Citro2D text objects are parsed once at first use
+// and reused from a dedicated buffer so per-frame menus do not re-parse the
+// same labels every render pass.
+struct StaticTextEntry {
+    char text[80];
+    float size;
+    uint32_t color;
+    C2D_Text textObj;
+};
+
+static C2D_TextBuf staticTextBuffer;
+static StaticTextEntry staticTextCache[STATIC_TEXT_CACHE_SIZE];
+static unsigned staticTextCacheCount = 0;
+
+bool initStaticTextCache(void) {
+    staticTextBuffer = C2D_TextBufNew(STATIC_TEXT_BUFFER_SIZE);
+    return staticTextBuffer != NULL;
+}
+
+void shutdownStaticTextCache(void) {
+    if (staticTextBuffer) { C2D_TextBufDelete(staticTextBuffer); staticTextBuffer = NULL; }
+    staticTextCacheCount = 0;
+}
+
+static const C2D_Text* findStaticText(const char* text, float size, uint32_t color) {
+    for (unsigned i = 0; i < staticTextCacheCount; ++i) {
+        if (staticTextCache[i].size == size && staticTextCache[i].color == color && !strcmp(staticTextCache[i].text, text))
+            return &staticTextCache[i].textObj;
+    }
+    return NULL;
+}
+
+static const C2D_Text* addStaticText(const char* text, float size, uint32_t color) {
+    if (staticTextCacheCount >= STATIC_TEXT_CACHE_SIZE) return NULL;
+    StaticTextEntry* entry = &staticTextCache[staticTextCacheCount++];
+    strncpy(entry->text, text, sizeof(entry->text) - 1);
+    entry->text[sizeof(entry->text) - 1] = 0;
+    entry->size = size;
+    entry->color = color;
+    if (uiFont) C2D_TextFontParse(&entry->textObj, uiFont, staticTextBuffer, entry->text);
+    else C2D_TextParse(&entry->textObj, staticTextBuffer, entry->text);
+    C2D_TextOptimize(&entry->textObj);
+    return &entry->textObj;
+}
 
 static uint16_t read16(const uint8_t* memory, size_t offset) {
     uint16_t value;
@@ -23,6 +70,12 @@ void drawText(float x, float y, float size, uint32_t color, const char* format, 
     va_start(args, format);
     vsnprintf(line, sizeof(line), format, args);
     va_end(args);
+    const C2D_Text* cached = findStaticText(line, size, color);
+    if (!cached && staticTextBuffer) cached = addStaticText(line, size, color);
+    if (cached) {
+        C2D_DrawText(cached, C2D_WithColor, x, y, 0.5f, size, size, color);
+        return;
+    }
     C2D_Text text;
     if (uiFont) C2D_TextFontParse(&text, uiFont, textBuffer, line);
     else C2D_TextParse(&text, textBuffer, line);

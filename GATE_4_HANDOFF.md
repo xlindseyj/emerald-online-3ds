@@ -40,8 +40,8 @@ Use a fresh unpredictable code instead of the example on the public service. Con
 
 ## Current release 0.8.8
 
-- CIA: `release/emerald-online-3ds.cia` — `2932a0ceae6df5b90784b4e06f99de863c0020e4d0fb2410a7b6737fca0d525f`
-- 3DSX: `release/emerald-online-3ds.3dsx` — `356925eac4922cadc64afc7ec5a5e59d1a9fbcb6bf2b13b58477b04d969ae94b`
-- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.8.8.tar.gz` — `545ae98b5754b629299ee4b8eca0d187fae60a818ac0685e79eef238454f40b0`
+- CIA: `release/emerald-online-3ds.cia` — `af16d15a1b6dbf7f8b416a30ca5ce8d663dd0df869e3a86c82f23d0fe9d3289b`
+- 3DSX: `release/emerald-online-3ds.3dsx` — `dbf049eed4879ae9daa829f8d9b3f16e436267dfdd5f1686be706667eb5fdb72`
+- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.8.8.tar.gz` — `52163fc7741d7683af9079e481083c6b197666b802344bcca5637f3ea8e13964`
 - Example opt-in configuration: `release/online-link-spike.example.cfg`
 - Production image: `sha256:390b6d6e1cad67d502af9a5b5cc01c52e3c32e851f0f1ff6e3237903fe6c9d12`

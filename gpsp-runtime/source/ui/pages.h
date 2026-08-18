@@ -173,6 +173,11 @@ extern unsigned linkPacketsReceived;
 // Common text helper used by pages and the main renderer.
 void drawText(float x, float y, float size, uint32_t color, const char* format, ...);
 
+// Static UI label cache. Init after C2D is ready; shutdown before deleting the
+// dynamic text buffer so Citro2D objects are freed in the correct order.
+bool initStaticTextCache(void);
+void shutdownStaticTextCache(void);
+
 // Emerald save-decoding helpers.
 char decodeEmerald(uint8_t value);
 bool getSaveBlocks(const uint8_t** block1, const uint8_t** block2);

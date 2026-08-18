@@ -159,6 +159,22 @@ static int16_t* audioData;
 static unsigned audioCursor;
 static double audioRate = 32768.0;
 
+// Audio is decoupled onto a dedicated thread so network stalls on the main
+// thread cannot starve the DSP buffer queue.
+#define AUDIO_RING_SLOTS 8
+static int16_t audioRing[AUDIO_RING_SLOTS][AUDIO_FRAMES * 2];
+static unsigned audioRingFrames[AUDIO_RING_SLOTS];
+static volatile unsigned audioRingWriteCount = 0;
+static volatile unsigned audioRingReadCount = 0;
+static LightEvent audioEvent;
+static LightLock audioLock;
+static Thread audioThread = NULL;
+static volatile bool audioThreadRun = false;
+static volatile bool audioPaused = false;
+
+static volatile bool systemAsleep = false;
+static aptHookCookie aptCookie;
+
 OnlineMode onlineMode = ONLINE_OFFLINE;
 static int onlineSocket = -1;
 static uint32_t* socBuffer;
@@ -365,23 +381,71 @@ static void audioSampleCallback(int16_t left, int16_t right) {
     (void) pair;
 }
 
-static size_t audioBatchCallback(const int16_t* data, size_t frames) {
-    if (!audioData) return frames;
-    for (unsigned attempt = 0; attempt < AUDIO_BUFFERS; ++attempt) {
-        unsigned index = (audioCursor + attempt) % AUDIO_BUFFERS;
-        if (audioWaves[index].status == NDSP_WBUF_FREE || audioWaves[index].status == NDSP_WBUF_DONE) {
-            size_t count = frames > AUDIO_FRAMES ? AUDIO_FRAMES : frames;
-            memcpy(&audioData[index * AUDIO_FRAMES * 2], data, count * 2 * sizeof(int16_t));
-            memset(&audioWaves[index], 0, sizeof(audioWaves[index]));
-            audioWaves[index].data_pcm16 = &audioData[index * AUDIO_FRAMES * 2];
-            audioWaves[index].nsamples = count;
-            DSP_FlushDataCache(audioWaves[index].data_pcm16, count * 2 * sizeof(int16_t));
-            ndspChnWaveBufAdd(0, &audioWaves[index]);
-            audioCursor = (index + 1) % AUDIO_BUFFERS;
-            break;
+static void audioThreadMain(void* arg) {
+    (void) arg;
+    while (audioThreadRun) {
+        LightEvent_Wait(&audioEvent);
+        if (!audioThreadRun) break;
+        LightLock_Lock(&audioLock);
+        while (audioRingReadCount != audioRingWriteCount) {
+            unsigned index = audioRingReadCount % AUDIO_RING_SLOTS;
+            size_t count = audioRingFrames[index];
+            if (!audioPaused) {
+                for (unsigned attempt = 0; attempt < AUDIO_BUFFERS; ++attempt) {
+                    unsigned waveIndex = (audioCursor + attempt) % AUDIO_BUFFERS;
+                    if (audioWaves[waveIndex].status == NDSP_WBUF_FREE || audioWaves[waveIndex].status == NDSP_WBUF_DONE) {
+                        memcpy(&audioData[waveIndex * AUDIO_FRAMES * 2], audioRing[index], count * 2 * sizeof(int16_t));
+                        memset(&audioWaves[waveIndex], 0, sizeof(audioWaves[waveIndex]));
+                        audioWaves[waveIndex].data_pcm16 = &audioData[waveIndex * AUDIO_FRAMES * 2];
+                        audioWaves[waveIndex].nsamples = count;
+                        DSP_FlushDataCache(audioWaves[waveIndex].data_pcm16, count * 2 * sizeof(int16_t));
+                        ndspChnWaveBufAdd(0, &audioWaves[waveIndex]);
+                        audioCursor = (waveIndex + 1) % AUDIO_BUFFERS;
+                        break;
+                    }
+                }
+            }
+            audioRingReadCount++;
         }
+        LightLock_Unlock(&audioLock);
     }
+}
+
+static size_t audioBatchCallback(const int16_t* data, size_t frames) {
+    if (!audioThreadRun || !audioData) return frames;
+    LightLock_Lock(&audioLock);
+    bool full = audioRingWriteCount - audioRingReadCount >= AUDIO_RING_SLOTS;
+    if (!full) {
+        unsigned index = audioRingWriteCount % AUDIO_RING_SLOTS;
+        size_t count = frames > AUDIO_FRAMES ? AUDIO_FRAMES : frames;
+        memcpy(audioRing[index], data, count * 2 * sizeof(int16_t));
+        audioRingFrames[index] = count;
+        audioRingWriteCount++;
+    }
+    LightLock_Unlock(&audioLock);
+    if (!full) LightEvent_Signal(&audioEvent);
     return frames;
+}
+
+static void aptHookCallback(APT_HookType hook, void* param) {
+    (void) param;
+    switch (hook) {
+    case APTHOOK_ONSLEEP:
+        audioPaused = true;
+        ndspSetMasterVol(0.0f);
+        systemAsleep = true;
+        break;
+    case APTHOOK_ONWAKEUP:
+        systemAsleep = false;
+        ndspSetMasterVol(1.0f);
+        audioPaused = false;
+        break;
+    case APTHOOK_ONEXIT:
+        quitRequested = true;
+        break;
+    default:
+        break;
+    }
 }
 
 static void inputPollCallback(void) {}
@@ -2302,6 +2366,7 @@ static bool initGraphics(void) {
     avatarSheet = C2D_SpriteSheetLoad(AVATAR_PATH);
     debugStage("font-ready");
     textBuffer = C2D_TextBufNew(4096);
+    if (!initStaticTextCache()) return false;
     debugStage("text-ready");
     return textBuffer != NULL;
 }
@@ -2363,8 +2428,14 @@ int main(void) {
         ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
         ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
         audioData = (int16_t*) linearAlloc(AUDIO_BUFFERS * AUDIO_FRAMES * 2 * sizeof(int16_t));
+        LightLock_Init(&audioLock);
+        LightEvent_Init(&audioEvent, RESET_ONESHOT);
+        audioThreadRun = true;
+        audioThread = threadCreate(audioThreadMain, NULL, 4096, 0x18, -2, true);
     }
     debugStage("audio-ready");
+
+    if (audioThread) aptHook(&aptCookie, aptHookCallback, NULL);
 
     retro_set_environment(environmentCallback);
     retro_set_video_refresh(videoCallback);
@@ -2496,6 +2567,11 @@ int main(void) {
             else if (bottomPage == PAGE_ONLINE && touch.px < 155 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_USERS;
             else if (bottomPage == PAGE_ONLINE && touch.px >= 165 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_CHAT;
         }
+        if (systemAsleep) {
+            if (onlineMode != ONLINE_OFFLINE) onlineDisconnect();
+            gspWaitForVBlank();
+            continue;
+        }
         retro_run();
         static bool firstFrameLogged;
         if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
@@ -2529,8 +2605,17 @@ int main(void) {
     onlineDisconnect();
     retro_unload_game();
     retro_deinit();
+    audioThreadRun = false;
+    LightEvent_Signal(&audioEvent);
+    if (audioThread) {
+        threadJoin(audioThread, U64_MAX);
+        threadFree(audioThread);
+        audioThread = NULL;
+    }
     if (audioData) linearFree(audioData);
     ndspExit();
+    aptUnhook(&aptCookie);
+    shutdownStaticTextCache();
     if (textBuffer) C2D_TextBufDelete(textBuffer);
     if (uiFont) C2D_FontFree(uiFont);
     if (avatarSheet) C2D_SpriteSheetFree(avatarSheet);

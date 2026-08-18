@@ -303,3 +303,33 @@ test('gpSP RFU preserves transient scans while clearing genuine peer withdrawals
 test('gpSP does not touch unmapped 3DS translation caches in interpreter mode', () => {
   assert.match(gpspMainSource, /if \(dynarec_enable\)\s*\{\s*init_dynarec_caches\(\);\s*init_emitter\(gamepak_must_swap\(\)\);\s*\}/s);
 });
+
+test('runtime Phase 3 upgrades: APT hooks, cached text, and decoupled audio thread', () => {
+  assert.match(gpspSource, /aptHook\(&aptCookie, aptHookCallback, NULL\)/);
+  assert.match(gpspSource, /APTHOOK_ONSLEEP/);
+  assert.match(gpspSource, /APTHOOK_ONWAKEUP/);
+  assert.match(gpspSource, /APTHOOK_ONEXIT/);
+  assert.match(gpspSource, /systemAsleep/);
+  assert.match(gpspSource, /ndspSetMasterVol/);
+  assert.match(gpspSource, /if \(systemAsleep\) \{/);
+  assert.match(gpspSource, /aptUnhook\(&aptCookie\)/);
+
+  assert.match(pagesSource, /initStaticTextCache/);
+  assert.match(pagesSource, /shutdownStaticTextCache/);
+  assert.match(pagesSource, /staticTextBuffer/);
+  assert.match(pagesSource, /StaticTextEntry/);
+
+  assert.match(gpspSource, /audioThreadMain/);
+  assert.match(gpspSource, /audioRing/);
+  assert.match(gpspSource, /LightEvent/);
+  assert.match(gpspSource, /LightLock/);
+  assert.match(gpspSource, /threadCreate\(audioThreadMain/);
+  assert.match(gpspSource, /threadJoin\(audioThread, U64_MAX\)/);
+  assert.match(gpspSource, /threadFree\(audioThread\)/);
+  assert.match(gpspSource, /audioThreadMain[\s\S]*?ndspChnWaveBufAdd/);
+
+  const audioBatchStart = gpspSource.indexOf('static size_t audioBatchCallback');
+  const audioBatchEnd = gpspSource.indexOf('\nstatic void inputPollCallback', audioBatchStart);
+  assert.ok(audioBatchStart >= 0 && audioBatchEnd > audioBatchStart);
+  assert.doesNotMatch(gpspSource.slice(audioBatchStart, audioBatchEnd), /ndspChnWaveBufAdd/);
+});

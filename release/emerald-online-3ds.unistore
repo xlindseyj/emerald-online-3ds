@@ -20,7 +20,7 @@
         "console": [
           "3DS"
         ],
-        "last_updated": "2026-08-18 at 02:21:16 (UTC)",
+        "last_updated": "2026-08-18 at 02:54:08 (UTC)",
         "license": "gpl-3.0",
         "version": "v0.8.8"
       },
@@ -30,7 +30,7 @@
           "file": "https://emeraldonline3ds.com/emerald-online-3ds.3dsx",
           "output": "%3DSX%/emerald-online-3ds.3dsx",
           "message": "Downloading emerald-online-3ds v0.8.8 3DSX...",
-          "sha256": "356925eac4922cadc64afc7ec5a5e59d1a9fbcb6bf2b13b58477b04d969ae94b"
+          "sha256": "dbf049eed4879ae9daa829f8d9b3f16e436267dfdd5f1686be706667eb5fdb72"
         }
       ],
       "Emerald Online 3DS v0.8.8 (CIA)": [
@@ -39,7 +39,7 @@
           "file": "https://emeraldonline3ds.com/emerald-online-3ds.cia",
           "output": "sdmc:/emerald-online-3ds.cia",
           "message": "Downloading emerald-online-3ds v0.8.8 CIA...",
-          "sha256": "2932a0ceae6df5b90784b4e06f99de863c0020e4d0fb2410a7b6737fca0d525f"
+          "sha256": "af16d15a1b6dbf7f8b416a30ca5ce8d663dd0df869e3a86c82f23d0fe9d3289b"
         },
         {
           "type": "installCia",
