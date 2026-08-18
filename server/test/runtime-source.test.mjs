@@ -6,12 +6,16 @@ import path from 'node:path';
 const gpspSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/main.cpp'), 'utf8');
 const pagesSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ui/pages.cpp'), 'utf8');
 const pagesHeaderSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ui/pages.h'), 'utf8');
+const localizationHeaderSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ui/localization.h'), 'utf8');
+const localizationSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ui/localization.cpp'), 'utf8');
+const logHeaderSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/runtime/log.h'), 'utf8');
+const logSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/runtime/log.cpp'), 'utf8');
 const httpSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/network/http_client.cpp'), 'utf8');
 const svchaxSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ctr_svchax.c'), 'utf8');
 const gpspMainSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/main.c'), 'utf8');
 const gpspRfuSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/rfu.c'), 'utf8');
 
-const runtimeSource = gpspSource + pagesSource + pagesHeaderSource + httpSource;
+const runtimeSource = gpspSource + pagesSource + pagesHeaderSource + httpSource + localizationHeaderSource + localizationSource + logHeaderSource + logSource;
 
 test('gpSP replacement is a dedicated direct-boot dynarec frontend', () => {
   assert.match(gpspSource, /ROM_PATH "sdmc:\/3ds\/emerald-online-3ds\/emerald\.gba"/);
@@ -41,7 +45,7 @@ test('gpSP replacement retains saves, Emerald memory reads, and online protocol'
   assert.match(gpspSource, /openBrowserPairing/);
   assert.match(gpspSource, /pair_browser_approve/);
   assert.match(gpspSource, /browser_pairing_approved/);
-  assert.match(gpspSource, /TAP PROFILE TO PAIR BROWSER/);
+  assert.match(gpspSource, /localize\(LS_TAP_PROFILE_PAIR_BROWSER\)/);
   assert.match(gpspSource, /getaddrinfo\(serverHost/);
   assert.match(gpspSource, /serverAddressResolvedAt/);
 });
@@ -54,11 +58,11 @@ test('gpSP runtime uses authenticated WebSockets for the public Cloudflare endpo
   assert.match(runtimeSource, /MBEDTLS_X509_BADCERT_FUTURE/);
   assert.match(runtimeSource, /skew <= 14 \* 60 \* 60/);
   assert.match(runtimeSource, /\*flags &= ~MBEDTLS_X509_BADCERT_FUTURE/);
-  assert.match(gpspSource, /NETWORK DIAGNOSTIC/);
-  assert.match(gpspSource, /TLS RESULT  %d/);
-  assert.match(gpspSource, /VERIFY %08lX   CLOCK \+%ds/);
+  assert.match(runtimeSource, /NETWORK DIAGNOSTIC/);
+  assert.match(runtimeSource, /TLS RESULT  %d/);
+  assert.match(runtimeSource, /VERIFY %08lX   CLOCK \+%ds/);
   assert.match(gpspSource, /TLS HANDSHAKE/);
-  assert.match(gpspSource, /LOG \/3ds\/emerald-online-3ds\/gpsp-debug\.log/);
+  assert.match(runtimeSource, /LOG \/3ds\/emerald-online-3ds\/gpsp-debug\.log/);
   assert.doesNotMatch(gpspSource, /TLS%d V%08lx F%d/);
   assert.match(gpspSource, /Sec-WebSocket-Key/);
   assert.match(gpspSource, /Sec-WebSocket-Accept/);
@@ -131,7 +135,7 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(gpspSource, /sideFrames\[4\] = \{2, 7, 2, 8\}/);
   assert.match(gpspSource, /C2D_DrawEllipseSolid/);
   assert.match(gpspSource, /const bool step/);
-  assert.match(gpspSource, /"HI", "!", "<>", "GG"/);
+  assert.match(gpspSource, /localize\(LS_HI\), localize\(LS_EXCLAMATION\), localize\(LS_ANGLED_BRACKETS\), localize\(LS_GG\)/);
 });
 
 test('gpSP reports native-map coordinates but suppresses overlay trainers outside the verified overworld', () => {
@@ -148,9 +152,9 @@ test('gpSP reports native-map coordinates but suppresses overlay trainers outsid
 
 test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregates', () => {
   assert.match(gpspSource, /STATS_CONFIG_PATH/);
-  assert.match(runtimeSource, /PLAYER STATS & CONSENT/);
-  assert.match(gpspSource, /Type YES: upload Seen, Caught, Badges, Frontier/);
-  assert.match(gpspSource, /Type DELETE to erase all uploaded stats/);
+  assert.match(runtimeSource, /localize\(LS_PLAYER_STATS_AND_CONSENT\)/);
+  assert.match(runtimeSource, /Type YES: upload Seen, Caught, Badges, Frontier/);
+  assert.match(runtimeSource, /Type DELETE to erase all uploaded stats/);
   assert.match(gpspSource, /stats_consent/);
   assert.match(gpspSource, /stats_snapshot/);
   assert.match(gpspSource, /pokedex_seen/);
@@ -159,7 +163,7 @@ test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregat
   assert.match(gpspSource, /block2 \+ 0x28/);
   assert.match(gpspSource, /block2 \+ 0x5C/);
   assert.match(gpspSource, /0x1270 \+ \(flag >> 3\)/);
-  assert.match(pagesSource, /PRIVATE BY DEFAULT - NO ID, PARTY, ITEMS, SAVE OR ROM/);
+  assert.match(pagesSource, /localize\(LS_PRIVATE_BY_DEFAULT\)/);
   const snapshotStart=gpspSource.indexOf('static bool sendStatsSnapshot');
   const snapshotEnd=gpspSource.indexOf('static void syncStatsAfterAuthentication');
   const packetSource=gpspSource.slice(snapshotStart,snapshotEnd);
@@ -169,15 +173,15 @@ test('gpSP stats screen is explicit opt-in and uploads only allowlisted aggregat
 test('gpSP bottom screen exposes local-only bag data and a same-map trainer radar', () => {
   assert.match(runtimeSource, /PAGE_BAG/);
   assert.match(runtimeSource, /PAGE_MAP/);
-  assert.match(runtimeSource, /BAG - LOCAL ONLY/);
-  assert.match(runtimeSource, /MAP & TRAINER RADAR/);
+  assert.match(runtimeSource, /localize\(LS_BAG_LOCAL_ONLY\)/);
+  assert.match(runtimeSource, /localize\(LS_MAP_TRAINER_RADAR\)/);
   assert.match(pagesSource, /EMERALD_ITEM_TABLE_OFFSET 0x5839A0/);
   assert.match(pagesSource, /read16\(block1, pocketOffset \+ slot \* 4 \+ 2\) \^ \(uint16_t\) encryptionKey/);
   assert.match(pagesSource, /read32\(block1, 0x490\) \^ encryptionKey/);
   assert.match(runtimeSource, /loadPrivateItemNames\(\)/);
   assert.match(runtimeSource, /recordMapTrail\(presence\)/);
   assert.match(pagesSource, /remoteTrainers\[index\]\.x - presence\.x/);
-  assert.match(pagesSource, /LOCAL RADAR/);
+  assert.match(pagesSource, /localize\(LS_LOCAL_RADAR\)/);
   const bagStart = pagesSource.indexOf('void drawBagPage');
   const bagEnd = pagesSource.indexOf('void recordMapTrail', bagStart);
   const bagSource = pagesSource.slice(bagStart, bagEnd);
@@ -187,31 +191,31 @@ test('gpSP bottom screen exposes local-only bag data and a same-map trainer rada
 test('gpSP bottom screen exposes paged users plus readable map and global chat lists', () => {
   assert.match(runtimeSource, /PAGE_USERS/);
   assert.match(runtimeSource, /PAGE_CHAT/);
-  assert.match(runtimeSource, /ONLINE USERS - READ ONLY/);
-  assert.match(pagesSource, /GLOBAL MAP \/ TILE POSITIONS - %u ONLINE/);
+  assert.match(runtimeSource, /localize\(LS_ONLINE_USERS_READ_ONLY\)/);
+  assert.match(pagesSource, /localize\(LS_GLOBAL_MAP_TILE_POSITIONS_FORMAT\)/);
   assert.match(gpspSource, /jsonTypeIs\(line, "online_users"\)/);
   assert.match(gpspSource, /OnlineUser onlineUsers\[64\]/);
   assert.match(runtimeSource, /char role\[10\]/);
   assert.match(gpspSource, /jsonStringBounded\(user, objectEnd, "role", candidate\.role/);
-  assert.match(pagesSource, /TRAINER/);
-  assert.match(pagesSource, /TYPE/);
-  assert.match(pagesSource, /MAP\/TILE/);
+  assert.match(pagesSource, /localize\(LS_TRAINER\)/);
+  assert.match(pagesSource, /localize\(LS_TYPE\)/);
+  assert.match(pagesSource, /localize\(LS_MAP_TILE\)/);
   assert.match(runtimeSource, /roleLabel/);
   assert.match(runtimeSource, /roleColor/);
   assert.match(pagesSource, /pageCount = onlineUserCount \? \(onlineUserCount \+ 5\) \/ 6 : 1/);
-  assert.match(pagesSource, /MAP CHAT/);
-  assert.match(pagesSource, /GLOBAL CHAT/);
+  assert.match(pagesSource, /localize\(LS_MAP_CHAT\)/);
+  assert.match(pagesSource, /localize\(LS_GLOBAL_CHAT\)/);
   assert.match(gpspSource, /scope.*global/s);
-  assert.match(pagesSource, /SESSION ONLY - (?:UTC|TIMES ARE UTC)/);
+  assert.match(runtimeSource, /SESSION ONLY - (?:UTC|TIMES ARE UTC)/);
   assert.match(gpspSource, /ChatMessage chatHistory\[24\]/);
   assert.match(pagesSource, /message->name/);
   assert.match(pagesSource, /message->time/);
   assert.match(pagesSource, /message->text/);
   assert.match(runtimeSource, /currentChatIndices/);
   assert.match(runtimeSource, /drawChatDetail/);
-  assert.match(pagesSource, /TAP TO READ/);
+  assert.match(runtimeSource, /TAP TO READ/);
   assert.match(pagesSource, /chatPage \* 3/);
-  assert.match(pagesSource, /COMPOSE/);
+  assert.match(pagesSource, /localize\(LS_COMPOSE\)/);
   assert.match(gpspSource, /bottomPage \+ 1\) % 9/);
   assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
   assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
@@ -226,7 +230,7 @@ test('gpSP bottom screen exposes paged users plus readable map and global chat l
 
 test('gpSP teleport page is server-verified and writes GBA location fields', () => {
   assert.match(runtimeSource, /PAGE_TELEPORT/);
-  assert.match(pagesSource, /"TELEPORT"/);
+  assert.match(pagesSource, /localize\(LS_TELEPORT_BUTTON\)/);
   assert.match(runtimeSource, /drawTeleportPage/);
   assert.match(gpspSource, /TeleportDestination teleportDestinations\[64\]/);
   assert.match(gpspSource, /teleportCustomVisible/);
@@ -241,7 +245,7 @@ test('gpSP teleport page is server-verified and writes GBA location fields', () 
 
 test('gpSP update page detects, downloads, verifies, and installs releases', () => {
   assert.match(runtimeSource, /PAGE_UPDATE/);
-  assert.match(runtimeSource, /"SYSTEM UPDATE"/);
+  assert.match(runtimeSource, /localize\(LS_SYSTEM_UPDATE\)/);
   assert.match(runtimeSource, /drawUpdatePage/);
   assert.match(gpspSource, /checkForUpdate/);
   assert.match(gpspSource, /startUpdateDownload/);
@@ -275,7 +279,7 @@ test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups
   const callback = gpspSource.indexOf('coreNetpacketInterface->start((uint16_t)', start);
   const backup = gpspSource.indexOf('backupSaveForLink()', start);
   assert.ok(start >= 0 && backup > start && callback > backup, 'save backup must complete before the core netpacket session starts');
-  assert.match(gpspSource, /LINK %s ACTIVE - BACKUP OK/);
+  assert.match(gpspSource, /localize\(LS_LINK_ACTIVE_BACKUP_OK_FORMAT\)/);
 });
 
 test('gpSP services RFU packets inside wait callbacks and requests New 3DS speedup', () => {
@@ -332,4 +336,33 @@ test('runtime Phase 3 upgrades: APT hooks, cached text, and decoupled audio thre
   const audioBatchEnd = gpspSource.indexOf('\nstatic void inputPollCallback', audioBatchStart);
   assert.ok(audioBatchStart >= 0 && audioBatchEnd > audioBatchStart);
   assert.doesNotMatch(gpspSource.slice(audioBatchStart, audioBatchEnd), /ndspChnWaveBufAdd/);
+});
+
+test('runtime Phase 4 upgrades: localization support', () => {
+  assert.match(localizationHeaderSource, /enum LocalizedString/);
+  assert.match(localizationHeaderSource, /bool localizationInit\(void\)/);
+  assert.match(localizationHeaderSource, /void localizationShutdown\(void\)/);
+  assert.match(localizationHeaderSource, /const char\* localize\(LocalizedString key\)/);
+  assert.match(runtimeSource, /localize\(/);
+  assert.match(pagesSource, /localize\(/);
+  assert.match(localizationSource, /cfguInit\(\)/);
+  assert.match(localizationSource, /CFGU_GetSystemLanguage/);
+});
+
+test('runtime Phase 4 upgrades: runtime observability', () => {
+  assert.match(logHeaderSource, /runtimeLogInit/);
+  assert.match(logHeaderSource, /runtimeLogShutdown/);
+  assert.match(logHeaderSource, /runtimeLogPrintf/);
+  assert.match(logHeaderSource, /runtimeLogGetRecent/);
+  assert.match(logHeaderSource, /runtimeLogUploadRecent/);
+  assert.match(logSource, /LogEntry ringBuffer/);
+  assert.match(logSource, /RUNTIME_LOG_RING_ENTRIES/);
+  assert.match(logSource, /osGetTime\(\)/);
+  assert.match(logSource, /\\"type\\":\\"telemetry\\",\\"lines\\":\[/);
+  assert.match(gpspSource, /runtimeLogInit\(\)/);
+  assert.match(gpspSource, /runtimeLogShutdown\(\)/);
+  assert.match(gpspSource, /runtimeLogPrintf/);
+  assert.match(gpspSource, /gpsp-debug\.log/);
+  assert.match(gpspSource, /runtimeLogUploadRecent/);
+  assert.match(gpspSource, /debugStage[\s\S]*?runtimeLogPrintf/s);
 });

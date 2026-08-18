@@ -9,7 +9,7 @@ include $(DEVKITARM)/3ds_rules
 
 TARGET      := emerald-online-3ds
 BUILD       := build
-SOURCES     := source source/ui source/network
+SOURCES     := source source/ui source/network source/runtime
 INCLUDES    := include source ../third_party/gpsp/libretro/libretro-common/include $(DEVKITPRO)/portlibs/3ds/include
 ARCH        := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS      := -O3 -Wall -Wextra -mword-relocations -ffunction-sections $(ARCH) $(INCLUDE) -D__3DS__ -DUSE_CTRULIB_2

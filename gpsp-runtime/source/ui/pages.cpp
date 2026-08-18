@@ -1,4 +1,5 @@
 #include "pages.h"
+#include "localization.h"
 
 #define ROM_PATH "sdmc:/3ds/emerald-online-3ds/emerald.gba"
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
@@ -167,7 +168,7 @@ const char* roleLabel(const char* role) {
 }
 
 void drawBagPage(void) {
-    static const char* pocketNames[] = {"ITEMS", "KEY", "BALLS", "TM/HM", "BERRY"};
+    const char* pocketNames[] = {localize(LS_POCKET_ITEMS), localize(LS_POCKET_KEY), localize(LS_POCKET_BALLS), localize(LS_POCKET_TM_HM), localize(LS_POCKET_BERRY)};
     static const size_t pocketOffsets[] = {0x560, 0x5D8, 0x650, 0x690, 0x790};
     static const unsigned pocketCapacities[] = {30, 30, 16, 64, 46};
     for (unsigned pocket = 0; pocket < 5; ++pocket) {
@@ -178,7 +179,7 @@ void drawBagPage(void) {
     const uint8_t* block1;
     const uint8_t* block2;
     if (!getSaveBlocks(&block1, &block2)) {
-        drawText(34, 116, .42f, C2D_Color32(190,210,200,255), "Waiting for valid Emerald memory...");
+        drawText(34, 116, .42f, C2D_Color32(190,210,200,255), "%s", localize(LS_WAITING_VALID_EMERALD_MEMORY));
         return;
     }
     uint32_t encryptionKey = read32(block2, 0xAC);
@@ -192,7 +193,7 @@ void drawBagPage(void) {
     }
     const unsigned pageCount = used ? (used + 4) / 5 : 1;
     if (bagPage >= pageCount) bagPage = pageCount - 1;
-    drawText(15, 74, .32f, C2D_Color32(255,213,128,255), "LOCAL ONLY   MONEY $%lu", (unsigned long) money);
+    drawText(15, 74, .32f, C2D_Color32(255,213,128,255), localize(LS_LOCAL_ONLY_MONEY_FORMAT), (unsigned long) money);
     drawText(244, 74, .30f, C2D_Color32(190,220,210,255), "%u/%u", bagPage + 1, pageCount);
     const unsigned first = bagPage * 5;
     unsigned logicalIndex = 0;
@@ -204,21 +205,21 @@ void drawBagPage(void) {
         uint16_t quantity = read16(block1, pocketOffset + slot * 4 + 2) ^ (uint16_t) encryptionKey;
         const float y = 92 + shown * 24;
         C2D_DrawRectSolid(10, y, 0, 300, 21, C2D_Color32(shown & 1 ? 22 : 25, shown & 1 ? 61 : 74, shown & 1 ? 46 : 54, 255));
-        const char* name = itemNamesLoaded && itemNames[itemId][0] ? itemNames[itemId] : "UNKNOWN ITEM";
+        const char* name = itemNamesLoaded && itemNames[itemId][0] ? itemNames[itemId] : localize(LS_UNKNOWN_ITEM);
         drawText(18, y + 4, .38f, C2D_Color32(255,255,255,255), "%.14s", name);
         drawText(256, y + 4, .36f, C2D_Color32(190,225,210,255), "x%u", quantity);
         ++shown;
     }
-    if (!shown) drawText(112, 140, .40f, C2D_Color32(180,205,200,255), "Pocket is empty");
+    if (!shown) drawText(112, 140, .40f, C2D_Color32(180,205,200,255), "%s", localize(LS_POCKET_IS_EMPTY));
     C2D_DrawRectSolid(10, 216, 0, 145, 24, bagPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(165, 216, 0, 145, 24, bagPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
-    drawText(64, 221, .35f, C2D_Color32(255,255,255,255), "PREVIOUS");
-    drawText(226, 221, .35f, C2D_Color32(255,255,255,255), "NEXT");
+    drawText(64, 221, .35f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(226, 221, .35f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
 }
 
 void drawMapPage(void) {
     if (!presence.valid) {
-        drawText(38, 110, .45f, C2D_Color32(190,210,200,255), "Waiting for the Emerald overworld...");
+        drawText(38, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_WAITING_EMERALD_OVERWORLD));
         return;
     }
     const float radarX = 12, radarY = 45, radarWidth = 200, radarHeight = 180;
@@ -233,7 +234,7 @@ void drawMapPage(void) {
             C2D_DrawRectSolid(centerX + dx * 10 - 2, centerY + dy * 10 - 2, .05f, 5, 5, C2D_Color32(83,154,107,180));
     }
     C2D_DrawRectSolid(centerX - 6, centerY - 6, .2f, 13, 13, C2D_Color32(255,213,90,255));
-    drawText(centerX - 3, centerY - 7, .31f, C2D_Color32(20,45,35,255), "P");
+    drawText(centerX - 3, centerY - 7, .31f, C2D_Color32(20,45,35,255), "%s", localize(LS_PLAYER_MARKER));
     for (int index = 0; index < remoteCount; ++index) {
         int dx = remoteTrainers[index].x - presence.x, dy = remoteTrainers[index].y - presence.y;
         int shownX = dx < -9 ? -9 : dx > 9 ? 9 : dx;
@@ -241,47 +242,47 @@ void drawMapPage(void) {
         const uint32_t color = remoteTrainers[index].isGirl ? C2D_Color32(232,111,170,255) : C2D_Color32(80,164,245,255);
         C2D_DrawRectSolid(centerX + shownX * 10 - 5, centerY + shownY * 10 - 5, .2f, 11, 11, color);
     }
-    drawText(224, 48, .34f, C2D_Color32(160,232,255,255), "LOCAL RADAR");
-    drawText(224, 69, .31f, C2D_Color32(255,255,255,255), "MAP %u-%u", presence.mapGroup, presence.mapNum);
-    drawText(224, 87, .31f, C2D_Color32(255,255,255,255), "TILE %d,%d", presence.x, presence.y);
-    drawText(224, 105, .31f, C2D_Color32(190,220,210,255), "FACING %s", facingName(presence.facing));
-    drawText(224, 130, .33f, C2D_Color32(160,232,255,255), "NEARBY %d", remoteCount);
+    drawText(224, 48, .34f, C2D_Color32(160,232,255,255), "%s", localize(LS_LOCAL_RADAR));
+    drawText(224, 69, .31f, C2D_Color32(255,255,255,255), localize(LS_MAP_FORMAT), presence.mapGroup, presence.mapNum);
+    drawText(224, 87, .31f, C2D_Color32(255,255,255,255), localize(LS_TILE_FORMAT), presence.x, presence.y);
+    drawText(224, 105, .31f, C2D_Color32(190,220,210,255), localize(LS_FACING_FORMAT), facingName(presence.facing));
+    drawText(224, 130, .33f, C2D_Color32(160,232,255,255), localize(LS_NEARBY_FORMAT), remoteCount);
     for (int index = 0; index < remoteCount && index < 4; ++index) {
         int distance = abs(remoteTrainers[index].x - presence.x) + abs(remoteTrainers[index].y - presence.y);
         drawText(224, 150 + index * 18, .29f, C2D_Color32(255,255,255,255), "%.8s %dt", remoteTrainers[index].name, distance);
     }
-    if (!remoteCount) drawText(228, 153, .29f, C2D_Color32(180,205,200,255), "No trainers");
+    if (!remoteCount) drawText(228, 153, .29f, C2D_Color32(180,205,200,255), "%s", localize(LS_NO_TRAINERS));
 }
 
 void drawStatsPage(void) {
-    drawText(12,42,.30f,C2D_Color32(255,213,128,255),"PRIVATE BY DEFAULT - NO ID, PARTY, ITEMS, SAVE OR ROM");
-    if (!saveStats.valid) drawText(40,61,.37f,C2D_Color32(190,210,200,255),"Waiting for valid Emerald memory...");
-    else drawText(18,61,.36f,C2D_Color32(220,245,235,255),"LOCAL: SEEN %u  CAUGHT %u  BADGES %u/8",saveStats.seen,saveStats.caught,saveStats.badges);
-    const char* labels[4]={"POKEDEX SEEN","POKEDEX CAUGHT","BADGE COUNT","FRONTIER STREAKS"};
+    drawText(12,42,.30f,C2D_Color32(255,213,128,255),"%s",localize(LS_PRIVATE_BY_DEFAULT));
+    if (!saveStats.valid) drawText(40,61,.37f,C2D_Color32(190,210,200,255),"%s",localize(LS_WAITING_VALID_EMERALD_MEMORY));
+    else drawText(18,61,.36f,C2D_Color32(220,245,235,255),localize(LS_LOCAL_SEEN_CAUGHT_BADGES_FORMAT),saveStats.seen,saveStats.caught,saveStats.badges);
+    const char* labels[4]={localize(LS_POKEDEX_SEEN),localize(LS_POKEDEX_CAUGHT),localize(LS_BADGE_COUNT),localize(LS_FRONTIER_STREAKS)};
     const bool values[4]={statsSeenEnabled,statsCaughtEnabled,statsBadgesEnabled,statsFrontierEnabled};
     for(unsigned index=0;index<4;++index){
         float y=82+index*28;
         C2D_DrawRectSolid(12,y,0,296,23,values[index]?C2D_Color32(31,104,66,255):C2D_Color32(50,58,57,255));
         drawText(20,y+5,.36f,C2D_Color32(255,255,255,255),"%s",labels[index]);
-        drawText(260,y+5,.34f,values[index]?C2D_Color32(130,255,176,255):C2D_Color32(180,190,185,255),"%s",values[index]?"ON":"OFF");
+        drawText(260,y+5,.34f,values[index]?C2D_Color32(130,255,176,255):C2D_Color32(180,190,185,255),"%s",values[index]?localize(LS_ON):localize(LS_OFF));
     }
     if(statsStatus[0] && (!statsStatusUntil || osGetTime()<statsStatusUntil)) drawText(15,196,.29f,C2D_Color32(255,220,130,255),"%.46s",statsStatus);
     if(!statsEnabled){
         C2D_DrawRectSolid(12,212,0,296,28,C2D_Color32(35,145,88,255));
-        drawText(68,219,.38f,C2D_Color32(255,255,255,255),"ENABLE UPLOAD - EXPLICIT CONSENT");
+        drawText(68,219,.38f,C2D_Color32(255,255,255,255),"%s",localize(LS_ENABLE_UPLOAD_EXPLICIT_CONSENT));
     }else{
         C2D_DrawRectSolid(12,212,0,143,28,C2D_Color32(35,126,91,255));
         C2D_DrawRectSolid(165,212,0,143,28,C2D_Color32(145,55,55,255));
-        drawText(48,219,.38f,C2D_Color32(255,255,255,255),"SYNC NOW");
-        drawText(187,219,.34f,C2D_Color32(255,255,255,255),"DELETE ALL STATS");
+        drawText(48,219,.38f,C2D_Color32(255,255,255,255),"%s",localize(LS_SYNC_NOW));
+        drawText(187,219,.34f,C2D_Color32(255,255,255,255),"%s",localize(LS_DELETE_ALL_STATS));
     }
 }
 
 void drawOnlineUsersPage(void) {
-    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "GLOBAL MAP / TILE POSITIONS - %u ONLINE", onlineUserCount);
-    drawText(14, 61, .33f, C2D_Color32(160,232,255,255), "TRAINER");
-    drawText(150, 61, .33f, C2D_Color32(160,232,255,255), "TYPE");
-    drawText(218, 61, .33f, C2D_Color32(160,232,255,255), "MAP/TILE");
+    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), localize(LS_GLOBAL_MAP_TILE_POSITIONS_FORMAT), onlineUserCount);
+    drawText(14, 61, .33f, C2D_Color32(160,232,255,255), "%s", localize(LS_TRAINER));
+    drawText(150, 61, .33f, C2D_Color32(160,232,255,255), "%s", localize(LS_TYPE));
+    drawText(218, 61, .33f, C2D_Color32(160,232,255,255), "%s", localize(LS_MAP_TILE));
     const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
     if (onlineUserPage >= pageCount) onlineUserPage = pageCount - 1;
     const unsigned start = onlineUserPage * 6;
@@ -299,14 +300,14 @@ void drawOnlineUsersPage(void) {
         drawText(175 - labelWidth / 2, y + 3, .28f, C2D_Color32(255,255,255,255), "%s", label);
         if (user->positioned)
             drawText(214, y + 3, .30f, C2D_Color32(190,225,210,255), "%.10s %d,%d", user->map, user->x, user->y);
-        else drawText(236, y + 3, .29f, C2D_Color32(180,205,200,255), "WAITING");
+        else drawText(236, y + 3, .29f, C2D_Color32(180,205,200,255), "%s", localize(LS_WAITING));
     }
     if (!onlineUserCount)
-        drawText(71, 126, .40f, C2D_Color32(180,205,200,255), onlineMode == ONLINE_ACTIVE ? "Waiting for the online roster..." : "Connect online to view users");
+        drawText(71, 126, .40f, C2D_Color32(180,205,200,255), "%s", onlineMode == ONLINE_ACTIVE ? localize(LS_WAITING_ONLINE_ROSTER) : localize(LS_CONNECT_ONLINE_VIEW_USERS));
     C2D_DrawRectSolid(10, 216, 0, 145, 24, onlineUserPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(165, 216, 0, 145, 24, onlineUserPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
-    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "PREVIOUS");
-    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
+    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
 }
 
 unsigned currentChatIndices(unsigned indices[24]) {
@@ -323,7 +324,7 @@ unsigned currentChatIndices(unsigned indices[24]) {
 static void drawChatDetail(const ChatMessage* message) {
     drawText(16, 74, .42f, C2D_Color32(160,232,255,255), "%.12s", message->name);
     drawText(238, 76, .33f, C2D_Color32(190,220,210,255), "%s", message->time);
-    drawText(16, 96, .31f, C2D_Color32(255,213,128,255), "%s FROM MAP %.16s", message->global ? "GLOBAL" : "MAP", message->map);
+    drawText(16, 96, .31f, C2D_Color32(255,213,128,255), "%s FROM MAP %.16s", message->global ? localize(LS_GLOBAL_CHAT) : localize(LS_MAP_CHAT), message->map);
     const char* at = message->text;
     for (unsigned row = 0; row < 3 && *at; ++row) {
         size_t remaining = strlen(at), length = remaining > 34 ? 34 : remaining;
@@ -339,7 +340,7 @@ static void drawChatDetail(const ChatMessage* message) {
         while (*at == ' ') ++at;
     }
     C2D_DrawRectSolid(10, 216, 0, 300, 24, C2D_Color32(45,105,76,255));
-    drawText(126, 221, .34f, C2D_Color32(255,255,255,255), "BACK");
+    drawText(126, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_BACK));
 }
 
 void drawChatPage(void) {
@@ -349,17 +350,17 @@ void drawChatPage(void) {
     if (chatPage >= pageCount) chatPage = pageCount - 1;
     C2D_DrawRectSolid(10, 42, 0, 145, 24, globalChat ? C2D_Color32(45,55,51,255) : C2D_Color32(35,145,88,255));
     C2D_DrawRectSolid(165, 42, 0, 145, 24, globalChat ? C2D_Color32(35,145,88,255) : C2D_Color32(45,55,51,255));
-    drawText(58, 47, .35f, C2D_Color32(255,255,255,255), "MAP CHAT");
-    drawText(204, 47, .35f, C2D_Color32(255,255,255,255), "GLOBAL CHAT");
+    drawText(58, 47, .35f, C2D_Color32(255,255,255,255), "%s", localize(LS_MAP_CHAT));
+    drawText(204, 47, .35f, C2D_Color32(255,255,255,255), "%s", localize(LS_GLOBAL_CHAT));
     if (chatDetailIndex >= 0 && (unsigned) chatDetailIndex < chatHistoryCount) {
         drawChatDetail(&chatHistory[chatDetailIndex]);
         return;
     }
     if (globalChat)
-        drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "%u GLOBAL MSG - SESSION ONLY - UTC - TAP TO READ", count);
+        drawText(14, 70, .30f, C2D_Color32(255,213,128,255), localize(LS_GLOBAL_MSG_SESSION_UTC_TAP_FORMAT), count);
     else if (presence.valid)
-        drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "%u MSG - MAP %u-%u - UTC - TAP TO READ", count, presence.mapGroup, presence.mapNum);
-    else drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "CURRENT MAP - SESSION ONLY - TIMES ARE UTC");
+        drawText(14, 70, .30f, C2D_Color32(255,213,128,255), localize(LS_MSG_MAP_UTC_TAP_FORMAT), count, presence.mapGroup, presence.mapNum);
+    else drawText(14, 70, .30f, C2D_Color32(255,213,128,255), "%s", localize(LS_CURRENT_MAP_SESSION_UTC));
     const unsigned start = chatPage * 3;
     for (unsigned row = 0; row < 3; ++row) {
         const float y = 86 + row * 40;
@@ -372,13 +373,13 @@ void drawChatPage(void) {
         drawText(18, y + 20, .34f, C2D_Color32(255,255,255,255), "%.38s", message->text);
     }
     if (!count)
-        drawText(64, 132, .39f, C2D_Color32(180,205,200,255), globalChat ? "No global messages this session" : presence.valid ? "No messages on this map yet" : "Waiting for the overworld...");
+        drawText(64, 132, .39f, C2D_Color32(180,205,200,255), "%s", globalChat ? localize(LS_NO_GLOBAL_MESSAGES_SESSION) : presence.valid ? localize(LS_NO_MESSAGES_MAP) : localize(LS_WAITING_OVERWORLD_CHAT));
     C2D_DrawRectSolid(10, 216, 0, 94, 24, chatPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(113, 216, 0, 94, 24, onlineMode == ONLINE_ACTIVE && presence.valid ? C2D_Color32(35,145,88,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(216, 216, 0, 94, 24, chatPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
-    drawText(26, 221, .32f, C2D_Color32(255,255,255,255), "PREVIOUS");
-    drawText(131, 221, .34f, C2D_Color32(255,255,255,255), "COMPOSE");
-    drawText(244, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
+    drawText(26, 221, .32f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(131, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_COMPOSE));
+    drawText(244, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
 }
 
 bool teleportKindMatches(const char* kind) {
@@ -392,7 +393,7 @@ bool teleportKindMatches(const char* kind) {
 }
 
 void drawTeleportPage(void) {
-    const char* categories[] = {"ALL", "GYMS", "LOCS", "PLAYERS", "MOM", "CUSTOM"};
+    const char* categories[] = {localize(LS_TELEPORT_ALL), localize(LS_TELEPORT_GYMS), localize(LS_TELEPORT_LOCS), localize(LS_TELEPORT_PLAYERS), localize(LS_TELEPORT_MOM), localize(LS_TELEPORT_CUSTOM)};
     const unsigned categoryCount = teleportCustomVisible ? 6 : 5;
     const float tabWidth = 300.0f / categoryCount;
     for (unsigned i = 0; i < categoryCount; ++i) {
@@ -401,7 +402,7 @@ void drawTeleportPage(void) {
         drawText(x + 5, 47, .24f, C2D_Color32(255,255,255,255), "%s", categories[i]);
     }
     if (!teleportDestinationCount) {
-        drawText(70, 110, .42f, C2D_Color32(190,210,200,255), onlineMode == ONLINE_ACTIVE ? "Waiting for destinations..." : "Connect online to teleport");
+        drawText(70, 110, .42f, C2D_Color32(190,210,200,255), "%s", onlineMode == ONLINE_ACTIVE ? localize(LS_WAITING_DESTINATIONS) : localize(LS_CONNECT_ONLINE_TELEPORT));
         return;
     }
     unsigned filtered[64];
@@ -424,22 +425,22 @@ void drawTeleportPage(void) {
     const bool canAddCustom = teleportCategory == 5 && (!strcmp(trainerRole, "admin") || !strcmp(trainerRole, "moderator"));
     if (teleportSelectedIndex >= 0 && (unsigned)teleportSelectedIndex < teleportDestinationCount) {
         C2D_DrawRectSolid(10, 216, 0, 300, 24, C2D_Color32(35,145,88,255));
-        drawText(110, 221, .34f, C2D_Color32(255,255,255,255), "TELEPORT");
+        drawText(110, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_TELEPORT_BUTTON));
     } else {
         bool showAddCustom = canAddCustom && teleportScroll == 0;
         C2D_DrawRectSolid(10, 216, 0, 145, 24, showAddCustom || teleportScroll ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
         C2D_DrawRectSolid(165, 216, 0, 145, 24, teleportScroll + maxRows < filteredCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
-        drawText(showAddCustom ? 30 : 42, 221, .34f, C2D_Color32(255,255,255,255), showAddCustom ? "ADD CUSTOM" : "PREVIOUS");
-        drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "NEXT");
+        drawText(showAddCustom ? 30 : 42, 221, .34f, C2D_Color32(255,255,255,255), "%s", showAddCustom ? localize(LS_ADD_CUSTOM) : localize(LS_PREVIOUS));
+        drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
     }
     if (teleportStatus[0] && (!teleportStatusUntil || osGetTime() < teleportStatusUntil))
         drawText(15, 64, .29f, C2D_Color32(255,220,130,255), "%.46s", teleportStatus);
 }
 
 void drawUpdatePage(void) {
-    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), "CURRENT VERSION: %s", APP_VERSION);
+    drawText(14, 43, .30f, C2D_Color32(255,213,128,255), localize(LS_CURRENT_VERSION_FORMAT), APP_VERSION);
     if (updateLatestVersion[0] && updateState != UPDATE_IDLE && updateState != UPDATE_CHECKING) {
-        drawText(14, 62, .30f, C2D_Color32(160,232,255,255), "LATEST: %s", updateLatestVersion);
+        drawText(14, 62, .30f, C2D_Color32(160,232,255,255), localize(LS_LATEST_VERSION_FORMAT), updateLatestVersion);
     }
 
     if (updateState == UPDATE_DOWNLOADING || updateState == UPDATE_VERIFYING) {
@@ -447,24 +448,24 @@ void drawUpdatePage(void) {
         if (pct > 1.0f) pct = 1.0f;
         C2D_DrawRectSolid(20, 110, 0, 280, 20, C2D_Color32(45,55,51,255));
         C2D_DrawRectSolid(22, 112, 0, (unsigned) (276 * pct), 16, C2D_Color32(35,145,88,255));
-        drawText(110, 138, .32f, C2D_Color32(220,245,235,255), "%llu / %llu KB", updateProgress / 1024, updateTotal / 1024);
+        drawText(110, 138, .32f, C2D_Color32(220,245,235,255), localize(LS_KB_FORMAT), updateProgress / 1024, updateTotal / 1024);
     }
 
     if (updateState == UPDATE_IDLE || updateState == UPDATE_CHECKING || updateState == UPDATE_AVAILABLE || updateState == UPDATE_ERROR) {
         C2D_DrawRectSolid(10, 166, 0, 300, 24, C2D_Color32(45,105,76,255));
-        drawText(80, 171, .34f, C2D_Color32(255,255,255,255), "CHECK FOR UPDATE");
+        drawText(80, 171, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_CHECK_FOR_UPDATE));
     }
     if (updateState == UPDATE_AVAILABLE) {
         C2D_DrawRectSolid(10, 194, 0, 300, 24, C2D_Color32(35,145,88,255));
-        drawText(108, 199, .34f, C2D_Color32(255,255,255,255), "DOWNLOAD");
+        drawText(108, 199, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_DOWNLOAD));
     }
     if (updateState == UPDATE_READY) {
         C2D_DrawRectSolid(10, 194, 0, 300, 24, C2D_Color32(35,145,88,255));
-        drawText(120, 199, .34f, C2D_Color32(255,255,255,255), "INSTALL");
+        drawText(120, 199, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_INSTALL));
     }
     if (updateState == UPDATE_DONE) {
         C2D_DrawRectSolid(10, 194, 0, 300, 24, C2D_Color32(45,105,76,255));
-        drawText(70, 199, .34f, C2D_Color32(255,255,255,255), "EXIT & RELAUNCH");
+        drawText(70, 199, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_EXIT_RELAUNCH));
     }
 
     if (updateStatus[0] && (!updateStatusUntil || osGetTime() < updateStatusUntil))

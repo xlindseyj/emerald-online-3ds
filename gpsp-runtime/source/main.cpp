@@ -27,7 +27,9 @@
 #include <mbedtls/ssl.h>
 
 #include "ui/pages.h"
+#include "ui/localization.h"
 #include "network/http_client.h"
+#include "runtime/log.h"
 
 extern "C" {
 #include <libretro.h>
@@ -107,10 +109,10 @@ static unsigned linkClientId;
 static unsigned linkPeerId;
 unsigned linkPacketsSent;
 unsigned linkPacketsReceived;
-char linkStatus[48] = "LINK SPIKE DISABLED";
+char linkStatus[48];
 static const retro_netpacket_callback* coreNetpacketInterface;
 
-static bool onlineSend(const char* message);
+bool onlineSend(const char* message);
 static bool receiveOnlineTraffic(void);
 static const char* findJsonValue(const char* json, const char* end, const char* key);
 static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size);
@@ -148,6 +150,7 @@ static void frontendNetpacketPollReceive(void) {
 }
 
 static void debugStage(const char* stage) {
+    runtimeLogPrintf("%s", stage);
     FILE* file = fopen(DEBUG_LOG_PATH, "a");
     if (!file) return;
     fprintf(file, "%llu %s\n", (unsigned long long) osGetTime(), stage);
@@ -222,12 +225,14 @@ bool statsFrontierEnabled;
 static bool onlineAuthenticated;
 static uint64_t nextStatsUpload;
 static uint64_t nextStatsRead;
-char statsStatus[48] = "UPLOADS OFF - TAP ENABLE";
+char statsStatus[48];
 uint64_t statsStatusUntil;
 
 SaveStats saveStats;
 
 static void debugNetworkFailure(void) {
+    runtimeLogPrintf("wss-failed stage=%d tls=%d verify=%08lx skew=%d",
+        onlineProtocolStage, onlineTlsResult, (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
     FILE* file = fopen(DEBUG_LOG_PATH, "a");
     if (!file) return;
     fprintf(file, "%llu wss-failed stage=%d tls=%d verify=%08lx skew=%d\n",
@@ -434,11 +439,13 @@ static void aptHookCallback(APT_HookType hook, void* param) {
         audioPaused = true;
         ndspSetMasterVol(0.0f);
         systemAsleep = true;
+        runtimeLogUploadRecent();
         break;
     case APTHOOK_ONWAKEUP:
         systemAsleep = false;
         ndspSetMasterVol(1.0f);
         audioPaused = false;
+        runtimeLogUploadRecent();
         break;
     case APTHOOK_ONEXIT:
         quitRequested = true;
@@ -869,7 +876,7 @@ static void buildReleaseUrl(char* out, size_t size) {
 
 static void checkForUpdate(void) {
     updateState = UPDATE_CHECKING;
-    updateSetStatus("CHECKING FOR UPDATE...");
+    updateSetStatus(localize(LS_CHECKING_FOR_UPDATE));
 
     char url[256];
     buildReleaseUrl(url, sizeof(url));
@@ -878,34 +885,34 @@ static void checkForUpdate(void) {
     uint64_t downloaded = 0, total = 0;
     if (!httpDownloadFile(url, tmpPath, &downloaded, &total)) {
         updateState = UPDATE_ERROR;
-        updateSetStatus("UPDATE CHECK FAILED");
+        updateSetStatus(localize(LS_UPDATE_CHECK_FAILED));
         return;
     }
     FILE* file = fopen(tmpPath, "rb");
-    if (!file) { updateState = UPDATE_ERROR; updateSetStatus("UPDATE CHECK FAILED"); return; }
+    if (!file) { updateState = UPDATE_ERROR; updateSetStatus(localize(LS_UPDATE_CHECK_FAILED)); return; }
     char json[2048];
     size_t len = fread(json, 1, sizeof(json) - 1, file);
     fclose(file);
     remove(tmpPath);
     if (len == 0 || !parseReleaseJson(json, len)) {
         updateState = UPDATE_ERROR;
-        updateSetStatus("UPDATE RESPONSE INVALID");
+        updateSetStatus(localize(LS_UPDATE_RESPONSE_INVALID));
         return;
     }
     if (compareVersion(updateLatestVersion, APP_VERSION) <= 0) {
         updateState = UPDATE_IDLE;
-        updateSetStatus("UP TO DATE - %s", APP_VERSION);
+        updateSetStatus(localize(LS_UP_TO_DATE_FORMAT), APP_VERSION);
         return;
     }
     updateState = UPDATE_AVAILABLE;
-    updateSetStatus("UPDATE %s AVAILABLE", updateLatestVersion);
+    updateSetStatus(localize(LS_UPDATE_AVAILABLE_FORMAT), updateLatestVersion);
 }
 
 static void startUpdateDownload(void) {
     updateState = UPDATE_DOWNLOADING;
     updateProgress = 0;
     updateTotal = 0;
-    updateSetStatus("DOWNLOADING...");
+    updateSetStatus(localize(LS_DOWNLOADING));
 
     // Prefer CIA install when AM is available; otherwise stage 3DSX replacement.
     updateIsCia = true;
@@ -921,35 +928,36 @@ static void startUpdateDownload(void) {
 
     if (!httpDownloadFile(url, outputPath, &updateProgress, &updateTotal)) {
         updateState = UPDATE_ERROR;
-        updateSetStatus("DOWNLOAD FAILED");
+        updateSetStatus(localize(LS_DOWNLOAD_FAILED));
         return;
     }
 
     updateState = UPDATE_VERIFYING;
-    updateSetStatus("VERIFYING...");
+    updateSetStatus(localize(LS_VERIFYING));
     char hash[65];
     if (!sha256File(outputPath, hash) || !hexEqualCaseInsensitive(hash, expectedHash)) {
         remove(outputPath);
         updateState = UPDATE_ERROR;
-        updateSetStatus("HASH MISMATCH");
+        updateSetStatus(localize(LS_HASH_MISMATCH));
         return;
     }
 
     updateState = UPDATE_READY;
-    updateSetStatus("READY - TAP INSTALL");
+    updateSetStatus(localize(LS_READY_TAP_INSTALL));
 }
 
 static void installUpdate(void) {
+    runtimeLogUploadRecent();
     updateState = UPDATE_INSTALLING;
-    updateSetStatus("INSTALLING...");
+    updateSetStatus(localize(LS_INSTALLING));
     bool ok = updateIsCia ? installCia(UPDATE_CIA_PATH) : replace3dsx(UPDATE_3DSX_PATH);
     if (!ok) {
         updateState = UPDATE_ERROR;
-        updateSetStatus("INSTALL FAILED");
+        updateSetStatus(localize(LS_INSTALL_FAILED));
         return;
     }
     updateState = UPDATE_DONE;
-    updateSetStatus("DONE - EXIT & RELAUNCH");
+    updateSetStatus(localize(LS_DONE_EXIT_RELAUNCH));
 }
 
 static unsigned countDexFlags(const uint8_t* flags) {
@@ -1280,7 +1288,7 @@ static void onlineDisconnect(void) {
     if (linkStarted && coreNetpacketInterface && coreNetpacketInterface->stop) coreNetpacketInterface->stop();
     linkStarted = false;
     linkJoined = false;
-    if (linkConfigured) strcpy(linkStatus, "LINK RECONNECTING");
+    if (linkConfigured) strcpy(linkStatus, localize(LS_LINK_RECONNECTING));
     if (tlsActive) mbedtls_ssl_close_notify(&tlsContext);
     tlsActive = false;
     if (onlineSocket >= 0) close(onlineSocket);
@@ -1300,10 +1308,11 @@ static void onlineDisconnect(void) {
 
 static void onlineFail(int error) {
     onlineLastError = error ? error : EIO;
+    runtimeLogUploadRecent();
     onlineDisconnect();
 }
 
-static bool onlineSend(const char* message) {
+bool onlineSend(const char* message) {
     size_t size = strlen(message);
     bool sent = secureWebSocket
         ? webSocketWriteFrame(0x1, (const unsigned char*) message, size)
@@ -1364,12 +1373,12 @@ static void syncStatsAfterAuthentication(void) {
         snprintf(packet, sizeof(packet), "{\"type\":\"link_spike_join\",\"room\":\"%s\",\"core\":\"gpSP v1.0\"}\n", linkRoom);
         if (onlineSend(packet)) {
             linkJoined = true;
-            strcpy(linkStatus, "LINK JOIN SENT");
+            strcpy(linkStatus, localize(LS_JOIN_SENT));
         }
     }
     if (!statsEnabled) return;
     if (sendStatsConsent(false) && sendStatsSnapshot()) {
-        strcpy(statsStatus, "SYNC SENT - COMMUNITY-SUBMITTED");
+        strcpy(statsStatus, localize(LS_SYNC_SENT_COMMUNITY_SUBMITTED));
         statsStatusUntil = osGetTime() + 5000;
     }
     nextStatsUpload = osGetTime() + 60000;
@@ -1611,7 +1620,7 @@ static void parseOnlineLine(char* line) {
         if (!jsonInt(line, "ok", 0)) {
             char code[32] = {};
             jsonString(line, "code", code, sizeof(code));
-            snprintf(teleportStatus, sizeof(teleportStatus), "WARP FAILED: %.30s", code);
+            snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARP_FAILED_FORMAT), code);
             teleportStatusUntil = osGetTime() + 5000;
             return;
         }
@@ -1623,38 +1632,38 @@ static void parseOnlineLine(char* line) {
         jsonString(line, "facing", facing, sizeof(facing));
         uint8_t facingValue = !strcmp(facing, "up") ? 2 : !strcmp(facing, "left") ? 3 : !strcmp(facing, "right") ? 4 : 1;
         if (mapGroup < 0 || mapGroup > 255 || mapNum < 0 || mapNum > 255 || x < 0 || x > 4095 || y < 0 || y > 4095) {
-            snprintf(teleportStatus, sizeof(teleportStatus), "WARP FAILED: BAD COORDS");
+            snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARP_FAILED_BAD_COORDS));
             teleportStatusUntil = osGetTime() + 5000;
             return;
         }
         applyTeleport((uint8_t)mapGroup, (uint8_t)mapNum, (int16_t)x, (int16_t)y, facingValue);
-        snprintf(teleportStatus, sizeof(teleportStatus), "WARPED TO %d,%d", x, y);
+        snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARPED_TO_FORMAT), x, y);
         teleportStatusUntil = osGetTime() + 5000;
         return;
     }
     if (jsonTypeIs(line, "stats_consent_saved")) {
-        strcpy(statsStatus, "CONSENT SAVED ON SERVER"); statsStatusUntil = osGetTime() + 5000; return;
+        strcpy(statsStatus, localize(LS_CONSENT_SAVED_ON_SERVER)); statsStatusUntil = osGetTime() + 5000; return;
     }
     if (jsonTypeIs(line, "stats_snapshot_saved")) {
         int review = jsonInt(line, "underReview", 0);
-        strcpy(statsStatus, review ? "SENT - SOME VALUES UNDER REVIEW" : "SCORES SYNCED");
+        strcpy(statsStatus, review ? localize(LS_SENT_VALUES_UNDER_REVIEW) : localize(LS_SCORES_SYNCED));
         statsStatusUntil = osGetTime() + 5000; return;
     }
     if (jsonTypeIs(line, "browser_pairing_approved")) {
-        strcpy(browserPairingStatus, "BROWSER PAIRED");
+        strcpy(browserPairingStatus, localize(LS_BROWSER_PAIRED));
         browserPairingStatusUntil = osGetTime() + 5000;
         return;
     }
     if (jsonTypeIs(line, "link_waiting")) {
         stopLink(NULL);
-        snprintf(linkStatus, sizeof(linkStatus), "LINK %s WAITING", linkRoom);
+        snprintf(linkStatus, sizeof(linkStatus), localize(LS_LINK_WAITING_FORMAT), linkRoom);
         return;
     }
     if (jsonTypeIs(line, "link_started")) {
         int clientId = jsonInt(line, "clientId", -1), peerId = jsonInt(line, "peerId", -1);
         if (clientId < 0 || clientId > 1 || peerId < 0 || peerId > 1 || !coreNetpacketInterface ||
             !coreNetpacketInterface->start || !backupSaveForLink()) {
-            strcpy(linkStatus, "LINK BLOCKED - SAVE BACKUP FAILED");
+            strcpy(linkStatus, localize(LS_LINK_BLOCKED_SAVE_BACKUP_FAILED));
             onlineSend("{\"type\":\"link_leave\"}\n");
             linkJoined = false;
             return;
@@ -1667,11 +1676,12 @@ static void parseOnlineLine(char* line) {
             if (coreNetpacketInterface->stop) coreNetpacketInterface->stop();
             onlineSend("{\"type\":\"link_leave\"}\n");
             linkJoined = false;
-            strcpy(linkStatus, "LINK BLOCKED BY CORE");
+            strcpy(linkStatus, localize(LS_LINK_BLOCKED_BY_CORE));
             return;
         }
         linkStarted = true;
-        snprintf(linkStatus, sizeof(linkStatus), "LINK %s ACTIVE - BACKUP OK", linkRoom);
+        runtimeLogUploadRecent();
+        snprintf(linkStatus, sizeof(linkStatus), localize(LS_LINK_ACTIVE_BACKUP_OK_FORMAT), linkRoom);
         debugStage("link-started-backup-complete");
         return;
     }
@@ -1690,26 +1700,26 @@ static void parseOnlineLine(char* line) {
         int clientId = jsonInt(line, "clientId", -1);
         if (linkStarted && linkClientId == 0 && clientId >= 0 && coreNetpacketInterface->disconnected)
             coreNetpacketInterface->disconnected((uint16_t) clientId);
-        stopLink("LINK PEER DISCONNECTED");
+        stopLink(localize(LS_LINK_PEER_DISCONNECTED));
         return;
     }
     if (jsonTypeIs(line, "link_ended") || jsonTypeIs(line, "link_left")) {
-        stopLink("LINK SESSION ENDED");
+        stopLink(localize(LS_LINK_SESSION_ENDED));
         linkJoined = false;
         return;
     }
     if (jsonTypeIs(line, "error")) {
         char code[40] = {};
         if (jsonString(line, "code", code, sizeof(code)) && strstr(code, "pairing")) {
-            strcpy(browserPairingStatus, "PAIRING CODE EXPIRED");
+            strcpy(browserPairingStatus, localize(LS_PAIRING_CODE_EXPIRED));
             browserPairingStatusUntil = osGetTime() + 5000;
         }
         if (strstr(code, "stats")) {
-            snprintf(statsStatus, sizeof(statsStatus), "SERVER: %.34s", code);
+            snprintf(statsStatus, sizeof(statsStatus), localize(LS_SERVER_FORMAT), code);
             statsStatusUntil = osGetTime() + 6000;
         }
         if (strstr(code, "link")) {
-            snprintf(linkStatus, sizeof(linkStatus), "SERVER: %.34s", code);
+            snprintf(linkStatus, sizeof(linkStatus), localize(LS_SERVER_FORMAT), code);
             if (strcmp(code, "link_rate_limited")) { stopLink(NULL); linkJoined = false; }
         }
         return;
@@ -1992,18 +2002,18 @@ static bool canCreateCustomTeleport(void) {
 static void proposeCustomTeleport(void) {
     if (onlineMode != ONLINE_ACTIVE || !canCreateCustomTeleport()) return;
     char name[33] = {};
-    if (!inputText("Custom destination name", name, sizeof(name), 32) || !name[0]) return;
+    if (!inputText(localize(LS_HINT_CUSTOM_DESTINATION_NAME), name, sizeof(name), 32) || !name[0]) return;
     char coords[48] = {};
-    if (!inputText("mapGroup-mapNum,x,y", coords, sizeof(coords), 31) || !coords[0]) return;
+    if (!inputText(localize(LS_HINT_MAPGROUP_MAPNUM_X_Y), coords, sizeof(coords), 31) || !coords[0]) return;
     unsigned mg = 0, mn = 0;
     int x = 0, y = 0;
     if (sscanf(coords, "%u-%u,%d,%d", &mg, &mn, &x, &y) != 4) {
-        strcpy(teleportStatus, "INVALID FORMAT - USE map-map,x,y");
+        strcpy(teleportStatus, localize(LS_INVALID_FORMAT_USE_MAP_MAP_X_Y));
         teleportStatusUntil = osGetTime() + 5000;
         return;
     }
     if (mg > 255 || mn > 255 || x < 0 || x > 4096 || y < 0 || y > 4096) {
-        strcpy(teleportStatus, "COORDINATES OUT OF RANGE");
+        strcpy(teleportStatus, localize(LS_COORDINATES_OUT_OF_RANGE));
         teleportStatusUntil = osGetTime() + 5000;
         return;
     }
@@ -2011,9 +2021,9 @@ static void proposeCustomTeleport(void) {
     char packet[144];
     snprintf(packet, sizeof(packet), "{\"type\":\"teleport_custom_propose\",\"name\":\"%s\",\"map_group\":%u,\"map_num\":%u,\"x\":%d,\"y\":%d}\n", name, mg, mn, x, y);
     if (onlineSend(packet)) {
-        strcpy(teleportStatus, "CUSTOM DEST SENT FOR APPROVAL");
+        strcpy(teleportStatus, localize(LS_CUSTOM_DEST_SENT_FOR_APPROVAL));
     } else {
-        strcpy(teleportStatus, "FAILED TO SEND CUSTOM DEST");
+        strcpy(teleportStatus, localize(LS_FAILED_TO_SEND_CUSTOM_DEST));
     }
     teleportStatusUntil = osGetTime() + 5000;
 }
@@ -2023,29 +2033,29 @@ static void openBrowserPairing(void) {
     SwkbdState keyboard;
     char entered[16] = {}, compact[9] = {}, code[10] = {};
     swkbdInit(&keyboard, SWKBD_TYPE_NORMAL, 1, 9);
-    swkbdSetHintText(&keyboard, "Enter the 8-character browser code");
+    swkbdSetHintText(&keyboard, localize(LS_HINT_BROWSER_CODE));
     if (swkbdInputText(&keyboard, entered, sizeof(entered)) != SWKBD_BUTTON_CONFIRM) return;
     size_t length = 0;
     for (const char* at = entered; *at && length < sizeof(compact) - 1; ++at) {
         if (*at == '-' || *at == ' ') continue;
         char value = (char) toupper((unsigned char) *at);
         if (!((value >= 'A' && value <= 'Z' && value != 'I' && value != 'O') || (value >= '2' && value <= '9'))) {
-            strcpy(browserPairingStatus, "INVALID PAIRING CODE");
+            strcpy(browserPairingStatus, "localize(LS_INVALID_PAIRING_CODE)");
             browserPairingStatusUntil = osGetTime() + 5000;
             return;
         }
         compact[length++] = value;
     }
     if (length != 8) {
-        strcpy(browserPairingStatus, "INVALID PAIRING CODE");
+        strcpy(browserPairingStatus, "localize(LS_INVALID_PAIRING_CODE)");
         browserPairingStatusUntil = osGetTime() + 5000;
         return;
     }
     snprintf(code, sizeof(code), "%.4s-%.4s", compact, compact + 4);
     char packet[80];
     snprintf(packet, sizeof(packet), "{\"type\":\"pair_browser_approve\",\"code\":\"%s\"}\n", code);
-    if (onlineSend(packet)) strcpy(browserPairingStatus, "PAIRING APPROVAL SENT");
-    else strcpy(browserPairingStatus, "PAIRING SEND FAILED");
+    if (onlineSend(packet)) strcpy(browserPairingStatus, localize(LS_PAIRING_APPROVAL_SENT));
+    else strcpy(browserPairingStatus, localize(LS_PAIRING_SEND_FAILED));
     browserPairingStatusUntil = osGetTime() + 5000;
 }
 
@@ -2059,12 +2069,12 @@ static bool typedConfirmation(const char* hint, const char* expected) {
 }
 
 static void enableStatsUpload(void) {
-    if (!typedConfirmation("Type YES: upload Seen, Caught, Badges, Frontier", "YES")) {
-        strcpy(statsStatus, "NOT ENABLED - NO DATA UPLOADED"); statsStatusUntil=osGetTime()+5000; return;
+    if (!typedConfirmation(localize(LS_HINT_TYPE_YES_UPLOAD), "YES")) {
+        strcpy(statsStatus, localize(LS_NOT_ENABLED_NO_DATA_UPLOADED)); statsStatusUntil=osGetTime()+5000; return;
     }
     statsEnabled=statsSeenEnabled=statsCaughtEnabled=statsBadgesEnabled=statsFrontierEnabled=true;
-    if (!saveStatsConfig()) { statsEnabled=false; strcpy(statsStatus,"COULD NOT SAVE STATS.CFG"); return; }
-    strcpy(statsStatus,"CONSENT SAVED - SYNCING"); statsStatusUntil=osGetTime()+5000;
+    if (!saveStatsConfig()) { statsEnabled=false; strcpy(statsStatus,localize(LS_COULD_NOT_SAVE_STATS_CFG)); return; }
+    strcpy(statsStatus,localize(LS_CONSENT_SAVED_SYNCING)); statsStatusUntil=osGetTime()+5000;
     if (onlineAuthenticated) { sendStatsConsent(false); sendStatsSnapshot(); }
 }
 
@@ -2072,26 +2082,26 @@ static void toggleStatsField(unsigned index) {
     if (!statsEnabled || index>3) return;
     bool* fields[] = {&statsSeenEnabled,&statsCaughtEnabled,&statsBadgesEnabled,&statsFrontierEnabled};
     *fields[index]=!*fields[index];
-    if (!saveStatsConfig()) { *fields[index]=!*fields[index]; strcpy(statsStatus,"COULD NOT SAVE STATS.CFG"); return; }
-    strcpy(statsStatus,*fields[index]?"FIELD ENABLED - SYNCING":"FIELD DISABLED - SERVER DATA REMOVED"); statsStatusUntil=osGetTime()+5000;
+    if (!saveStatsConfig()) { *fields[index]=!*fields[index]; strcpy(statsStatus,localize(LS_COULD_NOT_SAVE_STATS_CFG)); return; }
+    strcpy(statsStatus,*fields[index]?localize(LS_FIELD_ENABLED_SYNCING):localize(LS_FIELD_DISABLED_SERVER_DATA_REMOVED)); statsStatusUntil=osGetTime()+5000;
     if (onlineAuthenticated) { sendStatsConsent(false); if (*fields[index]) sendStatsSnapshot(); }
 }
 
 static void deleteStatsHistory(void) {
-    if (!typedConfirmation("Type DELETE to erase all uploaded stats", "DELETE")) {
-        strcpy(statsStatus,"DELETE CANCELLED"); statsStatusUntil=osGetTime()+4000; return;
+    if (!typedConfirmation(localize(LS_HINT_TYPE_DELETE_ERASE), "DELETE")) {
+        strcpy(statsStatus,localize(LS_DELETE_CANCELLED)); statsStatusUntil=osGetTime()+4000; return;
     }
     statsEnabled=statsSeenEnabled=statsCaughtEnabled=statsBadgesEnabled=statsFrontierEnabled=false;
     saveStatsConfig();
     if (onlineAuthenticated) sendStatsConsent(true);
-    strcpy(statsStatus,"DELETE SENT - UPLOADS OFF"); statsStatusUntil=osGetTime()+6000;
+    strcpy(statsStatus,localize(LS_DELETE_SENT_UPLOADS_OFF)); statsStatusUntil=osGetTime()+6000;
 }
 
 static void syncStatsNow(void) {
     saveStats=readSaveStats();
     if (!statsEnabled) return enableStatsUpload();
-    if (!onlineAuthenticated) { strcpy(statsStatus,"CONNECT ONLINE TO SYNC"); statsStatusUntil=osGetTime()+4000; return; }
-    if (!saveStats.valid) { strcpy(statsStatus,"WAITING FOR VALID SAVE MEMORY"); statsStatusUntil=osGetTime()+4000; return; }
+    if (!onlineAuthenticated) { strcpy(statsStatus,localize(LS_CONNECT_ONLINE_TO_SYNC)); statsStatusUntil=osGetTime()+4000; return; }
+    if (!saveStats.valid) { strcpy(statsStatus,localize(LS_WAITING_FOR_VALID_SAVE_MEMORY)); statsStatusUntil=osGetTime()+4000; return; }
     sendStatsConsent(false); sendStatsSnapshot(); nextStatsUpload=osGetTime()+60000;
 }
 
@@ -2130,17 +2140,17 @@ static void drawBottom(void) {
     C2D_DrawRectSolid(0, 0, 0, 320, 38, C2D_Color32(16, 45, 34, 255));
     C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
     C2D_TextBufClear(textBuffer);
-    const char* title = bottomPage == PAGE_USERS ? "ONLINE USERS - READ ONLY" :
-        bottomPage == PAGE_CHAT ? "CHAT" :
-        bottomPage == PAGE_PARTY ? "PARTY - LOCAL ONLY" :
-        bottomPage == PAGE_BAG ? "BAG - LOCAL ONLY" :
-        bottomPage == PAGE_MAP ? "MAP & TRAINER RADAR" :
-        bottomPage == PAGE_STATS ? "PLAYER STATS & CONSENT" :
-        bottomPage == PAGE_TELEPORT ? "TELEPORT" :
-        bottomPage == PAGE_UPDATE ? "SYSTEM UPDATE" : "EMERALD ONLINE";
+    const char* title = bottomPage == PAGE_USERS ? localize(LS_ONLINE_USERS_READ_ONLY) :
+        bottomPage == PAGE_CHAT ? localize(LS_CHAT) :
+        bottomPage == PAGE_PARTY ? localize(LS_PARTY_LOCAL_ONLY) :
+        bottomPage == PAGE_BAG ? localize(LS_BAG_LOCAL_ONLY) :
+        bottomPage == PAGE_MAP ? localize(LS_MAP_TRAINER_RADAR) :
+        bottomPage == PAGE_STATS ? localize(LS_PLAYER_STATS_AND_CONSENT) :
+        bottomPage == PAGE_TELEPORT ? localize(LS_TELEPORT) :
+        bottomPage == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) : localize(LS_EMERALD_ONLINE);
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
     drawConnectionDot(306, 16);
-    drawText(280, 14, .30f, C2D_Color32(180,220,205,255), "Y >");
+    drawText(280, 14, .30f, C2D_Color32(180,220,205,255), "%s", localize(LS_Y_ARROW));
     drawPageIndicators(31);
     if (bottomPage == PAGE_UPDATE) { drawUpdatePage(); return; }
     if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
@@ -2150,7 +2160,7 @@ static void drawBottom(void) {
     if (bottomPage == PAGE_MAP) { drawMapPage(); return; }
     if (bottomPage == PAGE_BAG) { drawBagPage(); return; }
     if (bottomPage == PAGE_PARTY) {
-        if (!gbaEwram) drawText(30, 95, .48f, C2D_Color32(190,210,200,255), "Waiting for Emerald memory...");
+        if (!gbaEwram) drawText(30, 95, .48f, C2D_Color32(190,210,200,255), "%s", localize(LS_WAITING_EMERALD_MEMORY_PARTY));
         else {
             unsigned count = gbaEwram[0x244E9];
             if (count > 6) count = 0;
@@ -2164,62 +2174,64 @@ static void drawBottom(void) {
                 uint8_t level = gbaEwram[base + 84];
                 uint16_t hp = read16(gbaEwram, base + 86), maxHp = read16(gbaEwram, base + 88);
                 drawText(18, y + 5, .42f, C2D_Color32(255,255,255,255), "%u  %.10s", i + 1, nickname);
-                drawText(190, y + 5, .39f, C2D_Color32(190,220,210,255), "Lv%u", level);
+                drawText(190, y + 5, .39f, C2D_Color32(190,220,210,255), localize(LS_LEVEL_FORMAT), level);
                 drawText(248, y + 5, .39f, C2D_Color32(255,255,255,255), "%u/%u", hp, maxHp);
             }
         }
-        drawText(119, 222, .38f, C2D_Color32(190,220,210,255), "Y  BAG");
+        drawText(119, 222, .38f, C2D_Color32(190,220,210,255), "%s", localize(LS_Y_BAG));
         return;
     }
-    const char* status = onlineMode == ONLINE_ACTIVE ? "ONLINE" : onlineMode == ONLINE_CONNECTING ? "CONNECTING" : onlineEnabled ? "RETRYING" : "OFFLINE";
+    const char* status = onlineMode == ONLINE_ACTIVE ? localize(LS_ONLINE) : onlineMode == ONLINE_CONNECTING ? localize(LS_CONNECTING) : onlineEnabled ? localize(LS_RETRYING) : localize(LS_OFFLINE);
     uint32_t statusColor = onlineMode == ONLINE_ACTIVE ? C2D_Color32(78,168,95,255) : onlineEnabled ? C2D_Color32(58,143,207,255) : C2D_Color32(77,80,96,255);
     C2D_DrawRectSolid(205, 7, 0, 103, 24, statusColor);
     drawText(225, 12, .42f, C2D_Color32(255,255,255,255), "%s", status);
     C2D_DrawRectSolid(10, 46, 0, 300, 43, C2D_Color32(25,74,54,255));
         drawText(20, 52, .43f, C2D_Color32(160,232,255,255), "%s", trainerName);
-        if (identityFingerprint[0]) drawText(126, 52, .32f, C2D_Color32(185,215,205,255), "ID %s", identityFingerprint);
+        if (identityFingerprint[0]) drawText(126, 52, .32f, C2D_Color32(185,215,205,255), localize(LS_ID_FORMAT), identityFingerprint);
         if (strcmp(trainerRole, "player")) {
             uint32_t localRoleColor = roleColor(trainerRole);
             C2D_DrawRectSolid(198, 49, .05f, 52, 18, localRoleColor);
             drawText(224, 52, .28f, C2D_Color32(255,255,255,255), "%s", roleLabel(trainerRole));
         }
-    drawText(270, 52, .43f, C2D_Color32(200,220,220,255), "%u FPS", measuredFps);
-    if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), "MAP %u-%u   TILE %d,%d", presence.mapGroup, presence.mapNum, presence.x, presence.y);
-    else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "Waiting for the overworld...");
-        if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), "RECOVERY %s  WRITE THIS DOWN", recoveryCode);
+    drawText(270, 52, .43f, C2D_Color32(200,220,220,255), localize(LS_FPS_FORMAT), measuredFps);
+    if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), localize(LS_MAP_TILE_FORMAT), presence.mapGroup, presence.mapNum, presence.x, presence.y);
+    else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "%s", localize(LS_WAITING_OVERWORLD));
+        if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), localize(LS_RECOVERY_WRITE_DOWN_FORMAT), recoveryCode);
         else if (browserPairingStatus[0] && osGetTime() < browserPairingStatusUntil) drawText(75, 91, .32f, C2D_Color32(255,220,130,255), "%s", browserPairingStatus);
         else if (onlineMode != ONLINE_ACTIVE)
-            drawText(18, 91, .27f, C2D_Color32(180,205,200,255), "v%s %s:%u", APP_VERSION, serverHost, serverPort);
-        else drawText(80, 91, .30f, C2D_Color32(180,205,200,255), "TAP PROFILE TO PAIR BROWSER");
+            drawText(18, 91, .27f, C2D_Color32(180,205,200,255), localize(LS_VERSION_HOST_PORT_FORMAT), APP_VERSION, serverHost, serverPort);
+        else drawText(80, 91, .30f, C2D_Color32(180,205,200,255), "%s", localize(LS_TAP_PROFILE_PAIR_BROWSER));
     if (onlineMode != ONLINE_ACTIVE) {
         static const char* stages[] = {"SOCKET", "TLS INIT", "TLS SETUP", "TLS HANDSHAKE", "CERT VERIFY", "WS REQUEST", "WS RESPONSE", "WS ACCEPT"};
+        // These are short protocol-stage tokens used only inside the diagnostic
+        // overlay. They are left as literals because they map 1:1 to server logs.
         const char* stage = onlineProtocolStage >= 0 && onlineProtocolStage <= 7 ? stages[onlineProtocolStage] : "UNKNOWN";
         C2D_DrawRectSolid(10, 104, 0, 300, 90, C2D_Color32(44,52,49,255));
-        drawText(20, 110, .40f, C2D_Color32(160,232,255,255), "NETWORK DIAGNOSTIC");
-        drawText(20, 130, .39f, C2D_Color32(255,220,130,255), "E%d  %s  (STAGE %d)", onlineLastError, stage, onlineProtocolStage);
-        drawText(20, 150, .38f, C2D_Color32(255,255,255,255), "TLS RESULT  %d", onlineTlsResult);
-        drawText(20, 169, .34f, C2D_Color32(255,255,255,255), "VERIFY %08lX   CLOCK +%ds", (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
-        drawText(20, 186, .24f, C2D_Color32(180,205,200,255), "LOG /3ds/emerald-online-3ds/gpsp-debug.log");
+        drawText(20, 110, .40f, C2D_Color32(160,232,255,255), "%s", localize(LS_NETWORK_DIAGNOSTIC));
+        drawText(20, 130, .39f, C2D_Color32(255,220,130,255), localize(LS_NETWORK_DIAGNOSTIC_DETAIL_FORMAT), onlineLastError, stage, onlineProtocolStage);
+        drawText(20, 150, .38f, C2D_Color32(255,255,255,255), localize(LS_TLS_RESULT_FORMAT), onlineTlsResult);
+        drawText(20, 169, .34f, C2D_Color32(255,255,255,255), localize(LS_VERIFY_CLOCK_FORMAT), (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+        drawText(20, 186, .24f, C2D_Color32(180,205,200,255), "%s", localize(LS_LOG_PATH_LABEL));
     } else {
         C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
         C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
-        drawText(20, 110, .34f, C2D_Color32(160,232,255,255), "NEARBY %d / ONLINE %u", remoteCount, onlineUserCount);
+        drawText(20, 110, .34f, C2D_Color32(160,232,255,255), localize(LS_NEARBY_ONLINE_FORMAT), remoteCount, onlineUserCount);
         for (int i = 0; i < remoteCount && i < 3; ++i) drawText(20, 130 + i * 17, .36f, C2D_Color32(255,255,255,255), "%.12s  %d,%d", remoteTrainers[i].name, remoteTrainers[i].x, remoteTrainers[i].y);
-        if (!remoteCount) drawText(27, 145, .34f, C2D_Color32(180,205,200,255), "Tap for all users");
-        drawText(175, 110, .38f, C2D_Color32(160,232,255,255), "MAP CHAT");
+        if (!remoteCount) drawText(27, 145, .34f, C2D_Color32(180,205,200,255), "%s", localize(LS_TAP_FOR_ALL_USERS));
+        drawText(175, 110, .38f, C2D_Color32(160,232,255,255), "%s", localize(LS_MAP_CHAT));
         if (lastChatText[0]) {
             drawText(175, 130, .34f, C2D_Color32(160,232,255,255), "%.12s", lastChatName);
             drawText(175, 150, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText);
             if (strlen(lastChatText) > 20) drawText(175, 168, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText + 20);
-        } else drawText(181, 145, .34f, C2D_Color32(180,205,200,255), "Tap for messages");
+        } else drawText(181, 145, .34f, C2D_Color32(180,205,200,255), "%s", localize(LS_TAP_FOR_MESSAGES));
     }
     const uint32_t colors[4] = {C2D_Color32(41,93,66,255),C2D_Color32(66,80,165,255),C2D_Color32(58,118,80,255),C2D_Color32(98,87,46,255)};
-    const char* labels[4] = {"WAVE","BATTLE","TRADE","GG"};
+    const char* labels[4] = {localize(LS_WAVE), localize(LS_BATTLE), localize(LS_TRADE), localize(LS_GG)};
     for (int i = 0; i < 4; ++i) {
         C2D_DrawRectSolid(i * 81, 202, 0, i == 2 ? 77 : 78, 38, colors[i]);
         drawText(i * 81 + 17, 214, .36f, C2D_Color32(255,255,255,255), "%s", labels[i]);
     }
-    if (linkConfigured) drawText(12, 193, .24f, C2D_Color32(255,220,130,255), "%.36s TX%u RX%u", linkStatus, linkPacketsSent, linkPacketsReceived);
+    if (linkConfigured) drawText(12, 193, .24f, C2D_Color32(255,220,130,255), localize(LS_LINK_STATUS_TX_RX_FORMAT), linkStatus, linkPacketsSent, linkPacketsReceived);
 }
 
 static unsigned filteredTeleportCount(void) {
@@ -2336,7 +2348,7 @@ static void drawTop(void) {
         drawRemoteTrainer(&remoteTrainers[i], x, y);
         drawText(x - 9, y - 12, .32f, C2D_Color32(255,255,255,255), "%.8s", remoteTrainers[i].name);
         if (remoteTrainers[i].emote && osGetTime() < remoteTrainers[i].emoteUntil) {
-            static const char* bubbles[] = {"", "HI", "!", "<>", "GG"};
+            static const char* bubbles[] = {"", localize(LS_HI), localize(LS_EXCLAMATION), localize(LS_ANGLED_BRACKETS), localize(LS_GG)};
             C2D_DrawRectSolid(x + 17, y - 28, .4f, 22, 15, C2D_Color32(255,255,240,235));
             drawText(x + 20, y - 26, .34f, C2D_Color32(35,45,50,255), "%s", bubbles[remoteTrainers[i].emote]);
         }
@@ -2391,6 +2403,10 @@ static void uploadVideo(void) {
 
 int main(void) {
     remove(DEBUG_LOG_PATH);
+    runtimeLogInit();
+    localizationInit();
+    strcpy(linkStatus, localize(LS_LINK_SPIKE_DISABLED));
+    strcpy(statsStatus, localize(LS_UPLOADS_OFF_TAP_ENABLE));
     debugStage("main");
     // On New 3DS hardware this enables the faster CPU clock and L2 cache. It
     // is harmless on Old 3DS and keeps RFU sessions from falling behind when
@@ -2459,8 +2475,8 @@ int main(void) {
         C2D_TargetClear(bottomTarget, C2D_Color32(30,15,15,255));
         C2D_SceneBegin(bottomTarget);
         C2D_TextBufClear(textBuffer);
-        drawText(18, 80, .55f, C2D_Color32(255,255,255,255), "Could not load emerald.gba");
-        drawText(18, 115, .38f, C2D_Color32(255,200,200,255), "/3ds/emerald-online-3ds/");
+        drawText(18, 80, .55f, C2D_Color32(255,255,255,255), "%s", localize(LS_COULD_NOT_LOAD_EMERALD_GBA));
+        drawText(18, 115, .38f, C2D_Color32(255,200,200,255), "%s", localize(LS_3DS_EMERALD_ONLINE_3DS));
         C3D_FrameEnd(0);
         while (aptMainLoop()) { hidScanInput(); if (hidKeysDown() & KEY_START) break; gspWaitForVBlank(); }
         quitRequested = true;
@@ -2627,5 +2643,7 @@ int main(void) {
     mbedtls_ssl_free(&tlsContext);
     httpClientShutdown();
     if (socBuffer) { socExit(); free(socBuffer); }
+    runtimeLogShutdown();
+    localizationShutdown();
     return 0;
 }
