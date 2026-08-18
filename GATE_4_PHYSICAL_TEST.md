@@ -5,9 +5,9 @@ Gate 4 remains an experimental feasibility test. Version 0.8.8 retains the compl
 ## Current artifacts
 
 - Release: `0.8.8`
-- CIA SHA-256: `b1894328c97fc7fe5c1cc525a1a079edf244e80a1a4b193d603bd16ec9b3a726`
-- 3DSX SHA-256: `a242107124b7f851e2519a04b92f3942d0d1b90c3b37552e6dd0eac86058b6ab`
-- Corresponding-source SHA-256: `22b413d2f1a5ec6b794942dd3de057e2cdf4b262f694fdd136fd32a797e924f2`
+- CIA SHA-256: `306f61284659c6082f20b534e30fd16b650fb6cd162d85497be695037e038d5d`
+- 3DSX SHA-256: `7f982cc50935dc73bf447a59327bf74d60835ca33480ae9dfc9362e184df3a87`
+- Corresponding-source SHA-256: `c988a406ab90d84a86b8974a38c13757f36ed960c17ee628c0c6cd3ba2992da3`
 - Azahar: official 2126.0 AppImage under the ignored `.tools/azahar/` directory
 
 Create a fresh ignored bundle for each session. Its `physical-sd/` tree contains only the current release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.

@@ -115,6 +115,9 @@ static bool onlineSend(const char* message);
 static bool receiveOnlineTraffic(void);
 static const char* findJsonValue(const char* json, const char* end, const char* key);
 static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size);
+static bool tlsInitialize(void);
+static int tlsSocketSend(void* context, const unsigned char* data, size_t size);
+static int tlsSocketReceive(void* context, unsigned char* data, size_t size);
 static void checkForUpdate(void);
 static void startUpdateDownload(void);
 static void installUpdate(void);
@@ -751,9 +754,11 @@ static bool installCia(const char* ciaPath) {
     bool ok = true;
     uint8_t buffer[4096];
     size_t count;
+    u64 offset = 0;
     while (ok && (count = fread(buffer, 1, sizeof(buffer), file)) > 0) {
         u32 written = 0;
-        if (R_FAILED(AM_WriteCiaInstallFile(handle, buffer, (u32) count, &written)) || written != count) ok = false;
+        if (R_FAILED(FSFILE_Write(handle, &written, offset, buffer, (u32) count, FS_WRITE_FLUSH)) || written != count) ok = false;
+        offset += written;
     }
     if (ferror(file)) ok = false;
     fclose(file);
@@ -3003,7 +3008,6 @@ int main(void) {
                     unsigned cat = (unsigned)((touch.px - 10) / tabWidth);
                     if (cat < categoryCount) { teleportCategory = cat; teleportScroll = 0; teleportSelectedIndex = -1; }
                 } else if (touch.py >= 70 && touch.py < 210) {
-                    const unsigned maxRows = 7;
                     unsigned filtered[64];
                     unsigned filteredCount = 0;
                     for (unsigned i = 0; i < teleportDestinationCount; ++i)
