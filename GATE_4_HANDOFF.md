@@ -11,6 +11,7 @@ Gate 4 is an evidence-gathering spike, not a released promise that physical batt
 - Two authenticated clients delivered 53 bounded synthetic packets through production WSS, matched the relay's packet counters, and recovered from a hard guest disconnect. Measured round trip was 164-186 ms (171 ms average) with 4.5 ms mean absolute jitter.
 - Two isolated Azahar 2126.0 clients running v0.8.7 discovered Emerald's native avatars and Trading Board offer, exchanged CODEX's level 13 Torchic for LINZ's level 6 Marill, completed Emerald's native animation and automatic save, restarted, and loaded the exchanged parties. CODEX had two Marill and LINZ had two Torchic after restart.
 - RFU packets are drained inside gpSP's wait callback and once per emulated frame during a live link. Routine host-scan transitions no longer clear discovery state; explicit withdrawal and disconnect notifications still remove peers. External online-presence overlays are suppressed on native multiplayer maps.
+- The runtime teleport now writes the full `WarpData` location fields and triggers Emerald's map-reload callback sequence (`CB2_DoChangeMap` → `CB2_LoadMap2`) instead of only updating coordinates.
 - Server tests cover validation, authentication, isolation, packet routing, invalid data, host loss, and legacy-client rejection.
 
 ## Not yet proven
@@ -40,8 +41,8 @@ Use a fresh unpredictable code instead of the example on the public service. Con
 
 ## Current release 0.8.8
 
-- CIA: `release/emerald-online-3ds.cia` — `5b557cfe15dbb2ee8df8850c28bb28d4862c8164bead6135130498c91220b515`
-- 3DSX: `release/emerald-online-3ds.3dsx` — `3c2bf9c78a5be57a3310fc516a7c2c28c89e2e02220f36c3b919c8fb66c6d56f`
-- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.8.8.tar.gz` — `1e0cffeaa1725832d08f2b19f6bc03a1c92d9357c99a03b542e398ed0a91b713`
+- CIA: `release/emerald-online-3ds.cia` — `22a7d028a1798c0093c9dac30b2ee9976644c2143d171da295537d11656d3866`
+- 3DSX: `release/emerald-online-3ds.3dsx` — `7245700b63bbd4d2bd5e1bc4364d4b9124679d0a64914aaf12309029434e4408`
+- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.8.8.tar.gz` — `dab383e9c12dfc42717b0558eb70b0ed0db8e28c6c08e4f670269a9e20b2d9ee`
 - Example opt-in configuration: `release/online-link-spike.example.cfg`
-- Production image: `sha256:390b6d6e1cad67d502af9a5b5cc01c52e3c32e851f0f1ff6e3237903fe6c9d12`
+- Production image: `sha256:152b9643f8961cc53d420d331a0a694a5be1e87a4d5f14b7683d0310a62ed419`

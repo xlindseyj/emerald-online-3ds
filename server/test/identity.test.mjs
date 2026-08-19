@@ -6,7 +6,9 @@ import { createPresenceServer } from '../src/server.mjs';
 
 test('identity enrollment, recovery, revocation, export, and deletion', async () => {
   const store = new MemoryIdentityStore();
+  assert.equal(await store.count(), 0);
   const enrollment = await store.enroll({ withRecovery: true });
+  assert.equal(await store.count(), 1);
   assert.match(enrollment.identityId, /^[0-9a-f-]{36}$/);
   assert.match(enrollment.token, /^[0-9a-f]{64}$/);
   assert.match(enrollment.fingerprint, /^[0-9A-F]{10}$/);
@@ -29,6 +31,7 @@ test('identity enrollment, recovery, revocation, export, and deletion', async ()
   assert.equal(await store.authenticate(recovered.identityId, recovered.token), null);
   assert.equal(await store.deleteIdentity(enrollment.identityId), true);
   assert.equal(await store.exportIdentity(enrollment.identityId), null);
+  assert.equal(await store.count(), 0);
 });
 
 function connect(port) {

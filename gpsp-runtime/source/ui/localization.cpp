@@ -213,6 +213,25 @@ static const char* english(LocalizedString key) {
     case LS_HINT_TYPE_YES_UPLOAD: return "Type YES: upload Seen, Caught, Badges, Frontier";
     case LS_HINT_TYPE_DELETE_ERASE: return "Type DELETE to erase all uploaded stats";
 
+    case LS_QUEST_LOG: return "QUEST LOG";
+    case LS_NO_QUESTS: return "No quests available";
+    case LS_TALK: return "TALK";
+    case LS_HARVEST: return "HARVEST";
+    case LS_ACCEPT_QUEST: return "ACCEPT QUEST";
+    case LS_QUEST_COMPLETED: return "QUEST COMPLETED";
+    case LS_QUEST_REWARD_TITLE: return "Title unlocked:";
+    case LS_NPC_DIALOGUE_TITLE: return "NPC DIALOGUE";
+    case LS_QUEST_ACCEPTED: return "Quest accepted!";
+
+    case LS_TITLE_LOG: return "TITLE LOG";
+    case LS_FRIENDS_LIST: return "FRIENDS";
+    case LS_NO_TITLES: return "No titles unlocked";
+    case LS_NO_FRIENDS: return "No friends yet";
+    case LS_EQUIPPED: return "EQUIPPED";
+
+    case LS_GUILD: return "GUILD";
+    case LS_NO_GUILD: return "Not in a guild";
+
     case LS_COUNT: break;
     }
     return "";

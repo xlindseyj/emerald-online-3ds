@@ -14,6 +14,7 @@ const httpSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp
 const svchaxSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../gpsp-runtime/source/ctr_svchax.c'), 'utf8');
 const gpspMainSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/main.c'), 'utf8');
 const gpspRfuSource = fs.readFileSync(path.resolve(import.meta.dirname, '../../third_party/gpsp/rfu.c'), 'utf8');
+const copyTo3dsScript = fs.readFileSync(path.resolve(import.meta.dirname, '../../scripts/copy-to-3ds.sh'), 'utf8');
 
 const runtimeSource = gpspSource + pagesSource + pagesHeaderSource + httpSource + localizationHeaderSource + localizationSource + logHeaderSource + logSource;
 
@@ -216,9 +217,12 @@ test('gpSP bottom screen exposes paged users plus readable map and global chat l
   assert.match(runtimeSource, /TAP TO READ/);
   assert.match(pagesSource, /chatPage \* 3/);
   assert.match(pagesSource, /localize\(LS_COMPOSE\)/);
-  assert.match(gpspSource, /bottomPage \+ 1\) % 9/);
+  assert.match(gpspSource, /bottomPage \+ 1\) % 13/);
   assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
   assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
+  assert.match(gpspSource, /!strcmp\(equals, "titles"\) \? PAGE_TITLES/);
+  assert.match(gpspSource, /!strcmp\(equals, "friends"\) \? PAGE_FRIENDS/);
+  assert.match(gpspSource, /!strcmp\(equals, "guild"\) \? PAGE_GUILD/);
   assert.match(gpspSource, /!strcmp\(equals, "teleport"\) \? PAGE_TELEPORT/);
   assert.match(gpspSource, /drawConnectionDot/);
   assert.match(gpspSource, /ONLINE_ACTIVE/);
@@ -239,8 +243,20 @@ test('gpSP teleport page is server-verified and writes GBA location fields', () 
   assert.match(gpspSource, /\\"type\\":\\"teleport\\",\\"destination_id\\":\\"%s\\"/);
   assert.match(gpspSource, /\\"type\\":\\"teleport_locations\\"/);
   assert.match(gpspSource, /applyTeleport/);
-  assert.match(gpspSource, /gbaEwram\[offset \+ 4\] = mapGroup/);
-  assert.match(gpspSource, /gbaEwram\[offset \+ 5\] = mapNum/);
+  assert.match(gpspSource, /EMERALD_CB2_DO_CHANGE_MAP_THUMB = 0x08134B45/);
+  assert.match(gpspSource, /EMERALD_CB2_LOAD_MAP2_THUMB = 0x080860C9/);
+  const teleportStart = gpspSource.indexOf('static void applyTeleport');
+  const teleportEnd = gpspSource.indexOf('static bool parseVersion', teleportStart);
+  const teleportSource = gpspSource.slice(teleportStart, teleportEnd);
+  assert.match(teleportSource, /if \(!isEmeraldOverworld\(\)\) return;/);
+  assert.match(teleportSource, /gbaEwram\[offset \+ 4\] = mapGroup/);
+  assert.match(teleportSource, /gbaEwram\[offset \+ 5\] = mapNum/);
+  assert.match(teleportSource, /gbaEwram\[offset \+ 0x06\] = 0xFF/);
+  assert.match(teleportSource, /gbaEwram\[offset \+ 0x08\]/);
+  assert.match(teleportSource, /gbaEwram\[offset \+ 0x0A\]/);
+  assert.match(teleportSource, /gbaIwram\[EMERALD_GMAIN_STATE_OFFSET\] = 0/);
+  assert.match(teleportSource, /write32\(gbaIwram, EMERALD_GMAIN_SAVED_CALLBACK_OFFSET, EMERALD_CB2_LOAD_MAP2_THUMB\)/);
+  assert.match(teleportSource, /write32\(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET, EMERALD_CB2_DO_CHANGE_MAP_THUMB\)/);
 });
 
 test('gpSP update page detects, downloads, verifies, and installs releases', () => {
@@ -256,7 +272,7 @@ test('gpSP update page detects, downloads, verifies, and installs releases', () 
   assert.match(gpspSource, /replace3dsx/);
   assert.match(gpspSource, /\/api\/release/);
   assert.match(gpspSource, /UPDATE_DIRECTORY/);
-  assert.match(gpspSource, /% 9/);
+  assert.match(gpspSource, /% 13/);
 });
 
 test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups', () => {
@@ -302,6 +318,32 @@ test('gpSP RFU preserves transient scans while clearing genuine peer withdrawals
   const clearPeer = gpspRfuSource.indexOf('memset(&rfu_peer_bcst[client_id]', receiveStop);
   assert.ok(receiveStop >= 0 && clearPeer > receiveStop, 'room withdrawal must clear the matching peer advertisement');
   assert.match(gpspRfuSource, /case NET_RFU_DISCONNECT:[\s\S]*rfu_peer_bcst\[client_id\]\.device_id == \(hdata & 0xffff\)[\s\S]*memset\(&rfu_peer_bcst\[client_id\]/);
+});
+
+test('gpSP RFU treats SEND_DATAW as a non-blocking send to avoid Union Room battle timeouts', () => {
+  const datawCase = gpspRfuSource.indexOf('case RFU_CMD_SEND_DATAW:');
+  const waitCase = gpspRfuSource.indexOf('case RFU_CMD_WAIT:');
+  const rtxCase = gpspRfuSource.indexOf('case RFU_CMD_RTX_WAIT:');
+  assert.ok(datawCase >= 0, 'RFU_CMD_SEND_DATAW handler must exist');
+  assert.ok(waitCase > datawCase, 'RFU_CMD_WAIT must be defined after SEND_DATAW');
+  assert.ok(rtxCase > datawCase, 'RFU_CMD_RTX_WAIT must be defined after SEND_DATAW');
+  assert.match(gpspRfuSource, /SEND_DATAW is intentionally excluded/);
+  assert.match(gpspRfuSource, /case RFU_CMD_SEND_DATAW:\s*case RFU_CMD_SEND_DATA:/s);
+  // The blocking branch that flips the RFU into master/wait mode must include
+  // WAIT and RTX_WAIT, but not SEND_DATAW.
+  const blockingCondition = gpspRfuSource.match(/if \(rfu_cmd == RFU_CMD_WAIT \|\| rfu_cmd == RFU_CMD_RTX_WAIT\)/);
+  assert.ok(blockingCondition, 'blocking condition must match only WAIT and RTX_WAIT');
+  assert.doesNotMatch(gpspRfuSource, /rfu_cmd == RFU_CMD_SEND_DATAW/);
+});
+
+test('physical 3DS transfer script copies release CIA and 3DSX to standard SD paths', () => {
+  assert.match(copyTo3dsScript, /Usage: \$0 <3ds-ip> \[ftp-port\]/);
+  assert.match(copyTo3dsScript, /release\/emerald-online-3ds\.cia/);
+  assert.match(copyTo3dsScript, /release\/emerald-online-3ds\.3dsx/);
+  assert.match(copyTo3dsScript, /\/cias\/emerald-online-3ds\.cia/);
+  assert.match(copyTo3dsScript, /\/3ds\/emerald-online-3ds\/emerald-online-3ds\.3dsx/);
+  assert.match(copyTo3dsScript, /curl -T/);
+  assert.doesNotMatch(copyTo3dsScript, /192\.168\./);
 });
 
 test('gpSP does not touch unmapped 3DS translation caches in interpreter mode', () => {
@@ -365,4 +407,62 @@ test('runtime Phase 4 upgrades: runtime observability', () => {
   assert.match(gpspSource, /gpsp-debug\.log/);
   assert.match(gpspSource, /runtimeLogUploadRecent/);
   assert.match(gpspSource, /debugStage[\s\S]*?runtimeLogPrintf/s);
+});
+
+test('runtime renders online NPCs and a quest log on the bottom screen', () => {
+  assert.match(pagesHeaderSource, /PAGE_QUESTS/);
+  assert.match(pagesSource, /void drawQuestPage\(void\)/);
+  assert.match(pagesSource, /void drawNpcDialogueOverlay\(void\)/);
+  assert.match(runtimeSource, /OnlineNpc onlineNpcs\[8\]/);
+  assert.match(runtimeSource, /QuestLogEntry questLog\[8\]/);
+  assert.match(runtimeSource, /NpcDialogue npcDialogue/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "npc_snapshot"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "npc_dialogue"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "quest_update"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "quest_list"\)/);
+  assert.match(gpspSource, /sendNpcInteract\(/);
+  assert.match(gpspSource, /sendQuestAccept\(/);
+  assert.match(gpspSource, /requestQuestList\(/);
+  assert.match(gpspSource, /drawNpcDialogueOverlay\(\)/);
+});
+
+test('runtime Phase 2 upgrades: titles and friends pages', () => {
+  assert.match(pagesHeaderSource, /PAGE_TITLES/);
+  assert.match(pagesHeaderSource, /PAGE_FRIENDS/);
+  assert.match(pagesSource, /void drawTitlesPage\(void\)/);
+  assert.match(pagesSource, /void drawFriendsPage\(void\)/);
+  assert.match(runtimeSource, /TitleEntry playerTitles\[16\]/);
+  assert.match(runtimeSource, /FriendEntry playerFriends\[32\]/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "title_list"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "title_equipped"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "friend_list"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "friend_result"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "friend_removed"\)/);
+  assert.match(gpspSource, /sendTitleEquip\(/);
+  assert.match(gpspSource, /sendFriendRequest\(/);
+  assert.match(gpspSource, /sendFriendAccept\(/);
+  assert.match(gpspSource, /sendFriendRemove\(/);
+  assert.match(gpspSource, /requestFriendList\(/);
+  assert.match(gpspSource, /drawTitlesPage\(\)/);
+  assert.match(gpspSource, /drawFriendsPage\(\)/);
+  assert.match(localizationSource, /LS_TITLE_LOG/);
+  assert.match(localizationSource, /LS_FRIENDS_LIST/);
+});
+
+test('runtime Phase 3 upgrades: guild page and protocol', () => {
+  assert.match(pagesHeaderSource, /PAGE_GUILD/);
+  assert.match(pagesSource, /void drawGuildPage\(void\)/);
+  assert.match(runtimeSource, /GuildInfo guildInfo/);
+  assert.match(runtimeSource, /GuildMember guildMembers\[50\]/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "guild_info"\)/);
+  assert.match(gpspSource, /jsonTypeIs\(line, "guild_update"\)/);
+  assert.match(gpspSource, /sendGuildCreate\(/);
+  assert.match(gpspSource, /sendGuildJoin\(/);
+  assert.match(gpspSource, /sendGuildLeave\(/);
+  assert.match(gpspSource, /sendGuildDisband\(/);
+  assert.match(gpspSource, /sendGuildKick\(/);
+  assert.match(gpspSource, /requestGuildInfo\(/);
+  assert.match(gpspSource, /drawGuildPage\(\)/);
+  assert.match(localizationSource, /LS_GUILD/);
+  assert.match(localizationSource, /LS_NO_GUILD/);
 });

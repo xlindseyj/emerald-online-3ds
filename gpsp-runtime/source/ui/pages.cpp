@@ -242,6 +242,21 @@ void drawMapPage(void) {
         const uint32_t color = remoteTrainers[index].isGirl ? C2D_Color32(232,111,170,255) : C2D_Color32(80,164,245,255);
         C2D_DrawRectSolid(centerX + shownX * 10 - 5, centerY + shownY * 10 - 5, .2f, 11, 11, color);
     }
+    for (int index = 0; index < (int)onlineNpcCount; ++index) {
+        int dx = onlineNpcs[index].x - presence.x, dy = onlineNpcs[index].y - presence.y;
+        int shownX = dx < -9 ? -9 : dx > 9 ? 9 : dx;
+        int shownY = dy < -8 ? -8 : dy > 8 ? 8 : dy;
+        C2D_DrawRectSolid(centerX + shownX * 10 - 5, centerY + shownY * 10 - 5, .2f, 11, 11, C2D_Color32(130, 220, 120, 255));
+    }
+    for (unsigned index = 0; index < resourceNodeCount; ++index) {
+        int dx = resourceNodes[index].x - presence.x, dy = resourceNodes[index].y - presence.y;
+        int shownX = dx < -9 ? -9 : dx > 9 ? 9 : dx;
+        int shownY = dy < -8 ? -8 : dy > 8 ? 8 : dy;
+        const uint32_t color = resourceNodes[index].available
+            ? C2D_Color32(210, 150, 70, 255)
+            : C2D_Color32(120, 120, 120, 255);
+        C2D_DrawRectSolid(centerX + shownX * 10 - 4, centerY + shownY * 10 - 4, .2f, 9, 9, color);
+    }
     drawText(224, 48, .34f, C2D_Color32(160,232,255,255), "%s", localize(LS_LOCAL_RADAR));
     drawText(224, 69, .31f, C2D_Color32(255,255,255,255), localize(LS_MAP_FORMAT), presence.mapGroup, presence.mapNum);
     drawText(224, 87, .31f, C2D_Color32(255,255,255,255), localize(LS_TILE_FORMAT), presence.x, presence.y);
@@ -252,6 +267,20 @@ void drawMapPage(void) {
         drawText(224, 150 + index * 18, .29f, C2D_Color32(255,255,255,255), "%.8s %dt", remoteTrainers[index].name, distance);
     }
     if (!remoteCount) drawText(228, 153, .29f, C2D_Color32(180,205,200,255), "%s", localize(LS_NO_TRAINERS));
+    for (unsigned index = 0; index < onlineNpcCount; ++index) {
+        if (abs(onlineNpcs[index].x - presence.x) + abs(onlineNpcs[index].y - presence.y) <= 2) {
+            C2D_DrawRectSolid(10, 200, 0, 300, 24, C2D_Color32(35, 145, 88, 255));
+            drawText(130, 205, .34f, C2D_Color32(255, 255, 255, 255), "%s (A)", localize(LS_TALK));
+            break;
+        }
+    }
+    for (unsigned index = 0; index < resourceNodeCount; ++index) {
+        if (resourceNodes[index].available && abs(resourceNodes[index].x - presence.x) + abs(resourceNodes[index].y - presence.y) <= 2) {
+            C2D_DrawRectSolid(10, 200, 0, 300, 24, C2D_Color32(145, 100, 45, 255));
+            drawText(120, 205, .34f, C2D_Color32(255, 255, 255, 255), "%s (A)", localize(LS_HARVEST));
+            break;
+        }
+    }
 }
 
 void drawStatsPage(void) {
@@ -435,6 +464,119 @@ void drawTeleportPage(void) {
     }
     if (teleportStatus[0] && (!teleportStatusUntil || osGetTime() < teleportStatusUntil))
         drawText(15, 64, .29f, C2D_Color32(255,220,130,255), "%.46s", teleportStatus);
+}
+
+void drawQuestPage(void) {
+    if (!questLogCount) {
+        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_QUESTS));
+        return;
+    }
+    const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
+    if (questLogPage >= pageCount) questLogPage = pageCount - 1;
+    const unsigned start = questLogPage * 6;
+    for (unsigned row = 0; row < 6; ++row) {
+        const float y = 42 + row * 30;
+        C2D_DrawRectSolid(10, y, 0, 300, 27, C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        const unsigned index = start + row;
+        if (index >= questLogCount) continue;
+        const QuestLogEntry* entry = &questLog[index];
+        drawText(14, y + 3, .35f, C2D_Color32(255,255,255,255), "%.30s", entry->title);
+        drawText(14, y + 15, .28f, C2D_Color32(190,220,210,255), "%.20s", entry->status);
+    }
+    C2D_DrawRectSolid(10, 216, 0, 145, 24, questLogPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(165, 216, 0, 145, 24, questLogPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
+}
+
+void drawTitlesPage(void) {
+    if (!playerTitleCount) {
+        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_TITLES));
+        return;
+    }
+    const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
+    if (playerTitlePage >= pageCount) playerTitlePage = pageCount - 1;
+    const unsigned start = playerTitlePage * 6;
+    for (unsigned row = 0; row < 6; ++row) {
+        const float y = 42 + row * 30;
+        const unsigned index = start + row;
+        bool selected = index == playerTitleSelected;
+        C2D_DrawRectSolid(10, y, 0, 300, 27, selected ? C2D_Color32(34,126,82,255) : C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        if (index >= playerTitleCount) continue;
+        const TitleEntry* entry = &playerTitles[index];
+        drawText(14, y + 3, .35f, C2D_Color32(255,255,255,255), "%.30s", entry->title);
+        if (entry->equipped)
+            drawText(240, y + 3, .30f, C2D_Color32(255,213,128,255), "%s", localize(LS_EQUIPPED));
+    }
+    C2D_DrawRectSolid(10, 216, 0, 145, 24, playerTitlePage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(165, 216, 0, 145, 24, playerTitlePage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
+}
+
+void drawFriendsPage(void) {
+    if (!playerFriendCount) {
+        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_FRIENDS));
+        return;
+    }
+    const unsigned pageCount = playerFriendCount ? (playerFriendCount + 5) / 6 : 1;
+    if (playerFriendPage >= pageCount) playerFriendPage = pageCount - 1;
+    const unsigned start = playerFriendPage * 6;
+    for (unsigned row = 0; row < 6; ++row) {
+        const float y = 42 + row * 30;
+        const unsigned index = start + row;
+        bool selected = index == playerFriendSelected;
+        C2D_DrawRectSolid(10, y, 0, 300, 27, selected ? C2D_Color32(34,126,82,255) : C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        if (index >= playerFriendCount) continue;
+        const FriendEntry* entry = &playerFriends[index];
+        drawText(14, y + 3, .35f, C2D_Color32(255,255,255,255), "%.12s", entry->name);
+        drawText(210, y + 3, .28f, entry->online ? C2D_Color32(130,255,176,255) : C2D_Color32(180,190,185,255), "%s", entry->online ? localize(LS_ONLINE) : localize(LS_OFFLINE));
+        drawText(14, y + 15, .27f, C2D_Color32(190,220,210,255), "%s %.10s", entry->status, entry->fingerprint);
+    }
+    C2D_DrawRectSolid(10, 216, 0, 145, 24, playerFriendPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(165, 216, 0, 145, 24, playerFriendPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
+}
+
+void drawGuildPage(void) {
+    if (!guildInfo.active) {
+        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_GUILD));
+        return;
+    }
+    drawText(14, 42, .38f, C2D_Color32(255,213,128,255), "[%.6s] %.30s", guildInfo.tag, guildInfo.name);
+    const unsigned pageCount = guildMemberCount ? (guildMemberCount + 5) / 6 : 1;
+    if (guildMemberPage >= pageCount) guildMemberPage = pageCount - 1;
+    const unsigned start = guildMemberPage * 6;
+    for (unsigned row = 0; row < 6; ++row) {
+        const float y = 68 + row * 24;
+        const unsigned index = start + row;
+        C2D_DrawRectSolid(10, y, 0, 300, 22, C2D_Color32(row & 1 ? 22 : 25, row & 1 ? 61 : 74, row & 1 ? 46 : 54, 255));
+        if (index >= guildMemberCount) continue;
+        const GuildMember* member = &guildMembers[index];
+        drawText(14, y + 3, .32f, C2D_Color32(255,255,255,255), "%.10s", member->fingerprint);
+        drawText(230, y + 3, .28f, C2D_Color32(190,220,210,255), "%s", member->role);
+    }
+    C2D_DrawRectSolid(10, 216, 0, 145, 24, guildMemberPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    C2D_DrawRectSolid(165, 216, 0, 145, 24, guildMemberPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+    drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
+    drawText(212, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_NEXT));
+}
+
+void drawNpcDialogueOverlay(void) {
+    if (!npcDialogue.active) return;
+    C2D_DrawRectSolid(10, 40, 0, 300, 180, C2D_Color32(20, 50, 38, 230));
+    drawText(20, 50, .40f, C2D_Color32(160, 232, 255, 255), "%s", localize(LS_NPC_DIALOGUE_TITLE));
+    for (unsigned i = 0; i < npcDialogue.lineCount && i < 4; ++i)
+        drawText(20, 84 + i * 28, .35f, C2D_Color32(255, 255, 255, 255), "%.48s", npcDialogue.lines[i]);
+    if (npcDialogue.quest_id[0]) {
+        drawText(20, 170, .30f, C2D_Color32(255, 213, 128, 255), "%.30s", npcDialogue.quest_title);
+        C2D_DrawRectSolid(10, 196, 0, 300, 24, C2D_Color32(35, 145, 88, 255));
+        drawText(90, 201, .34f, C2D_Color32(255, 255, 255, 255), "%s (A)", localize(LS_ACCEPT_QUEST));
+    } else {
+        C2D_DrawRectSolid(10, 196, 0, 300, 24, C2D_Color32(45, 105, 76, 255));
+        drawText(130, 201, .34f, C2D_Color32(255, 255, 255, 255), "%s (A)", localize(LS_TALK));
+    }
 }
 
 void drawUpdatePage(void) {

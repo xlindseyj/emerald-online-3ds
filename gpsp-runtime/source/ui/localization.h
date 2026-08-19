@@ -202,6 +202,28 @@ enum LocalizedString {
     LS_HINT_TYPE_YES_UPLOAD,
     LS_HINT_TYPE_DELETE_ERASE,
 
+    // Quest / NPC strings.
+    LS_QUEST_LOG,
+    LS_NO_QUESTS,
+    LS_TALK,
+    LS_HARVEST,
+    LS_ACCEPT_QUEST,
+    LS_QUEST_COMPLETED,
+    LS_QUEST_REWARD_TITLE,
+    LS_NPC_DIALOGUE_TITLE,
+    LS_QUEST_ACCEPTED,
+
+    // Title / friend strings.
+    LS_TITLE_LOG,
+    LS_FRIENDS_LIST,
+    LS_NO_TITLES,
+    LS_NO_FRIENDS,
+    LS_EQUIPPED,
+
+    // Guild strings.
+    LS_GUILD,
+    LS_NO_GUILD,
+
     LS_COUNT
 };
 

@@ -23,6 +23,7 @@ COPY assets/release-media ./assets/release-media
 COPY release/emerald-online-3ds.cia ./release/emerald-online-3ds.cia
 COPY release/emerald-online-3ds.3dsx ./release/emerald-online-3ds.3dsx
 COPY release/emerald-online-3ds-source-*.tar.gz ./release/
+COPY release/emerald-online-3ds.unistore ./release/emerald-online-3ds.unistore
 COPY release/SHA256SUMS ./release/SHA256SUMS
 COPY release/release-catalog.json ./release/release-catalog.json
 COPY release/known-issues.json ./release/known-issues.json

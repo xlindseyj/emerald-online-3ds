@@ -53,6 +53,11 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(healthBody.ciaUrl, 'https://emeraldonline3ds.com/emerald-online-3ds.cia');
   assert.equal(healthBody.gameUrl, 'wss://live.emeraldonline3ds.com/game');
 
+  const statusApi = await fetch(`${base}/api/status`);
+  assert.equal(statusApi.status, 200);
+  const statusBody = await statusApi.json();
+  assert.equal(typeof statusBody.registered, 'number');
+
   const metrics = await fetch(`http://127.0.0.1:${statusPort}/metrics`);
   assert.equal(metrics.status, 200);
   assert.match(metrics.headers.get('content-type'), /text\/plain/);
@@ -61,6 +66,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   const page = await fetch(base);
   const pageBody = await page.text();
   assert.match(pageBody, /Remote Install/);
+  assert.match(pageBody, /registered/);
   assert.match(pageBody, /live\.emeraldonline3ds\.com/);
   assert.match(pageBody, new RegExp(`Public multiplayer presence service · v${releaseVersion.replaceAll('.', '\\.')}`));
   assert.match(pageBody, /\.button\{display:inline-block;margin:10px 10px 0 0/);

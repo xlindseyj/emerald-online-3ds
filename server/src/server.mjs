@@ -7,11 +7,18 @@ import pg from 'pg';
 import { PostgresIdentityStore } from './identity-store.mjs';
 import { PostgresStatsStore } from './stats-store.mjs';
 import { PostgresTeleportStore, MemoryTeleportStore } from './teleport-store.mjs';
+import { PostgresNpcStore, MemoryNpcStore } from './npc-store.mjs';
+import { PostgresQuestStore, MemoryQuestStore } from './quest-store.mjs';
+import { PostgresResourceNodeStore, MemoryResourceNodeStore } from './resource-node-store.mjs';
+import { PostgresSkillStore, MemorySkillStore } from './skill-store.mjs';
+import { PostgresTitleStore, MemoryTitleStore } from './title-store.mjs';
+import { PostgresFriendStore, MemoryFriendStore } from './friend-store.mjs';
+import { PostgresGuildStore, MemoryGuildStore } from './guild-store.mjs';
 import { renderPrometheusMetrics } from './metrics.mjs';
-import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, validateTeleportLocations, validateTeleport, encode } from './protocol.mjs';
+import { VERSION, LEGACY_VERSION, MAX_LINE, validateHello, validateEnroll, validateRecover, validatePairBrowserApprove, validateStatsConsent, validateStatsSnapshot, validateLinkJoin, validateLinkPacket, validateState, validateChat, validateEmote, validateTeleportLocations, validateTeleport, validateNpcInteract, validateQuestAccept, validateQuestClaim, validateQuestList, validateResourceInteract, validateTitleList, validateTitleEquip, validateFriendRequest, validateFriendAccept, validateFriendRemove, validateFriendList, validateGuildCreate, validateGuildJoin, validateGuildLeave, validateGuildDisband, validateGuildKick, validateGuildInfo, npcInteractDistance, encode } from './protocol.mjs';
 import { listBuiltInDestinations, resolveBuiltInDestination } from './teleport-store.mjs';
 
-export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, rosterIntervalMs = 1000, identityStore = null, statsStore = null, teleportStore = null } = {}) {
+export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 30000, maxConnections = 64, maxConnectionsPerIp = 8, helloTimeoutMs = 5000, rosterIntervalMs = 1000, identityStore = null, statsStore = null, teleportStore = null, npcStore = null, questStore = null, resourceNodeStore = null, skillStore = null, titleStore = null, friendStore = null, guildStore = null } = {}) {
   const clients = new Map();
   const linkRooms = new Map();
   const rosterPageSize = 16;
@@ -26,8 +33,44 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
   const snapshot = (client) => {
     if (!client.state) return;
     const players = [...clients.values()].filter(c => c !== client && c.state?.map === client.state.map)
-      .map(c => ({ id: c.id, name: c.name, ...c.state }));
+      .map(c => ({ id: c.id, name: c.name, title: c.title ?? '', guild_tag: c.guildTag ?? '', ...c.state }));
     send(client.socket, { type: 'snapshot', map: client.state.map, players });
+  };
+  const sendNpcSnapshot = async (client) => {
+    if (!client.state || !npcStore) return;
+    const npcs = await npcStore.listNpcsForMap(client.state.map);
+    if (!npcs.length) return;
+    send(client.socket, {
+      type: 'npc_snapshot',
+      map: client.state.map,
+      npcs: npcs.map(npc => ({
+        npc_id: npc.slug,
+        name: npc.name,
+        x: npc.x,
+        y: npc.y,
+        facing: npc.facing,
+        sprite: npc.sprite,
+        quest_id: npc.quest_id ?? null
+      }))
+    });
+  };
+  const sendResourceSnapshot = async (client) => {
+    if (!client.state || !resourceNodeStore) return;
+    const nodes = await resourceNodeStore.listNodesForMap(client.state.map);
+    if (!nodes.length) return;
+    send(client.socket, {
+      type: 'resource_snapshot',
+      map: client.state.map,
+      nodes: nodes.map(node => ({
+        node_id: node.slug,
+        kind: node.kind,
+        x: node.x,
+        y: node.y,
+        level: node.level,
+        available: node.available,
+        respawn_in_ms: node.respawn_in_ms
+      }))
+    });
   };
   const publishRosters = () => {
     if (!rosterDirty) return;
@@ -38,7 +81,9 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       map: client.state?.map ?? '',
       x: client.state?.x ?? -1,
       y: client.state?.y ?? -1,
-      role: client.isAdmin ? 'admin' : client.isModerator ? 'moderator' : 'player'
+      role: client.isAdmin ? 'admin' : client.isModerator ? 'moderator' : 'player',
+      guild_name: client.guildName ?? '',
+      guild_tag: client.guildTag ?? ''
     })).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const pages = Math.max(1, Math.ceil(users.length / rosterPageSize));
     for (const client of clients.values()) {
@@ -134,7 +179,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       }
     }
   };
-  const finishAuthentication = (client, msg, auth = {}) => {
+  const finishAuthentication = async (client, msg, auth = {}) => {
     client.id = auth.identity_id ?? client.id;
     client.identityId = auth.identity_id ?? null;
     client.credentialId = auth.credential_id ?? null;
@@ -144,6 +189,19 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     client.protocolVersion = msg.version;
     client.name = msg.name;
     client.avatar = msg.avatar === 'girl' ? 'girl' : 'boy';
+    client.title = '';
+    if (titleStore && client.identityId) {
+      try { client.title = await titleStore.getEquippedTitle(client.identityId) ?? ''; } catch {}
+    } else if (questStore && client.identityId) {
+      try { client.title = await questStore.getEquippedTitle(client.identityId) ?? ''; } catch {}
+    }
+    if (guildStore && client.identityId) {
+      try {
+        const guild = await guildStore.getGuildForIdentity(client.identityId);
+        client.guildName = guild?.name ?? '';
+        client.guildTag = guild?.tag ?? '';
+      } catch {}
+    }
     if (client.helloTimer) clearTimeout(client.helloTimer);
     client.helloTimer = null;
     metrics.hellos++;
@@ -188,7 +246,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       if (validateEnroll(msg)) {
         if (!identityStore) return fail(socket, 'identity_unavailable');
         const enrollment = await identityStore.enroll({ withRecovery: msg.recovery === true });
-        finishAuthentication(client, msg, { identity_id: enrollment.identityId, credential_id: enrollment.credentialId, fingerprint: enrollment.fingerprint });
+        await finishAuthentication(client, msg, { identity_id: enrollment.identityId, credential_id: enrollment.credentialId, fingerprint: enrollment.fingerprint });
         metrics.enrollments++;
         send(socket, { type: 'enrolled', version: VERSION, id: enrollment.identityId, credentialId: enrollment.credentialId, token: enrollment.token, fingerprint: enrollment.fingerprint, role: enrollment.is_admin ? 'admin' : enrollment.is_moderator ? 'moderator' : 'player', ...(enrollment.recoveryCode ? { recoveryCode: enrollment.recoveryCode } : {}) });
         return;
@@ -197,7 +255,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
         if (!identityStore) return fail(socket, 'identity_unavailable');
         const recovered = await identityStore.recover(msg.identity, msg.recoveryCode);
         if (!recovered) { metrics.authenticationFailures++; return fail(socket, 'recovery_failed'); }
-        finishAuthentication(client, msg, { identity_id: recovered.identityId, credential_id: recovered.credentialId, fingerprint: recovered.fingerprint });
+        await finishAuthentication(client, msg, { identity_id: recovered.identityId, credential_id: recovered.credentialId, fingerprint: recovered.fingerprint });
         metrics.recoveries++;
         send(socket, { type: 'identity_recovered', version: VERSION, id: recovered.identityId, credentialId: recovered.credentialId, token: recovered.token, fingerprint: recovered.fingerprint, role: recovered.is_admin ? 'admin' : recovered.is_moderator ? 'moderator' : 'player' });
         return;
@@ -207,8 +265,8 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
         if (!identityStore) return fail(socket, 'identity_unavailable');
         const auth = await identityStore.authenticate(msg.identity, msg.token);
         if (!auth) { metrics.authenticationFailures++; return fail(socket, 'authentication_failed'); }
-        finishAuthentication(client, msg, auth);
-        send(socket, { type: 'welcome', version: VERSION, id: client.id, fingerprint: client.fingerprint, role: client.isAdmin ? 'admin' : client.isModerator ? 'moderator' : 'player' });
+        await finishAuthentication(client, msg, auth);
+        send(socket, { type: 'welcome', version: VERSION, id: client.id, fingerprint: client.fingerprint, role: client.isAdmin ? 'admin' : client.isModerator ? 'moderator' : 'player', title: client.title ?? '' });
         return;
       }
       if (msg.version !== LEGACY_VERSION) return fail(socket, 'unsupported_version');
@@ -216,7 +274,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
         client.session = msg.session.toLowerCase();
         client.id = stableId(client.session);
       }
-      finishAuthentication(client, msg);
+      await finishAuthentication(client, msg);
       send(socket, { type: 'welcome', version: LEGACY_VERSION, latestVersion: VERSION, id: client.id });
       return;
     }
@@ -315,12 +373,267 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
       });
       return;
     }
+    if (msg.type === 'npc_interact') {
+      if (!client.state || !validateNpcInteract(msg)) return send(socket, { type: 'error', code: 'invalid_npc_interact' });
+      if (!npcStore) return send(socket, { type: 'error', code: 'npc_unavailable' });
+      const npc = await npcStore.findNpcBySlug(msg.npc_id);
+      if (!npc || npc.map !== client.state.map || npcInteractDistance(client.state.x, client.state.y, npc.x, npc.y) > 2) {
+        return send(socket, { type: 'error', code: 'npc_not_nearby' });
+      }
+      const questOffered = npc.quest_id && questStore ? await questStore.findQuestById(npc.quest_id) : null;
+      const questUpdates = (client.identityId && questStore) ? await questStore.recordNpcInteraction(client.identityId, npc.slug) : [];
+      send(socket, {
+        type: 'npc_dialogue',
+        npc_id: npc.slug,
+        lines: npc.dialogue,
+        quest_offered: questOffered ? { quest_id: questOffered.id, title: questOffered.title, description: questOffered.description } : null,
+        quest_updates: questUpdates.map(q => ({ quest_id: q.quest_id, status: q.status }))
+      });
+      if (client.identityId) npcStore.auditNpcInteract(client.identityId, npc.slug).catch(() => {});
+      return;
+    }
+    if (msg.type === 'quest_accept') {
+      if (!client.identityId || !questStore) return send(socket, { type: 'error', code: 'quest_unavailable' });
+      if (!validateQuestAccept(msg)) return send(socket, { type: 'error', code: 'invalid_quest_accept' });
+      const result = await questStore.acceptQuest(client.identityId, msg.quest_id);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      if (result.reward?.kind === 'title' && result.reward.data?.title) client.title = result.reward.data.title;
+      send(socket, {
+        type: 'quest_update',
+        quest_id: result.quest.id,
+        slug: result.quest.slug,
+        title: result.quest.title,
+        status: result.progress.status,
+        progress: result.progress.progress,
+        reward: result.reward ?? null
+      });
+      return;
+    }
+    if (msg.type === 'quest_claim') {
+      if (!client.identityId || !questStore) return send(socket, { type: 'error', code: 'quest_unavailable' });
+      if (!validateQuestClaim(msg)) return send(socket, { type: 'error', code: 'invalid_quest_claim' });
+      const result = await questStore.claimReward(client.identityId, msg.quest_id);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      if (result.reward?.kind === 'title' && result.reward.data?.title) client.title = result.reward.data.title;
+      send(socket, {
+        type: 'quest_update',
+        quest_id: msg.quest_id,
+        status: result.progress.status,
+        progress: result.progress.progress,
+        reward: result.reward ?? null
+      });
+      return;
+    }
+    if (msg.type === 'quest_list') {
+      if (!client.identityId || !questStore) return send(socket, { type: 'error', code: 'quest_unavailable' });
+      if (!validateQuestList(msg)) return send(socket, { type: 'error', code: 'invalid_quest_list' });
+      const quests = await questStore.listQuestsForIdentity(client.identityId);
+      send(socket, { type: 'quest_list', quests });
+      return;
+    }
+    if (msg.type === 'title_list') {
+      if (!client.identityId || !titleStore) return send(socket, { type: 'error', code: 'title_unavailable' });
+      if (!validateTitleList(msg)) return send(socket, { type: 'error', code: 'invalid_title_list' });
+      const titles = await titleStore.listTitles(client.identityId);
+      send(socket, { type: 'title_list', titles });
+      return;
+    }
+    if (msg.type === 'title_equip') {
+      if (!client.identityId || !titleStore) return send(socket, { type: 'error', code: 'title_unavailable' });
+      if (!validateTitleEquip(msg)) return send(socket, { type: 'error', code: 'invalid_title_equip' });
+      const result = await titleStore.equipTitle(client.identityId, msg.title);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      client.title = result.equipped;
+      rosterDirty = true;
+      send(socket, { type: 'title_equipped', title: result.equipped });
+      return;
+    }
+    const sendFriendUpdate = async (identityId) => {
+      if (!friendStore) return;
+      const friends = await friendStore.listFriends(identityId);
+      for (const peer of clients.values()) {
+        if (!peer.identityId || peer.identityId === identityId) continue;
+        const isFriend = friends.some(f => f.identity_id === peer.identityId && f.status === 'accepted');
+        if (isFriend) send(peer.socket, { type: 'friend_update', identity_id: identityId, online: true });
+      }
+    };
+    const sendGuildUpdate = async (guildId) => {
+      if (!guildStore || !guildId) return;
+      for (const peer of clients.values()) {
+        if (!peer.identityId) continue;
+        const membership = await guildStore.getGuildForIdentity(peer.identityId);
+        if (membership?.id === guildId) send(peer.socket, { type: 'guild_update' });
+      }
+    };
+    if (msg.type === 'friend_request') {
+      if (!client.identityId || !friendStore) return send(socket, { type: 'error', code: 'friend_unavailable' });
+      if (!validateFriendRequest(msg)) return send(socket, { type: 'error', code: 'invalid_friend_request' });
+      const result = await friendStore.requestFriend(client.identityId, msg.fingerprint);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      send(socket, { type: 'friend_result', fingerprint: msg.fingerprint, status: result.status });
+      if (result.status === 'accepted') {
+        const target = [...clients.values()].find(c => c.fingerprint === msg.fingerprint);
+        if (target) {
+          send(target.socket, { type: 'friend_result', fingerprint: client.fingerprint, status: 'accepted' });
+          sendFriendUpdate(client.identityId);
+          sendFriendUpdate(target.identityId);
+        }
+      }
+      return;
+    }
+    if (msg.type === 'friend_accept') {
+      if (!client.identityId || !friendStore) return send(socket, { type: 'error', code: 'friend_unavailable' });
+      if (!validateFriendAccept(msg)) return send(socket, { type: 'error', code: 'invalid_friend_accept' });
+      const result = await friendStore.acceptFriend(client.identityId, msg.fingerprint);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      send(socket, { type: 'friend_result', fingerprint: msg.fingerprint, status: result.status });
+      const target = [...clients.values()].find(c => c.fingerprint === msg.fingerprint);
+      if (target) {
+        send(target.socket, { type: 'friend_result', fingerprint: client.fingerprint, status: 'accepted' });
+        sendFriendUpdate(client.identityId);
+        sendFriendUpdate(target.identityId);
+      }
+      return;
+    }
+    if (msg.type === 'friend_remove') {
+      if (!client.identityId || !friendStore) return send(socket, { type: 'error', code: 'friend_unavailable' });
+      if (!validateFriendRemove(msg)) return send(socket, { type: 'error', code: 'invalid_friend_remove' });
+      const result = await friendStore.removeFriend(client.identityId, msg.fingerprint);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      send(socket, { type: 'friend_removed', fingerprint: msg.fingerprint });
+      const target = [...clients.values()].find(c => c.fingerprint === msg.fingerprint);
+      if (target) send(target.socket, { type: 'friend_removed', fingerprint: client.fingerprint });
+      return;
+    }
+    if (msg.type === 'friend_list') {
+      if (!client.identityId || !friendStore) return send(socket, { type: 'error', code: 'friend_unavailable' });
+      if (!validateFriendList(msg)) return send(socket, { type: 'error', code: 'invalid_friend_list' });
+      const friends = await friendStore.listFriends(client.identityId);
+      const enriched = friends.map(f => {
+        const peer = [...clients.values()].find(c => c.identityId === f.identity_id);
+        return {
+          fingerprint: peer?.fingerprint ?? '',
+          name: peer?.name ?? '',
+          status: f.status,
+          is_requester: f.is_requester,
+          online: Boolean(peer?.name),
+          map: peer?.state?.map ?? '',
+          x: peer?.state?.x ?? -1,
+          y: peer?.state?.y ?? -1
+        };
+      });
+      send(socket, { type: 'friend_list', friends: enriched });
+      return;
+    }
+    if (msg.type === 'guild_create') {
+      if (!client.identityId || !guildStore) return send(socket, { type: 'error', code: 'guild_unavailable' });
+      if (!validateGuildCreate(msg)) return send(socket, { type: 'error', code: 'invalid_guild_create' });
+      const result = await guildStore.createGuild(client.identityId, msg.name, msg.tag);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      client.guildName = result.guild.name;
+      client.guildTag = result.guild.tag;
+      rosterDirty = true;
+      const info = await guildStore.getGuildInfo(client.identityId);
+      send(socket, { type: 'guild_info', ...info });
+      return;
+    }
+    if (msg.type === 'guild_join') {
+      if (!client.identityId || !guildStore) return send(socket, { type: 'error', code: 'guild_unavailable' });
+      if (!validateGuildJoin(msg)) return send(socket, { type: 'error', code: 'invalid_guild_join' });
+      const result = await guildStore.joinGuild(client.identityId, msg.name);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      client.guildName = result.guild.name;
+      client.guildTag = result.guild.tag;
+      rosterDirty = true;
+      sendGuildUpdate(result.guild.id);
+      const info = await guildStore.getGuildInfo(client.identityId);
+      send(socket, { type: 'guild_info', ...info });
+      return;
+    }
+    if (msg.type === 'guild_leave') {
+      if (!client.identityId || !guildStore) return send(socket, { type: 'error', code: 'guild_unavailable' });
+      if (!validateGuildLeave(msg)) return send(socket, { type: 'error', code: 'invalid_guild_leave' });
+      const result = await guildStore.leaveGuild(client.identityId);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      const oldGuildId = client.guildName ? result.guild_id : null;
+      client.guildName = '';
+      client.guildTag = '';
+      rosterDirty = true;
+      if (oldGuildId) sendGuildUpdate(oldGuildId);
+      send(socket, { type: 'guild_left' });
+      return;
+    }
+    if (msg.type === 'guild_disband') {
+      if (!client.identityId || !guildStore) return send(socket, { type: 'error', code: 'guild_unavailable' });
+      if (!validateGuildDisband(msg)) return send(socket, { type: 'error', code: 'invalid_guild_disband' });
+      const info = await guildStore.getGuildInfo(client.identityId);
+      const result = await guildStore.disbandGuild(client.identityId);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      client.guildName = '';
+      client.guildTag = '';
+      rosterDirty = true;
+      if (info.guild) sendGuildUpdate(info.guild.id);
+      send(socket, { type: 'guild_disbanded' });
+      return;
+    }
+    if (msg.type === 'guild_kick') {
+      if (!client.identityId || !guildStore) return send(socket, { type: 'error', code: 'guild_unavailable' });
+      if (!validateGuildKick(msg)) return send(socket, { type: 'error', code: 'invalid_guild_kick' });
+      const info = await guildStore.getGuildInfo(client.identityId);
+      const result = await guildStore.kickMember(client.identityId, msg.fingerprint);
+      if (result.error) return send(socket, { type: 'error', code: result.error });
+      if (info.guild) sendGuildUpdate(info.guild.id);
+      const target = [...clients.values()].find(c => c.fingerprint === msg.fingerprint);
+      if (target) {
+        target.guildName = '';
+        target.guildTag = '';
+        send(target.socket, { type: 'guild_kicked' });
+      }
+      rosterDirty = true;
+      send(socket, { type: 'guild_kick_ok', fingerprint: msg.fingerprint });
+      return;
+    }
+    if (msg.type === 'guild_info') {
+      if (!client.identityId || !guildStore) return send(socket, { type: 'error', code: 'guild_unavailable' });
+      if (!validateGuildInfo(msg)) return send(socket, { type: 'error', code: 'invalid_guild_info' });
+      const info = await guildStore.getGuildInfo(client.identityId);
+      send(socket, { type: 'guild_info', ...info });
+      return;
+    }
+    if (msg.type === 'resource_interact') {
+      if (!client.identityId || !resourceNodeStore || !questStore) return send(socket, { type: 'error', code: 'resource_unavailable' });
+      if (!client.state) return send(socket, { type: 'error', code: 'resource_no_position' });
+      if (!validateResourceInteract(msg)) return send(socket, { type: 'error', code: 'invalid_resource_interact' });
+      const node = await resourceNodeStore.findNodeBySlug(msg.node_id);
+      if (!node) return send(socket, { type: 'error', code: 'resource_not_found' });
+      if (node.map !== client.state.map) return send(socket, { type: 'error', code: 'resource_wrong_map' });
+      if (npcInteractDistance(client.state.x, client.state.y, node.x, node.y) > 2) return send(socket, { type: 'error', code: 'resource_too_far' });
+      if (!node.available) return send(socket, { type: 'resource_interact_result', ok: false, node_id: node.slug, reason: 'resource_respawning', respawn_in_ms: node.respawn_in_ms });
+      const harvested = await resourceNodeStore.harvestNode(node.slug);
+      if (!harvested) return send(socket, { type: 'resource_interact_result', ok: false, node_id: node.slug, reason: 'resource_unavailable' });
+      const skill = { tree: 'woodcutting', rock: 'mining', water: 'fishing' }[node.kind];
+      let skillUpdate = null;
+      if (skillStore && skill) skillUpdate = await skillStore.addXp(client.identityId, skill, 10);
+      const questUpdates = await questStore.recordResourceInteraction(client.identityId, node.slug);
+      send(socket, {
+        type: 'resource_interact_result',
+        ok: true,
+        node_id: node.slug,
+        kind: node.kind,
+        skill: skillUpdate ? { skill: skillUpdate.skill, xp: skillUpdate.xp, level: skillUpdate.level } : null,
+        quest_updates: questUpdates.map(q => ({ quest_id: q.quest_id, status: q.status }))
+      });
+      return;
+    }
+    if (msg.type !== 'state') return send(socket, { type: 'error', code: 'unknown_type' });
     if (!validateState(msg, client.seq)) return fail(socket, 'invalid_state');
     client.seq = msg.seq;
     client.state = { map: msg.map, x: msg.x, y: msg.y, facing: msg.facing, avatar: msg.avatar === 'girl' ? 'girl' : client.avatar };
     metrics.states++;
     rosterDirty = true;
     for (const peer of clients.values()) if (peer.name) snapshot(peer);
+    sendNpcSnapshot(client).catch(() => {});
+    sendResourceSnapshot(client).catch(() => {});
   };
   const server = net.createServer(socket => {
     metrics.totalConnections++;
@@ -328,7 +641,7 @@ export function createPresenceServer({ host = '0.0.0.0', port = 3210, idleMs = 3
     const remoteAddress = socket.remoteAddress ?? 'unknown';
     const sameIp = [...clients.values()].filter(existing => existing.remoteAddress === remoteAddress).length;
     if (sameIp >= maxConnectionsPerIp) { metrics.ipRejectedConnections++; fail(socket, 'ip_connection_limit'); return; }
-    const client = { id: crypto.randomUUID(), identityId: null, credentialId: null, fingerprint: null, protocolVersion: null, session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, linkRoom: null, linkClientId: null, linkPacketsAt: 0, linkPacketCount: 0, helloTimer: null, processing: Promise.resolve() };
+    const client = { id: crypto.randomUUID(), identityId: null, credentialId: null, fingerprint: null, protocolVersion: null, session: null, socket, remoteAddress, buffer: '', name: null, avatar: 'boy', state: null, seq: -1, seen: Date.now(), lastChat: 0, lastEmote: 0, linkRoom: null, linkClientId: null, linkPacketsAt: 0, linkPacketCount: 0, helloTimer: null, processing: Promise.resolve(), guildName: '', guildTag: '' };
     clients.set(socket, client);
     client.helloTimer = setTimeout(() => {
       if (!client.name) {
@@ -384,6 +697,13 @@ export async function startServers({ identityStore: identityStoreOverride = null
   let identityStore = identityStoreOverride;
   let statsStore = statsStoreOverride;
   let teleportStore = teleportStoreOverride;
+  let npcStore = null;
+  let questStore = null;
+  let resourceNodeStore = null;
+  let skillStore = null;
+  let titleStore = null;
+  let friendStore = null;
+  let guildStore = null;
   const databaseConfig = process.env.DATABASE_URL
     ? { connectionString: process.env.DATABASE_URL }
     : process.env.PGHOST
@@ -398,9 +718,76 @@ export async function startServers({ identityStore: identityStoreOverride = null
     identityStore = new PostgresIdentityStore(pool, process.env.IDENTITY_PEPPER);
     statsStore = new PostgresStatsStore(pool);
     if (!teleportStore) teleportStore = new PostgresTeleportStore(pool);
+    npcStore = new PostgresNpcStore(pool);
+    titleStore = new PostgresTitleStore(pool);
+    questStore = new PostgresQuestStore(pool, titleStore);
+    resourceNodeStore = new PostgresResourceNodeStore(pool);
+    skillStore = new PostgresSkillStore(pool);
+    friendStore = new PostgresFriendStore(pool, fingerprint => identityStore.findByFingerprint(fingerprint));
+    guildStore = new PostgresGuildStore(pool, fingerprint => identityStore.findByFingerprint(fingerprint));
   }
   if (!teleportStore) teleportStore = new MemoryTeleportStore();
-  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore, statsStore, teleportStore });
+  if (!npcStore) npcStore = new MemoryNpcStore();
+  if (!titleStore) titleStore = new MemoryTitleStore();
+  if (!questStore) questStore = new MemoryQuestStore(titleStore);
+  if (!resourceNodeStore) resourceNodeStore = new MemoryResourceNodeStore();
+  if (!skillStore) skillStore = new MemorySkillStore();
+  if (!friendStore) friendStore = new MemoryFriendStore(fingerprint => identityStore.findByFingerprint(fingerprint));
+  if (!guildStore) guildStore = new MemoryGuildStore(fingerprint => identityStore.findByFingerprint(fingerprint));
+  if (!pool) {
+    // Seed the in-memory stores with the Phase 1 welcome quest and scientist NPC
+    // so development/test runs without a database mirror the migration defaults.
+    const seededQuest = await questStore.findQuestBySlug('welcome-to-hoenn-online');
+    if (!seededQuest) {
+      const questId = crypto.randomUUID();
+      questStore.setQuest({
+        id: questId,
+        slug: 'welcome-to-hoenn-online',
+        title: 'Welcome to Hoenn Online',
+        description: 'The scientist in Littleroot needs your help testing the online connection.',
+        requirements: [],
+        reward_kind: 'title',
+        reward_data: { title: 'Beta Pioneer' },
+        active: true
+      });
+      const npc = await npcStore.findNpcBySlug('scientist-welcome');
+      if (npc) npcStore.setNpc('scientist-welcome', { ...npc, map: '0-9', quest_id: questId });
+      // Seed Phase 4 resource node and extended quest chain.
+      if (!await resourceNodeStore.findNodeBySlug('littleroot-apple-tree')) {
+        resourceNodeStore.setNode('littleroot-apple-tree', {
+          id: 'littleroot-apple-tree', kind: 'tree', map: '0-9', x: 12, y: 13, level: 1, respawn_seconds: 30, active: true
+        });
+      }
+      if (!await questStore.findQuestBySlug('field-research')) {
+        questStore.setQuest({
+          id: crypto.randomUUID(),
+          slug: 'field-research',
+          title: 'Field Research',
+          description: 'The scientist wants a sample from a nearby resource node. Interact with the apple tree just west of the lab.',
+          requirements: [{ kind: 'quest_completed', quest_id: questId }, { kind: 'interact_resource', node_id: 'littleroot-apple-tree' }],
+          reward_kind: 'title',
+          reward_data: { title: 'Beta Pioneer II' },
+          active: true
+        });
+      }
+      if (!await questStore.findQuestBySlug('report-findings')) {
+        const fieldQuest = await questStore.findQuestBySlug('field-research');
+        if (fieldQuest) {
+          questStore.setQuest({
+            id: crypto.randomUUID(),
+            slug: 'report-findings',
+            title: 'Report Findings',
+            description: 'Return to the scientist with the sample.',
+            requirements: [{ kind: 'quest_completed', quest_id: fieldQuest.id }, { kind: 'talk_to_npc', npc_id: 'scientist-welcome' }],
+            reward_kind: 'title',
+            reward_data: { title: 'Research Assistant' },
+            active: true
+          });
+        }
+      }
+    }
+  }
+  const presence = createPresenceServer({ host, port, idleMs, maxConnections, maxConnectionsPerIp, helloTimeoutMs, identityStore, statsStore, teleportStore, npcStore, questStore, resourceNodeStore, skillStore, titleStore, friendStore, guildStore });
   await new Promise(resolve => presence.server.listen(port, host, resolve));
   const health = http.createServer((req, res) => {
     if (req.url === '/metrics') {

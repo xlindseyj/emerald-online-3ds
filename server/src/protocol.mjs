@@ -18,6 +18,13 @@ const LINK_ROOM = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/;
 const LINK_CORE = 'gpSP v1.0';
 const LINK_DATA = /^(?:[a-f0-9]{2}){1,512}$/i;
 const DESTINATION_ID = /^[a-z][a-z0-9_-]*:[A-Za-z0-9_-]{1,64}$|^mom$/;
+const NPC_ID = /^[a-z0-9_-]{1,64}$/;
+const RESOURCE_NODE_ID = /^[a-z0-9_-]{1,64}$/;
+const FINGERPRINT = /^[A-F0-9]{10}$/;
+const TITLE = /^[\x20-!#-\[\]-~]{1,40}$/;
+const GUILD_NAME = /^[\x20-!#-\[\]-~]{1,40}$/;
+const GUILD_TAG = /^[A-Z0-9]{2,6}$/;
+const NPC_INTERACT_DISTANCE = 2;
 
 export function validateHello(msg) {
   if (msg?.type !== 'hello' || !NAME.test(msg.name) || (msg.avatar !== undefined && !AVATARS.has(msg.avatar))) return false;
@@ -103,6 +110,78 @@ export function validateTeleportLocations(msg) {
 
 export function validateTeleport(msg) {
   return msg?.type === 'teleport' && DESTINATION_ID.test(msg.destination_id ?? '');
+}
+
+export function validateNpcInteract(msg) {
+  return msg?.type === 'npc_interact' && NPC_ID.test(msg.npc_id ?? '');
+}
+
+export function validateQuestAccept(msg) {
+  return msg?.type === 'quest_accept' && IDENTITY.test(msg.quest_id ?? '');
+}
+
+export function validateQuestClaim(msg) {
+  return msg?.type === 'quest_claim' && IDENTITY.test(msg.quest_id ?? '');
+}
+
+export function validateResourceInteract(msg) {
+  return msg?.type === 'resource_interact' && RESOURCE_NODE_ID.test(msg.node_id ?? '');
+}
+
+export function validateQuestList(msg) {
+  return msg?.type === 'quest_list';
+}
+
+export function validateTitleList(msg) {
+  return msg?.type === 'title_list';
+}
+
+export function validateTitleEquip(msg) {
+  return msg?.type === 'title_equip' && TITLE.test(msg.title ?? '');
+}
+
+export function validateFriendRequest(msg) {
+  return msg?.type === 'friend_request' && FINGERPRINT.test(msg.fingerprint ?? '');
+}
+
+export function validateFriendAccept(msg) {
+  return msg?.type === 'friend_accept' && FINGERPRINT.test(msg.fingerprint ?? '');
+}
+
+export function validateFriendRemove(msg) {
+  return msg?.type === 'friend_remove' && FINGERPRINT.test(msg.fingerprint ?? '');
+}
+
+export function validateFriendList(msg) {
+  return msg?.type === 'friend_list';
+}
+
+export function validateGuildCreate(msg) {
+  return msg?.type === 'guild_create' && GUILD_NAME.test(msg.name ?? '') && GUILD_TAG.test(msg.tag ?? '');
+}
+
+export function validateGuildJoin(msg) {
+  return msg?.type === 'guild_join' && GUILD_NAME.test(msg.name ?? '');
+}
+
+export function validateGuildLeave(msg) {
+  return msg?.type === 'guild_leave';
+}
+
+export function validateGuildDisband(msg) {
+  return msg?.type === 'guild_disband';
+}
+
+export function validateGuildKick(msg) {
+  return msg?.type === 'guild_kick' && FINGERPRINT.test(msg.fingerprint ?? '');
+}
+
+export function validateGuildInfo(msg) {
+  return msg?.type === 'guild_info';
+}
+
+export function npcInteractDistance(ax, ay, bx, by) {
+  return Math.abs(ax - bx) + Math.abs(ay - by);
 }
 
 export function encode(msg) { return `${JSON.stringify(msg)}\n`; }

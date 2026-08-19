@@ -723,7 +723,13 @@ u32 rfu_transfer(u32 sent_value) {
 
     // These commands are special: they do not have any response data
     // and reverse the clock roles (the RFU becomes master).
-    if (rfu_cmd == RFU_CMD_WAIT || rfu_cmd == RFU_CMD_RTX_WAIT || rfu_cmd == RFU_CMD_SEND_DATAW) {
+    //
+    // SEND_DATAW is intentionally excluded: the netpacket transport is
+    // reliable and ordered, so the send is complete once the data has been
+    // pushed. Treating it like WAIT and blocking on rfu_data_avail() makes
+    // the client time out when the host's response is delayed by internet
+    // latency, producing Emerald's Union Room battle communication error.
+    if (rfu_cmd == RFU_CMD_WAIT || rfu_cmd == RFU_CMD_RTX_WAIT) {
       rfu_comstate = RFU_COMSTATE_WAITEVENT;
       rfu_timeout_cycles = rfu_timeout * (16777216 / 60);  // Frames to cycles
       rfu_resp_timeout = rfu_rtx_max * (16777216 / 60 / 6);  // RFU "frame" to cycles

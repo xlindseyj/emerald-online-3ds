@@ -5,9 +5,9 @@ Gate 4 remains an experimental feasibility test. Version 0.8.8 retains the compl
 ## Current artifacts
 
 - Release: `0.8.8`
-- CIA SHA-256: `5b557cfe15dbb2ee8df8850c28bb28d4862c8164bead6135130498c91220b515`
-- 3DSX SHA-256: `3c2bf9c78a5be57a3310fc516a7c2c28c89e2e02220f36c3b919c8fb66c6d56f`
-- Corresponding-source SHA-256: `1e0cffeaa1725832d08f2b19f6bc03a1c92d9357c99a03b542e398ed0a91b713`
+- CIA SHA-256: `22a7d028a1798c0093c9dac30b2ee9976644c2143d171da295537d11656d3866`
+- 3DSX SHA-256: `7245700b63bbd4d2bd5e1bc4364d4b9124679d0a64914aaf12309029434e4408`
+- Corresponding-source SHA-256: `dab383e9c12dfc42717b0558eb70b0ed0db8e28c6c08e4f670269a9e20b2d9ee`
 - Azahar: official 2126.0 AppImage under the ignored `.tools/azahar/` directory
 
 Create a fresh ignored bundle for each session. Its `physical-sd/` tree contains only the current release CIA, 3DSX, and production-WSS `online.cfg`. It intentionally contains no ROM, save, avatar atlas, device identity, or statistics preference.
@@ -35,13 +35,14 @@ The tool accepts only a 128 KiB Emerald save (or a 128 KiB save with a 512-byte 
 3. Optionally copy the CIA from `physical-sd/cias/` and reinstall it with FBI; merely copying a CIA does not update the installed HOME Menu title.
 4. Start the physical runtime and the prepared Azahar profile. Confirm both show `LINK <room> ACTIVE - BACKUP OK` before entering the Cable Club.
 5. Use the Wireless Club / Union Room, not the Direct Corner attendants. Complete one battle and one trade through public WSS. Record FPS/audio, packet counters, both save hashes after clean exit and restart, and the result of interrupting one later session.
-6. If either save differs unexpectedly, stop testing and restore the independent backups. Do not proceed to Gate 5.
+6. From the bottom-screen Teleport page, request a staff-approved destination. Confirm the screen fades, the player appears at the target coordinates on the new map, and movement resumes normally after the warp.
+7. If either save differs unexpectedly, stop testing and restore the independent backups. Do not proceed to Gate 5.
 
 ## Current 0.8.8 evidence
 
 - Two isolated Azahar 2126.0 clients completed a native Union Room trade. CODEX offered a level 13 Torchic for a Water-type Pokémon and LINZ sent a level 6 Marill. Both native avatars, the Trading Board offer, request, animation, automatic save, restart, and exchanged parties were confirmed. CODEX loaded two Marill and LINZ loaded two Torchic after restart.
 - The v0.8.7 runtime uses gpSP's RFU backend for explicitly configured rooms, drains packets during gpSP's tight wait windows, preserves temporary host scans, removes explicitly withdrawn/disconnected peers, and suppresses external overlays on native multiplayer maps.
-- The current public CIA, 3DSX, and source downloads match the hashes above. Production image `sha256:390b6d6e1cad67d502af9a5b5cc01c52e3c32e851f0f1ff6e3237903fe6c9d12` is Ready with zero application-container restarts; the public health endpoint is database-ready and all four public status checks are Operational.
+- The current public CIA, 3DSX, and source downloads match the hashes above. Production image `sha256:152b9643f8961cc53d420d331a0a694a5be1e87a4d5f14b7683d0310a62ed419` is Ready with zero application-container restarts; the public health endpoint is database-ready and all four public status checks are Operational.
 - A current two-Azahar battle selected both two-Pokémon teams; LINZ reached the native VS screen while CODEX received Emerald's communication error. Physical v0.8.8 battle/trade, interrupted-session recovery, save comparison, current FPS, audio, and HOME lifecycle remain unrecorded. Gate 5 must not begin yet.
 
 ## Historical 0.8.4 physical preflight evidence

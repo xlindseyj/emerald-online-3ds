@@ -16,6 +16,10 @@ enum BottomPage {
     PAGE_BAG,
     PAGE_MAP,
     PAGE_STATS,
+    PAGE_QUESTS,
+    PAGE_TITLES,
+    PAGE_FRIENDS,
+    PAGE_GUILD,
     PAGE_TELEPORT,
     PAGE_UPDATE
 };
@@ -46,12 +50,16 @@ extern GamePresence presence;
 struct RemoteTrainer {
     char id[37];
     char name[13];
+    char title[33];
     int16_t x;
     int16_t y;
+    int16_t prevX;
+    int16_t prevY;
     uint8_t facing;
     bool isGirl;
     uint8_t emote;
     uint64_t emoteUntil;
+    uint64_t updatedAt;
 };
 extern RemoteTrainer remoteTrainers[8];
 extern int remoteCount;
@@ -79,6 +87,98 @@ struct OnlineUser {
 extern OnlineUser onlineUsers[64];
 extern unsigned onlineUserCount;
 extern unsigned onlineUserPage;
+
+// Online NPC state from main.cpp.
+struct OnlineNpc {
+    char npc_id[65];
+    char name[33];
+    int16_t x;
+    int16_t y;
+    uint8_t facing;
+    char sprite[41];
+    char quest_id[37];
+};
+extern OnlineNpc onlineNpcs[8];
+extern unsigned onlineNpcCount;
+
+// World resource node state from main.cpp.
+struct ResourceNode {
+    char node_id[65];
+    char kind[16];
+    int16_t x;
+    int16_t y;
+    uint8_t level;
+    bool available;
+    uint32_t respawn_in_ms;
+};
+extern ResourceNode resourceNodes[8];
+extern unsigned resourceNodeCount;
+
+// Quest log state from main.cpp.
+struct QuestLogEntry {
+    char quest_id[37];
+    char slug[65];
+    char title[121];
+    char description[201];
+    char status[16];
+};
+extern QuestLogEntry questLog[8];
+extern unsigned questLogCount;
+extern unsigned questLogPage;
+
+// Title inventory state from main.cpp.
+struct TitleEntry {
+    char title[41];
+    bool equipped;
+};
+extern TitleEntry playerTitles[16];
+extern unsigned playerTitleCount;
+extern unsigned playerTitlePage;
+extern unsigned playerTitleSelected;
+
+// Friends list state from main.cpp.
+struct FriendEntry {
+    char fingerprint[11];
+    char name[13];
+    char status[16];
+    bool is_requester;
+    bool online;
+    char map[33];
+    int16_t x;
+    int16_t y;
+};
+extern FriendEntry playerFriends[32];
+extern unsigned playerFriendCount;
+extern unsigned playerFriendPage;
+extern unsigned playerFriendSelected;
+
+// Guild state from main.cpp.
+struct GuildMember {
+    char fingerprint[11];
+    char identity_id[37];
+    char role[8];
+};
+struct GuildInfo {
+    bool active;
+    char name[41];
+    char tag[7];
+    char leader_id[37];
+};
+extern GuildInfo guildInfo;
+extern GuildMember guildMembers[50];
+extern unsigned guildMemberCount;
+extern unsigned guildMemberPage;
+
+// NPC dialogue overlay state from main.cpp.
+struct NpcDialogue {
+    bool active;
+    char npc_id[65];
+    char lines[4][81];
+    unsigned lineCount;
+    char quest_id[37];
+    char quest_title[121];
+};
+extern NpcDialogue npcDialogue;
 
 // Chat state from main.cpp.
 struct ChatMessage {
@@ -192,6 +292,11 @@ void drawOnlineUsersPage(void);
 void drawChatPage(void);
 void drawTeleportPage(void);
 void drawUpdatePage(void);
+void drawQuestPage(void);
+void drawTitlesPage(void);
+void drawFriendsPage(void);
+void drawGuildPage(void);
+void drawNpcDialogueOverlay(void);
 
 // Helpers used by the main loop touch dispatch.
 unsigned currentChatIndices(unsigned indices[24]);

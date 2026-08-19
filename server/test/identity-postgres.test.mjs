@@ -9,7 +9,9 @@ test('PostgreSQL identity lifecycle persists only credential verifiers', { skip:
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(() => pool.end());
   const store = new PostgresIdentityStore(pool, 'test-only-pepper-with-at-least-thirty-two-bytes');
+  const before = await store.count();
   const enrollment = await store.enroll({ withRecovery: true });
+  assert.equal(await store.count(), before + 1);
   assert.ok(await store.authenticate(enrollment.identityId, enrollment.token));
 
   const rawCredential = await pool.query('SELECT token_hash FROM device_credentials WHERE identity_id=$1', [enrollment.identityId]);
@@ -24,6 +26,7 @@ test('PostgreSQL identity lifecycle persists only credential verifiers', { skip:
   assert.equal(await store.revoke(recovered.identityId, recovered.credentialId), true);
   assert.equal(await store.authenticate(recovered.identityId, recovered.token), null);
   assert.equal(await store.deleteIdentity(enrollment.identityId), true);
+  assert.equal(await store.count(), before);
   assert.equal((await pool.query('SELECT count(*)::int AS count FROM device_credentials WHERE identity_id=$1', [enrollment.identityId])).rows[0].count, 0);
 });
 

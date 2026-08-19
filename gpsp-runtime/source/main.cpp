@@ -59,6 +59,12 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define AUDIO_FRAMES 1024
 #define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
 #define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
+
+// Remote trainer overlay tuning.
+static constexpr float OVERLAY_TILE_W = 400.0f / 15.0f; // ~26.67 px per overworld tile on the top screen
+static constexpr float OVERLAY_TILE_H = 240.0f / 10.0f; // 24 px per overworld tile
+static constexpr uint64_t REMOTE_INTERPOLATION_MS = 1000; // match server snapshot cadence
+static constexpr float REMOTE_SPRITE_SCALE = 1.5f;
 #define UPDATE_DIRECTORY "sdmc:/3ds/emerald-online-3ds/update"
 #define UPDATE_CIA_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.cia"
 #define UPDATE_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.3dsx"
@@ -96,10 +102,34 @@ unsigned bagPocket;
 unsigned bagPage;
 unsigned onlineUserPage;
 unsigned chatPage;
+unsigned questLogPage;
 bool globalChat;
 int chatDetailIndex = -1;
 char itemNames[377][15];
 bool itemNamesLoaded;
+OnlineNpc onlineNpcs[8];
+unsigned onlineNpcCount = 0;
+ResourceNode resourceNodes[8];
+unsigned resourceNodeCount = 0;
+QuestLogEntry questLog[8];
+unsigned questLogCount = 0;
+TitleEntry playerTitles[16];
+unsigned playerTitleCount = 0;
+unsigned playerTitlePage = 0;
+unsigned playerTitleSelected = 0;
+FriendEntry playerFriends[32];
+unsigned playerFriendCount = 0;
+unsigned playerFriendPage = 0;
+unsigned playerFriendSelected = 0;
+GuildInfo guildInfo = {};
+GuildMember guildMembers[50];
+unsigned guildMemberCount = 0;
+unsigned guildMemberPage = 0;
+NpcDialogue npcDialogue = {};
+
+static void requestTitleList(void);
+static void requestFriendList(void);
+static void requestGuildInfo(void);
 static bool dynarecEnabled = true;
 static char linkRoom[10];
 bool linkConfigured;
@@ -225,6 +255,10 @@ bool statsFrontierEnabled;
 static bool onlineAuthenticated;
 static uint64_t nextStatsUpload;
 static uint64_t nextStatsRead;
+static uint64_t nextQuestListRequest;
+static uint64_t nextTitleListRequest;
+static uint64_t nextFriendListRequest;
+static uint64_t nextGuildInfoRequest;
 char statsStatus[48];
 uint64_t statsStatusUntil;
 
@@ -673,8 +707,12 @@ static bool verifyEmeraldSaveFile(const char* path) {
 // pointers are Thumb addresses, so callback2 stores CB2_Overworld + 1.
 static constexpr size_t EMERALD_GMAIN_OFFSET = 0x22C0;
 static constexpr size_t EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET + 0x4;
+static constexpr size_t EMERALD_GMAIN_SAVED_CALLBACK_OFFSET = EMERALD_GMAIN_OFFSET + 0x8;
+static constexpr size_t EMERALD_GMAIN_STATE_OFFSET = EMERALD_GMAIN_OFFSET + 0x438;
 static constexpr size_t EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET + 0x439;
 static constexpr uint32_t EMERALD_CB2_OVERWORLD_THUMB = 0x08085E5D;
+static constexpr uint32_t EMERALD_CB2_DO_CHANGE_MAP_THUMB = 0x08134B45;
+static constexpr uint32_t EMERALD_CB2_LOAD_MAP2_THUMB = 0x080860C9;
 
 static bool isEmeraldNativeMultiplayerMap(void) {
     if (!gbaEwram || !gbaIwram) return false;
@@ -725,21 +763,38 @@ static GamePresence readPresence(void) {
     return current;
 }
 
+static void write32(uint8_t* memory, size_t offset, uint32_t value) {
+    memcpy(memory + offset, &value, sizeof(value));
+}
+
 static void applyTeleport(uint8_t mapGroup, uint8_t mapNum, int16_t x, int16_t y, uint8_t facing) {
     if (!gbaEwram || !gbaIwram) return;
+    // Only initiate a warp while the player is free in the overworld.
+    // Changing callbacks during a battle or menu would corrupt game state.
+    if (!isEmeraldOverworld()) return;
     uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
     if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return;
     size_t offset = saveBlock - 0x02000000;
-    gbaEwram[offset + 0] = (uint8_t)(x & 0xFF);
-    gbaEwram[offset + 1] = (uint8_t)((x >> 8) & 0xFF);
-    gbaEwram[offset + 2] = (uint8_t)(y & 0xFF);
-    gbaEwram[offset + 3] = (uint8_t)((y >> 8) & 0xFF);
+    // gSaveBlock1Ptr->pos
+    gbaEwram[offset + 0x00] = (uint8_t)(x & 0xFF);
+    gbaEwram[offset + 0x01] = (uint8_t)((x >> 8) & 0xFF);
+    gbaEwram[offset + 0x02] = (uint8_t)(y & 0xFF);
+    gbaEwram[offset + 0x03] = (uint8_t)((y >> 8) & 0xFF);
+    // gSaveBlock1Ptr->location (WarpData: mapGroup, mapNum, warpId, padding, x, y)
     gbaEwram[offset + 4] = mapGroup;
     gbaEwram[offset + 5] = mapNum;
-    // TODO: trigger Emerald to reload the map after coordinates change.
-    // The current implementation writes gSaveBlock1Ptr location fields.
-    // A follow-up step will identify the IWRAM warp flag or call the
-    // SetWarpDestination/WarpIntoMap Thumb functions to force a transition.
+    gbaEwram[offset + 0x06] = 0xFF; // WARP_ID_NONE: use coordinates, not a warp event
+    gbaEwram[offset + 0x07] = 0;
+    gbaEwram[offset + 0x08] = (uint8_t)(x & 0xFF);
+    gbaEwram[offset + 0x09] = (uint8_t)((x >> 8) & 0xFF);
+    gbaEwram[offset + 0x0A] = (uint8_t)(y & 0xFF);
+    gbaEwram[offset + 0x0B] = (uint8_t)((y >> 8) & 0xFF);
+    // Trigger Emerald's map-reload sequence. CB2_DoChangeMap validates the
+    // warp, runs the transition effect, and then falls through to
+    // gMain.savedCallback (CB2_LoadMap2) to finish loading the new map.
+    gbaIwram[EMERALD_GMAIN_STATE_OFFSET] = 0;
+    write32(gbaIwram, EMERALD_GMAIN_SAVED_CALLBACK_OFFSET, EMERALD_CB2_LOAD_MAP2_THUMB);
+    write32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET, EMERALD_CB2_DO_CHANGE_MAP_THUMB);
     (void) facing;
 }
 
@@ -1172,6 +1227,7 @@ static bool startSecureWebSocket(void) {
     onlineProtocolStage = 7;
     if (!webSocketHeaderEquals(response, "Sec-WebSocket-Accept", (const char*) accept)) return false;
     onlineProtocolStage = 0;
+    // debugStage("wss-handshake-complete");
     return true;
 }
 
@@ -1204,7 +1260,7 @@ static void loadConfig(void) {
         }
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
-        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "teleport") ? PAGE_TELEPORT : !strcmp(equals, "update") ? PAGE_UPDATE : PAGE_ONLINE;
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "quest") ? PAGE_QUESTS : !strcmp(equals, "titles") ? PAGE_TITLES : !strcmp(equals, "friends") ? PAGE_FRIENDS : !strcmp(equals, "guild") ? PAGE_GUILD : !strcmp(equals, "teleport") ? PAGE_TELEPORT : !strcmp(equals, "update") ? PAGE_UPDATE : PAGE_ONLINE;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
             strcpy(linkRoom, equals);
@@ -1308,6 +1364,7 @@ static void onlineDisconnect(void) {
 
 static void onlineFail(int error) {
     onlineLastError = error ? error : EIO;
+    // Debug reconnect loops: log onlineLastError and onlineProtocolStage here.
     runtimeLogUploadRecent();
     onlineDisconnect();
 }
@@ -1368,6 +1425,9 @@ static void syncStatsAfterAuthentication(void) {
         onlineSend("{\"type\":\"teleport_locations\"}\n");
         teleportLocationsRequested = true;
     }
+    requestTitleList();
+    requestFriendList();
+    requestGuildInfo();
     if (linkConfigured && !linkJoined) {
         char packet[160];
         snprintf(packet, sizeof(packet), "{\"type\":\"link_spike_join\",\"room\":\"%s\",\"core\":\"gpSP v1.0\"}\n", linkRoom);
@@ -1386,6 +1446,7 @@ static void syncStatsAfterAuthentication(void) {
 
 static void onlineConnected(void) {
     if (secureWebSocket && !startSecureWebSocket()) { debugNetworkFailure(); return onlineFail(EPROTO); }
+    // debugStage("wss-handshake-complete");
     onlineMode = ONLINE_ACTIVE;
     onlineAuthenticated = false;
     onlineLastError = 0;
@@ -1395,6 +1456,7 @@ static void onlineConnected(void) {
         snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"version\":2,\"name\":\"%s\",\"identity\":\"%s\",\"token\":\"%s\",\"avatar\":\"%s\"}\n", trainerName, identityId, identityToken, trainerIsGirl ? "girl" : "boy");
     else
         snprintf(hello, sizeof(hello), "{\"type\":\"enroll\",\"version\":2,\"name\":\"%s\",\"avatar\":\"%s\",\"recovery\":true}\n", trainerName, trainerIsGirl ? "girl" : "boy");
+    // Debug hello issues: log trainerName, identityId, and strlen(identityToken) here.
     onlineSend(hello);
 }
 
@@ -1511,6 +1573,14 @@ static int jsonInt(const char* line, const char* key, int fallback) {
     return jsonIntBounded(line, line + strlen(line), key, fallback);
 }
 
+static bool jsonBoolBounded(const char* json, const char* end, const char* key, bool fallback) {
+    const char* value = findJsonValue(json, end, key);
+    if (!value || value >= end) return fallback;
+    if (!strncmp(value, "true", 4)) return true;
+    if (!strncmp(value, "false", 5)) return false;
+    return fallback;
+}
+
 static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size) {
     const char* value = findJsonValue(json, end, key);
     return value && parseJsonString(&value, end, output, size);
@@ -1583,6 +1653,7 @@ static void parseOnlineLine(char* line) {
         return;
     }
     if (jsonTypeIs(line, "welcome")) {
+        // debugStage("welcome-received");
         char fingerprint[11] = {}, role[10] = {};
         if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
         if (jsonString(line, "role", role, sizeof(role))) snprintf(trainerRole, sizeof(trainerRole), "%s", role);
@@ -1617,7 +1688,7 @@ static void parseOnlineLine(char* line) {
         return;
     }
     if (jsonTypeIs(line, "teleport_result")) {
-        if (!jsonInt(line, "ok", 0)) {
+        if (!jsonBoolBounded(line, line + strlen(line), "ok", false)) {
             char code[32] = {};
             jsonString(line, "code", code, sizeof(code));
             snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARP_FAILED_FORMAT), code);
@@ -1710,7 +1781,9 @@ static void parseOnlineLine(char* line) {
     }
     if (jsonTypeIs(line, "error")) {
         char code[40] = {};
-        if (jsonString(line, "code", code, sizeof(code)) && strstr(code, "pairing")) {
+        jsonString(line, "code", code, sizeof(code));
+        // Debug server rejections: log the error code here.
+        if (strstr(code, "pairing")) {
             strcpy(browserPairingStatus, localize(LS_PAIRING_CODE_EXPIRED));
             browserPairingStatusUntil = osGetTime() + 5000;
         }
@@ -1794,6 +1867,7 @@ static void parseOnlineLine(char* line) {
         const char* lineEnd = line + strlen(line);
         const char* player = findJsonValue(line, lineEnd, "players");
         if (player && player < lineEnd && *player == '[') ++player;
+        const uint64_t now = osGetTime();
         while (player && updatedCount < 8) {
             player = skipJsonSpace(player, lineEnd);
             if (player >= lineEnd || *player == ']') break;
@@ -1805,18 +1879,28 @@ static void parseOnlineLine(char* line) {
                 !jsonStringBounded(player, objectEnd, "name", trainer->name, sizeof(trainer->name))) break;
             trainer->x = jsonIntBounded(player, objectEnd, "x", 0);
             trainer->y = jsonIntBounded(player, objectEnd, "y", 0);
+            jsonStringBounded(player, objectEnd, "title", trainer->title, sizeof(trainer->title));
             char direction[8] = {};
             jsonStringBounded(player, objectEnd, "facing", direction, sizeof(direction));
             trainer->facing = !strcmp(direction, "up") ? 2 : !strcmp(direction, "left") ? 3 : !strcmp(direction, "right") ? 4 : 1;
             char avatar[8] = {};
             if (jsonStringBounded(player, objectEnd, "avatar", avatar, sizeof(avatar))) trainer->isGirl = !strcmp(avatar, "girl");
+            bool found = false;
             for (int old = 0; old < remoteCount; ++old) {
                 if (!strcmp(remoteTrainers[old].id, trainer->id)) {
                     trainer->emote = remoteTrainers[old].emote;
                     trainer->emoteUntil = remoteTrainers[old].emoteUntil;
+                    trainer->prevX = remoteTrainers[old].x;
+                    trainer->prevY = remoteTrainers[old].y;
+                    found = true;
                     break;
                 }
             }
+            if (!found) {
+                trainer->prevX = trainer->x;
+                trainer->prevY = trainer->y;
+            }
+            trainer->updatedAt = now;
             ++updatedCount;
             player = objectEnd;
             player = skipJsonSpace(player, lineEnd);
@@ -1824,6 +1908,244 @@ static void parseOnlineLine(char* line) {
         }
         memcpy(remoteTrainers, updated, sizeof(updated));
         remoteCount = updatedCount;
+        return;
+    }
+    if (jsonTypeIs(line, "npc_snapshot")) {
+        onlineNpcCount = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* npc = findJsonValue(line, lineEnd, "npcs");
+        if (npc && npc < lineEnd && *npc == '[') ++npc;
+        while (npc && onlineNpcCount < 8) {
+            npc = skipJsonSpace(npc, lineEnd);
+            if (npc >= lineEnd || *npc == ']') break;
+            if (*npc != '{') { npc = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(npc, lineEnd);
+            if (!objectEnd) break;
+            OnlineNpc* entry = &onlineNpcs[onlineNpcCount];
+            if (!jsonStringBounded(npc, objectEnd, "npc_id", entry->npc_id, sizeof(entry->npc_id)) ||
+                !jsonStringBounded(npc, objectEnd, "name", entry->name, sizeof(entry->name))) break;
+            entry->x = jsonIntBounded(npc, objectEnd, "x", 0);
+            entry->y = jsonIntBounded(npc, objectEnd, "y", 0);
+            char direction[8] = {};
+            jsonStringBounded(npc, objectEnd, "facing", direction, sizeof(direction));
+            entry->facing = !strcmp(direction, "up") ? 2 : !strcmp(direction, "left") ? 3 : !strcmp(direction, "right") ? 4 : 1;
+            jsonStringBounded(npc, objectEnd, "sprite", entry->sprite, sizeof(entry->sprite));
+            jsonStringBounded(npc, objectEnd, "quest_id", entry->quest_id, sizeof(entry->quest_id));
+            ++onlineNpcCount;
+            npc = skipJsonSpace(objectEnd, lineEnd);
+            if (npc < lineEnd && *npc == ',') ++npc;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "resource_snapshot")) {
+        resourceNodeCount = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* nodes = findJsonValue(line, lineEnd, "nodes");
+        if (nodes && nodes < lineEnd && *nodes == '[') ++nodes;
+        while (nodes && resourceNodeCount < 8) {
+            nodes = skipJsonSpace(nodes, lineEnd);
+            if (nodes >= lineEnd || *nodes == ']') break;
+            if (*nodes != '{') { nodes = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(nodes, lineEnd);
+            if (!objectEnd) break;
+            ResourceNode* entry = &resourceNodes[resourceNodeCount];
+            if (!jsonStringBounded(nodes, objectEnd, "node_id", entry->node_id, sizeof(entry->node_id)) ||
+                !jsonStringBounded(nodes, objectEnd, "kind", entry->kind, sizeof(entry->kind))) break;
+            entry->x = jsonIntBounded(nodes, objectEnd, "x", 0);
+            entry->y = jsonIntBounded(nodes, objectEnd, "y", 0);
+            entry->level = (uint8_t)jsonIntBounded(nodes, objectEnd, "level", 1);
+            entry->available = jsonBoolBounded(nodes, objectEnd, "available", true);
+            entry->respawn_in_ms = (uint32_t)jsonIntBounded(nodes, objectEnd, "respawn_in_ms", 0);
+            ++resourceNodeCount;
+            nodes = skipJsonSpace(objectEnd, lineEnd);
+            if (nodes < lineEnd && *nodes == ',') ++nodes;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "npc_dialogue")) {
+        const char* lineEnd = line + strlen(line);
+        npcDialogue.active = true;
+        npcDialogue.lineCount = 0;
+        npcDialogue.quest_id[0] = 0;
+        npcDialogue.quest_title[0] = 0;
+        jsonString(line, "npc_id", npcDialogue.npc_id, sizeof(npcDialogue.npc_id));
+        const char* lines = findJsonValue(line, lineEnd, "lines");
+        if (lines && lines < lineEnd && *lines == '[') ++lines;
+        while (lines && npcDialogue.lineCount < 4) {
+            lines = skipJsonSpace(lines, lineEnd);
+            if (lines >= lineEnd || *lines == ']') break;
+            if (*lines != '"') break;
+            parseJsonString(&lines, lineEnd, npcDialogue.lines[npcDialogue.lineCount++], sizeof(npcDialogue.lines[0]));
+            lines = skipJsonSpace(lines, lineEnd);
+            if (lines < lineEnd && *lines == ',') ++lines;
+        }
+        const char* offered = findJsonValue(line, lineEnd, "quest_offered");
+        if (offered && offered < lineEnd && *offered == '{') {
+            const char* objectEnd = findJsonObjectEnd(offered, lineEnd);
+            if (objectEnd) {
+                jsonStringBounded(offered, objectEnd, "quest_id", npcDialogue.quest_id, sizeof(npcDialogue.quest_id));
+                jsonStringBounded(offered, objectEnd, "title", npcDialogue.quest_title, sizeof(npcDialogue.quest_title));
+            }
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "resource_interact_result")) {
+        char nodeId[65] = {};
+        jsonString(line, "node_id", nodeId, sizeof(nodeId));
+        for (unsigned i = 0; i < resourceNodeCount; ++i) {
+            if (!strcmp(resourceNodes[i].node_id, nodeId)) {
+                resourceNodes[i].available = strstr(line, "\"ok\":true") == nullptr;
+                break;
+            }
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "quest_update")) {
+        char questId[37] = {}, status[16] = {}, title[121] = {};
+        jsonString(line, "quest_id", questId, sizeof(questId));
+        jsonString(line, "status", status, sizeof(status));
+        jsonString(line, "title", title, sizeof(title));
+        for (unsigned i = 0; i < questLogCount; ++i) {
+            if (!strcmp(questLog[i].quest_id, questId)) {
+                snprintf(questLog[i].status, sizeof(questLog[i].status), "%s", status);
+                break;
+            }
+        }
+        if (npcDialogue.active && !strcmp(npcDialogue.quest_id, questId)) {
+            npcDialogue.active = false;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "quest_list")) {
+        questLogCount = 0;
+        questLogPage = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* quests = findJsonValue(line, lineEnd, "quests");
+        if (quests && quests < lineEnd && *quests == '[') ++quests;
+        while (quests && questLogCount < 8) {
+            quests = skipJsonSpace(quests, lineEnd);
+            if (quests >= lineEnd || *quests == ']') break;
+            if (*quests != '{') { quests = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(quests, lineEnd);
+            if (!objectEnd) break;
+            QuestLogEntry* entry = &questLog[questLogCount];
+            if (!jsonStringBounded(quests, objectEnd, "id", entry->quest_id, sizeof(entry->quest_id)) ||
+                !jsonStringBounded(quests, objectEnd, "title", entry->title, sizeof(entry->title))) break;
+            jsonStringBounded(quests, objectEnd, "slug", entry->slug, sizeof(entry->slug));
+            jsonStringBounded(quests, objectEnd, "description", entry->description, sizeof(entry->description));
+            jsonStringBounded(quests, objectEnd, "status", entry->status, sizeof(entry->status));
+            ++questLogCount;
+            quests = skipJsonSpace(objectEnd, lineEnd);
+            if (quests < lineEnd && *quests == ',') ++quests;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "title_list")) {
+        playerTitleCount = 0;
+        playerTitlePage = 0;
+        playerTitleSelected = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* titles = findJsonValue(line, lineEnd, "titles");
+        if (titles && titles < lineEnd && *titles == '[') ++titles;
+        while (titles && playerTitleCount < 16) {
+            titles = skipJsonSpace(titles, lineEnd);
+            if (titles >= lineEnd || *titles == ']') break;
+            if (*titles != '{') { titles = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(titles, lineEnd);
+            if (!objectEnd) break;
+            TitleEntry* entry = &playerTitles[playerTitleCount];
+            if (!jsonStringBounded(titles, objectEnd, "title", entry->title, sizeof(entry->title))) break;
+            entry->equipped = jsonBoolBounded(titles, objectEnd, "equipped", false);
+            ++playerTitleCount;
+            titles = skipJsonSpace(objectEnd, lineEnd);
+            if (titles < lineEnd && *titles == ',') ++titles;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "title_equipped")) {
+        char title[41] = {};
+        jsonString(line, "title", title, sizeof(title));
+        for (unsigned i = 0; i < playerTitleCount; ++i) {
+            playerTitles[i].equipped = !strcmp(playerTitles[i].title, title);
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "friend_list")) {
+        playerFriendCount = 0;
+        playerFriendPage = 0;
+        playerFriendSelected = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* friends = findJsonValue(line, lineEnd, "friends");
+        if (friends && friends < lineEnd && *friends == '[') ++friends;
+        while (friends && playerFriendCount < 32) {
+            friends = skipJsonSpace(friends, lineEnd);
+            if (friends >= lineEnd || *friends == ']') break;
+            if (*friends != '{') { friends = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(friends, lineEnd);
+            if (!objectEnd) break;
+            FriendEntry* entry = &playerFriends[playerFriendCount];
+            jsonStringBounded(friends, objectEnd, "fingerprint", entry->fingerprint, sizeof(entry->fingerprint));
+            jsonStringBounded(friends, objectEnd, "name", entry->name, sizeof(entry->name));
+            jsonStringBounded(friends, objectEnd, "status", entry->status, sizeof(entry->status));
+            entry->is_requester = jsonBoolBounded(friends, objectEnd, "is_requester", false);
+            entry->online = jsonBoolBounded(friends, objectEnd, "online", false);
+            jsonStringBounded(friends, objectEnd, "map", entry->map, sizeof(entry->map));
+            entry->x = jsonIntBounded(friends, objectEnd, "x", -1);
+            entry->y = jsonIntBounded(friends, objectEnd, "y", -1);
+            ++playerFriendCount;
+            friends = skipJsonSpace(objectEnd, lineEnd);
+            if (friends < lineEnd && *friends == ',') ++friends;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "friend_result")) {
+        // A friend request was answered; refresh the list on next opportunity.
+        requestFriendList();
+        return;
+    }
+    if (jsonTypeIs(line, "friend_removed")) {
+        requestFriendList();
+        return;
+    }
+    if (jsonTypeIs(line, "friend_update")) {
+        requestFriendList();
+        return;
+    }
+    if (jsonTypeIs(line, "guild_info")) {
+        guildInfo.active = false;
+        guildMemberCount = 0;
+        guildMemberPage = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* guild = findJsonValue(line, lineEnd, "guild");
+        if (guild && guild < lineEnd && *guild == '{') {
+            const char* objectEnd = findJsonObjectEnd(guild, lineEnd);
+            if (objectEnd) {
+                guildInfo.active = true;
+                jsonStringBounded(guild, objectEnd, "name", guildInfo.name, sizeof(guildInfo.name));
+                jsonStringBounded(guild, objectEnd, "tag", guildInfo.tag, sizeof(guildInfo.tag));
+                jsonStringBounded(guild, objectEnd, "leader_id", guildInfo.leader_id, sizeof(guildInfo.leader_id));
+            }
+        }
+        const char* members = findJsonValue(line, lineEnd, "members");
+        if (members && members < lineEnd && *members == '[') ++members;
+        while (members && guildMemberCount < 50) {
+            members = skipJsonSpace(members, lineEnd);
+            if (members >= lineEnd || *members == ']') break;
+            if (*members != '{') { members = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(members, lineEnd);
+            if (!objectEnd) break;
+            GuildMember* member = &guildMembers[guildMemberCount];
+            jsonStringBounded(members, objectEnd, "fingerprint", member->fingerprint, sizeof(member->fingerprint));
+            jsonStringBounded(members, objectEnd, "identity_id", member->identity_id, sizeof(member->identity_id));
+            jsonStringBounded(members, objectEnd, "role", member->role, sizeof(member->role));
+            ++guildMemberCount;
+            members = skipJsonSpace(objectEnd, lineEnd);
+            if (members < lineEnd && *members == ',') ++members;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "guild_update")) {
+        requestGuildInfo();
         return;
     }
     if (!jsonTypeIs(line, "presence") && !jsonTypeIs(line, "state") && !jsonTypeIs(line, "emote")) return;
@@ -1834,17 +2156,30 @@ static void parseOnlineLine(char* line) {
     if (index < 0 && remoteCount < 8) index = remoteCount++;
     if (index < 0) return;
     RemoteTrainer* trainer = &remoteTrainers[index];
+    const bool firstSeen = trainer->id[0] == 0;
     strcpy(trainer->id, id);
     if (jsonString(line, "name", name, sizeof(name))) strcpy(trainer->name, name);
+    char title[33] = {};
+    if (jsonString(line, "title", title, sizeof(title))) strcpy(trainer->title, title);
+    const uint64_t now = osGetTime();
+    if (!firstSeen) {
+        trainer->prevX = trainer->x;
+        trainer->prevY = trainer->y;
+    }
     trainer->x = jsonInt(line, "x", trainer->x);
     trainer->y = jsonInt(line, "y", trainer->y);
+    if (firstSeen) {
+        trainer->prevX = trainer->x;
+        trainer->prevY = trainer->y;
+    }
+    trainer->updatedAt = now;
     if (jsonString(line, "facing", facing, sizeof(facing))) trainer->facing = !strcmp(facing, "up") ? 2 : !strcmp(facing, "left") ? 3 : !strcmp(facing, "right") ? 4 : 1;
     char avatar[8] = {};
     if (jsonString(line, "avatar", avatar, sizeof(avatar))) trainer->isGirl = !strcmp(avatar, "girl");
     char emote[12];
     if (jsonString(line, "emote", emote, sizeof(emote))) {
         trainer->emote = !strcmp(emote, "wave") ? 1 : !strcmp(emote, "battle") ? 2 : !strcmp(emote, "trade") ? 3 : 4;
-        trainer->emoteUntil = osGetTime() + 1800;
+        trainer->emoteUntil = now + 1800;
     }
 }
 
@@ -1963,6 +2298,7 @@ static void onlineUpdate(void) {
     if (presence.valid && (!lastSentPresence.valid || memcmp(&presence, &lastSentPresence, sizeof(presence)))) {
         char state[192];
         snprintf(state, sizeof(state), "{\"type\":\"state\",\"seq\":%u,\"map\":\"%u-%u\",\"x\":%d,\"y\":%d,\"facing\":\"%s\",\"avatar\":\"%s\"}\n", ++onlineSequence, presence.mapGroup, presence.mapNum, presence.x, presence.y, facingName(presence.facing), trainerIsGirl ? "girl" : "boy");
+        // Debug invalid_state rejections: log the outgoing state packet here.
         if (onlineSend(state)) lastSentPresence = presence;
     }
     if (onlineAuthenticated && statsEnabled && saveStats.valid && now >= nextStatsUpload) {
@@ -1992,6 +2328,106 @@ static void openChat(void) {
     for (char* p = text; *p; ++p) if (*p == '"' || *p == '\\' || (unsigned char)*p < 0x20) *p = ' ';
     char packet[144];
     snprintf(packet, sizeof(packet), "{\"type\":\"chat\",\"scope\":\"%s\",\"text\":\"%s\"}\n", globalChat ? "global" : "map", text);
+    onlineSend(packet);
+}
+
+static void sendNpcInteract(const char* npcId) {
+    if (onlineMode != ONLINE_ACTIVE || !npcId || !npcId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"npc_interact\",\"npc_id\":\"%s\"}\n", npcId);
+    onlineSend(packet);
+}
+
+static void sendResourceInteract(const char* nodeId) {
+    if (onlineMode != ONLINE_ACTIVE || !nodeId || !nodeId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"resource_interact\",\"node_id\":\"%s\"}\n", nodeId);
+    onlineSend(packet);
+}
+
+static void sendQuestAccept(const char* questId) {
+    if (onlineMode != ONLINE_ACTIVE || !questId || !questId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"quest_accept\",\"quest_id\":\"%s\"}\n", questId);
+    onlineSend(packet);
+}
+
+static void requestQuestList(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"quest_list\"}\n");
+}
+
+static void requestTitleList(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"title_list\"}\n");
+}
+
+static void sendTitleEquip(const char* title) {
+    if (onlineMode != ONLINE_ACTIVE || !title || !title[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"title_equip\",\"title\":\"%s\"}\n", title);
+    onlineSend(packet);
+}
+
+static void requestFriendList(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"friend_list\"}\n");
+}
+
+static void sendFriendRequest(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"friend_request\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static void sendFriendAccept(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"friend_accept\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static void sendFriendRemove(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"friend_remove\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static void requestGuildInfo(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"guild_info\"}\n");
+}
+
+static void sendGuildCreate(const char* name, const char* tag) {
+    if (onlineMode != ONLINE_ACTIVE || !name || !name[0] || !tag || !tag[0]) return;
+    char packet[192];
+    snprintf(packet, sizeof(packet), "{\"type\":\"guild_create\",\"name\":\"%s\",\"tag\":\"%s\"}\n", name, tag);
+    onlineSend(packet);
+}
+
+static void sendGuildJoin(const char* name) {
+    if (onlineMode != ONLINE_ACTIVE || !name || !name[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"guild_join\",\"name\":\"%s\"}\n", name);
+    onlineSend(packet);
+}
+
+static void sendGuildLeave(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"guild_leave\"}\n");
+}
+
+static void sendGuildDisband(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"guild_disband\"}\n");
+}
+
+static void sendGuildKick(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"guild_kick\",\"fingerprint\":\"%s\"}\n", fingerprint);
     onlineSend(packet);
 }
 
@@ -2123,11 +2559,15 @@ static void drawPageIndicators(float y) {
         C2D_Color32(130, 200, 80, 255),  // Bag
         C2D_Color32(130, 200, 80, 255),  // Map
         C2D_Color32(160, 160, 160, 255), // Stats
+        C2D_Color32(130, 220, 120, 255), // Quests
+        C2D_Color32(210, 190, 80, 255),  // Titles
+        C2D_Color32(210, 120, 200, 255), // Friends
+        C2D_Color32(120, 120, 220, 255), // Guild
         C2D_Color32(200, 130, 60, 255),  // Teleport
         C2D_Color32(200, 100, 160, 255), // Update
     };
-    const float startX = 160 - (9 * 14) / 2.0f;
-    for (unsigned page = 0; page < 9; ++page) {
+    const float startX = 160 - (13 * 14) / 2.0f;
+    for (unsigned page = 0; page < 13; ++page) {
         float cx = startX + page * 14 + 4;
         uint32_t dotColor = (page == (unsigned) bottomPage) ? C2D_Color32(255, 255, 255, 255) : colors[page];
         C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
@@ -2146,6 +2586,10 @@ static void drawBottom(void) {
         bottomPage == PAGE_BAG ? localize(LS_BAG_LOCAL_ONLY) :
         bottomPage == PAGE_MAP ? localize(LS_MAP_TRAINER_RADAR) :
         bottomPage == PAGE_STATS ? localize(LS_PLAYER_STATS_AND_CONSENT) :
+        bottomPage == PAGE_QUESTS ? localize(LS_QUEST_LOG) :
+        bottomPage == PAGE_TITLES ? localize(LS_TITLE_LOG) :
+        bottomPage == PAGE_FRIENDS ? localize(LS_FRIENDS_LIST) :
+        bottomPage == PAGE_GUILD ? localize(LS_GUILD) :
         bottomPage == PAGE_TELEPORT ? localize(LS_TELEPORT) :
         bottomPage == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) : localize(LS_EMERALD_ONLINE);
     drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
@@ -2154,6 +2598,10 @@ static void drawBottom(void) {
     drawPageIndicators(31);
     if (bottomPage == PAGE_UPDATE) { drawUpdatePage(); return; }
     if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
+    if (bottomPage == PAGE_GUILD) { drawGuildPage(); return; }
+    if (bottomPage == PAGE_FRIENDS) { drawFriendsPage(); return; }
+    if (bottomPage == PAGE_TITLES) { drawTitlesPage(); return; }
+    if (bottomPage == PAGE_QUESTS) { drawQuestPage(); return; }
     if (bottomPage == PAGE_USERS) { drawOnlineUsersPage(); return; }
     if (bottomPage == PAGE_CHAT) { drawChatPage(); return; }
     if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
@@ -2244,7 +2692,7 @@ static unsigned filteredTeleportCount(void) {
 static void handleRepeatInput(void) {
     if (!repeatKeys) return;
     if (repeatKeys & KEY_Y) {
-        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 9);
+        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 13);
         return;
     }
     if (bottomPage == PAGE_TELEPORT) {
@@ -2278,17 +2726,45 @@ static void handleRepeatInput(void) {
         if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) { bagPocket = (bagPocket + 1) % 5; bagPage = 0; }
         if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && bagPage) --bagPage;
         if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) ++bagPage;
+    } else if (bottomPage == PAGE_QUESTS) {
+        const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && questLogPage) --questLogPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && questLogPage + 1 < pageCount) ++questLogPage;
+    } else if (bottomPage == PAGE_TITLES) {
+        const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && playerTitlePage) --playerTitlePage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && playerTitlePage + 1 < pageCount) ++playerTitlePage;
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && playerTitleSelected > playerTitlePage * 6) --playerTitleSelected;
+        if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && playerTitleSelected + 1 < playerTitleCount && playerTitleSelected < (playerTitlePage + 1) * 6) ++playerTitleSelected;
+    } else if (bottomPage == PAGE_FRIENDS) {
+        const unsigned pageCount = playerFriendCount ? (playerFriendCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && playerFriendPage) --playerFriendPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && playerFriendPage + 1 < pageCount) ++playerFriendPage;
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && playerFriendSelected > playerFriendPage * 6) --playerFriendSelected;
+        if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && playerFriendSelected + 1 < playerFriendCount && playerFriendSelected < (playerFriendPage + 1) * 6) ++playerFriendSelected;
+    } else if (bottomPage == PAGE_GUILD) {
+        const unsigned pageCount = guildMemberCount ? (guildMemberCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && guildMemberPage) --guildMemberPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && guildMemberPage + 1 < pageCount) ++guildMemberPage;
     }
 }
 
-static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y) {
+static inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+static inline float smoothstepf(float t) { t = clampf(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+
+static uint32_t withAlpha(uint32_t color, float alpha) {
+    u8 a = (u8)(clampf(alpha, 0.0f, 1.0f) * (color >> 24));
+    return (color & 0x00FFFFFF) | ((u32)a << 24);
+}
+
+static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y, float alpha, bool moving) {
     if (avatarSheet) {
         unsigned frame;
         bool flip = false;
-        // Emerald stores each direction as idle, step A, and step B. Use an
-        // idle/A/idle/B cadence so animation never crosses into another
-        // direction's frames.
-        unsigned phase = (osGetTime() / 160) & 3;
+        // Use a faster cadence while the trainer is moving so the walk cycle
+        // matches the interpolated motion; idle when standing still.
+        const unsigned period = moving ? 90 : 160;
+        unsigned phase = (osGetTime() / period) & 3;
         if (trainer->facing == 1) {
             static const unsigned downFrames[4] = {0, 3, 0, 4};
             frame = downFrames[phase];
@@ -2301,28 +2777,45 @@ static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y) {
             flip = trainer->facing == 4;
         }
         C2D_Image image = C2D_SpriteSheetGetImage(avatarSheet, (trainer->isGirl ? 9 : 0) + frame);
-        C2D_DrawImageAt(image, flip ? x + 24 : x, y, .36f, NULL, flip ? -1.5f : 1.5f, 1.5f);
+        C2D_ImageTint tint;
+        C2D_AlphaImageTint(&tint, alpha);
+        C2D_DrawImageAt(image, flip ? x + 24.0f : x, y, .36f, &tint, flip ? -REMOTE_SPRITE_SCALE : REMOTE_SPRITE_SCALE, REMOTE_SPRITE_SCALE);
         return;
     }
     const float z = 0.35f;
-    const bool step = ((osGetTime() / 180) + trainer->x + trainer->y) & 1;
+    // Walk cycle for the fallback silhouette: swap leg height and bob the body.
+    const unsigned period = moving ? 100 : 220;
+    const bool step = ((osGetTime() / period) + trainer->x + trainer->y) & 1;
     const float bob = step ? 1.0f : 0.0f;
-    const uint32_t outline = C2D_Color32(25, 35, 45, 245);
-    const uint32_t skin = C2D_Color32(244, 190, 145, 255);
-    const uint32_t cap = C2D_Color32(225, 58, 70, 255);
-    const uint32_t shirt = C2D_Color32(48, 126, 205, 255);
-    const uint32_t pack = C2D_Color32(244, 196, 61, 255);
-    const uint32_t pants = C2D_Color32(42, 58, 92, 255);
+    const uint32_t outline = withAlpha(C2D_Color32(25, 35, 45, 245), alpha);
+    const uint32_t skin = withAlpha(C2D_Color32(244, 190, 145, 255), alpha);
+    const uint32_t cap = withAlpha(C2D_Color32(225, 58, 70, 255), alpha);
+    const uint32_t shirt = withAlpha(C2D_Color32(48, 126, 205, 255), alpha);
+    const uint32_t pack = withAlpha(C2D_Color32(244, 196, 61, 255), alpha);
+    const uint32_t pants = withAlpha(C2D_Color32(42, 58, 92, 255), alpha);
 
     // Shadow and outlined pixel-art silhouette, sized to remain readable over
     // Emerald's upscaled 400x240 framebuffer on an Old 3DS display.
-    C2D_DrawEllipseSolid(x + 2, y + 31, z, 22, 6, C2D_Color32(0, 0, 0, 100));
+    C2D_DrawEllipseSolid(x + 2, y + 31, z, 22, 6, withAlpha(C2D_Color32(0, 0, 0, 100), alpha));
     C2D_DrawRectSolid(x + 4, y + 5 + bob, z, 16, 12, outline);
     C2D_DrawRectSolid(x + 6, y + 7 + bob, z + .01f, 12, 9, skin);
-    C2D_DrawRectSolid(x + 3, y + 3 + bob, z + .02f, 18, 5, cap);
-    if (trainer->facing == 3) C2D_DrawRectSolid(x, y + 6 + bob, z + .02f, 6, 3, cap);
-    else if (trainer->facing == 4) C2D_DrawRectSolid(x + 18, y + 6 + bob, z + .02f, 6, 3, cap);
-    else C2D_DrawRectSolid(x + 8, y + 1 + bob, z + .02f, 11, 3, cap);
+    // Cap shape changes per facing direction so up/down/left/right read clearly.
+    if (trainer->facing == 1) {
+        // Down: brim centered, visor visible.
+        C2D_DrawRectSolid(x + 3, y + 3 + bob, z + .02f, 18, 5, cap);
+        C2D_DrawRectSolid(x + 7, y + 1 + bob, z + .02f, 10, 2, cap);
+    } else if (trainer->facing == 2) {
+        // Up: smaller cap, no visor.
+        C2D_DrawRectSolid(x + 5, y + 3 + bob, z + .02f, 14, 5, cap);
+    } else if (trainer->facing == 3) {
+        // Left: brim on left side.
+        C2D_DrawRectSolid(x + 3, y + 3 + bob, z + .02f, 16, 5, cap);
+        C2D_DrawRectSolid(x, y + 5 + bob, z + .02f, 5, 3, cap);
+    } else {
+        // Right: brim on right side.
+        C2D_DrawRectSolid(x + 5, y + 3 + bob, z + .02f, 16, 5, cap);
+        C2D_DrawRectSolid(x + 19, y + 5 + bob, z + .02f, 5, 3, cap);
+    }
     C2D_DrawRectSolid(x + 3, y + 16 + bob, z, 18, 12, outline);
     C2D_DrawRectSolid(x + 5, y + 17 + bob, z + .01f, 14, 10, shirt);
     C2D_DrawRectSolid(x + (trainer->facing == 3 ? 15 : 5), y + 18 + bob, z + .02f, 4, 7, pack);
@@ -2341,16 +2834,67 @@ static void drawTop(void) {
     // network trainer over a non-overworld framebuffer.
     if (!isEmeraldOverworld() || !presence.valid) return;
     C2D_TextBufClear(textBuffer);
+
+    const uint64_t now = osGetTime();
+    // Build a list of visible remote trainers with interpolated positions.
+    struct VisibleTrainer {
+        const RemoteTrainer* trainer;
+        float tileX, tileY;      // interpolated tile position relative to local player
+        float screenX, screenY;  // pixel position on the 400x240 top screen
+        bool moving;
+        float alpha;
+    } visible[8];
+    int visibleCount = 0;
+
     for (int i = 0; i < remoteCount; ++i) {
-        int dx = remoteTrainers[i].x - presence.x, dy = remoteTrainers[i].y - presence.y;
-        if (dx < -8 || dx > 8 || dy < -6 || dy > 6) continue;
-        float x = 200 + dx * 26.67f - 12, y = 120 + dy * 24.0f - 23;
-        drawRemoteTrainer(&remoteTrainers[i], x, y);
-        drawText(x - 9, y - 12, .32f, C2D_Color32(255,255,255,255), "%.8s", remoteTrainers[i].name);
-        if (remoteTrainers[i].emote && osGetTime() < remoteTrainers[i].emoteUntil) {
+        const RemoteTrainer* t = &remoteTrainers[i];
+        float elapsed = (float)(now - t->updatedAt);
+        float tFactor = smoothstepf(elapsed / (float)REMOTE_INTERPOLATION_MS);
+        float tileX = (float)t->prevX + ((float)t->x - (float)t->prevX) * tFactor;
+        float tileY = (float)t->prevY + ((float)t->y - (float)t->prevY) * tFactor;
+        float dx = tileX - (float)presence.x;
+        float dy = tileY - (float)presence.y;
+        if (dx < -8.0f || dx > 8.0f || dy < -6.0f || dy > 6.0f) continue;
+        float sx = 200.0f + dx * OVERLAY_TILE_W - 12.0f;
+        float sy = 120.0f + dy * OVERLAY_TILE_H - 23.0f;
+        if (sx < -32.0f || sx > 432.0f || sy < -48.0f || sy > 288.0f) continue;
+
+        // Depth heuristic: trainers visually above the local player are behind
+        // the player / foreground buildings, so fade them down.
+        const bool behind = tileY < (float)presence.y;
+        float alpha = behind ? 0.55f : 1.0f;
+
+        bool moving = (t->x != t->prevX || t->y != t->prevY) && elapsed < REMOTE_INTERPOLATION_MS;
+        visible[visibleCount++] = { t, tileX, tileY, sx, sy, moving, alpha };
+    }
+
+    // Y-sort so lower-on-screen trainers draw last (correct layering).
+    for (int i = 0; i < visibleCount - 1; ++i) {
+        for (int j = i + 1; j < visibleCount; ++j) {
+            if (visible[j].screenY > visible[i].screenY) {
+                VisibleTrainer tmp = visible[i];
+                visible[i] = visible[j];
+                visible[j] = tmp;
+            }
+        }
+    }
+
+    for (int i = 0; i < visibleCount; ++i) {
+        const VisibleTrainer& v = visible[i];
+        const RemoteTrainer* t = v.trainer;
+        drawRemoteTrainer(t, v.screenX, v.screenY, v.alpha, v.moving);
+
+        // Draw title above name, then name above sprite.
+        float labelY = v.screenY - 12.0f;
+        if (t->title[0]) {
+            drawText(v.screenX, labelY - 10.0f, .28f, withAlpha(C2D_Color32(255, 220, 130, 255), v.alpha), "%.14s", t->title);
+        }
+        drawText(v.screenX - 9.0f, labelY, .32f, withAlpha(C2D_Color32(255, 255, 255, 255), v.alpha), "%.8s", t->name);
+
+        if (t->emote && now < t->emoteUntil) {
             static const char* bubbles[] = {"", localize(LS_HI), localize(LS_EXCLAMATION), localize(LS_ANGLED_BRACKETS), localize(LS_GG)};
-            C2D_DrawRectSolid(x + 17, y - 28, .4f, 22, 15, C2D_Color32(255,255,240,235));
-            drawText(x + 20, y - 26, .34f, C2D_Color32(35,45,50,255), "%s", bubbles[remoteTrainers[i].emote]);
+            C2D_DrawRectSolid(v.screenX + 17.0f, v.screenY - 28.0f, .4f, 22, 15, withAlpha(C2D_Color32(255,255,240,235), v.alpha));
+            drawText(v.screenX + 20.0f, v.screenY - 26.0f, .34f, withAlpha(C2D_Color32(35,45,50,255), v.alpha), "%s", bubbles[t->emote]);
         }
     }
 }
@@ -2510,15 +3054,81 @@ int main(void) {
         uint32_t down = hidKeysDown();
         uint64_t now = osGetTime();
         if (down & KEY_X) onlineToggle();
-        handleRepeatInput();
+        if (down & KEY_A) {
+            if (npcDialogue.active) {
+                if (npcDialogue.quest_id[0]) {
+                    sendQuestAccept(npcDialogue.quest_id);
+                    npcDialogue.active = false;
+                } else {
+                    npcDialogue.active = false;
+                }
+            } else {
+                const OnlineNpc* adjacent = nullptr;
+                for (unsigned i = 0; i < onlineNpcCount; ++i) {
+                    if (presence.valid && abs((int)onlineNpcs[i].x - (int)presence.x) + abs((int)onlineNpcs[i].y - (int)presence.y) <= 2) {
+                        adjacent = &onlineNpcs[i];
+                        break;
+                    }
+                }
+                if (adjacent) sendNpcInteract(adjacent->npc_id);
+                else {
+                    const ResourceNode* resource = nullptr;
+                    for (unsigned i = 0; i < resourceNodeCount; ++i) {
+                        if (presence.valid && resourceNodes[i].available && abs((int)resourceNodes[i].x - (int)presence.x) + abs((int)resourceNodes[i].y - (int)presence.y) <= 2) {
+                            resource = &resourceNodes[i];
+                            break;
+                        }
+                    }
+                    if (resource) sendResourceInteract(resource->node_id);
+                    else if (bottomPage == PAGE_TITLES && playerTitleSelected < playerTitleCount) {
+                    sendTitleEquip(playerTitles[playerTitleSelected].title);
+                } else if (bottomPage == PAGE_FRIENDS && playerFriendSelected < playerFriendCount) {
+                    const FriendEntry* friendEntry = &playerFriends[playerFriendSelected];
+                    if (!strcmp(friendEntry->status, "pending") && !friendEntry->is_requester) {
+                        sendFriendAccept(friendEntry->fingerprint);
+                    } else if (!strcmp(friendEntry->status, "accepted")) {
+                        sendFriendRemove(friendEntry->fingerprint);
+                    }
+                }
+            }
+        }
+    }
+    handleRepeatInput();
         if ((down & KEY_TOUCH) && now >= touchDebounceUntil) {
             touchDebounceUntil = now + TOUCH_DEBOUNCE_MS;
             touchPosition touch;
             hidTouchRead(&touch);
-            if (bottomPage == PAGE_USERS && touch.py >= 210) {
+            if (npcDialogue.active && touch.py >= 196) {
+                if (npcDialogue.quest_id[0]) sendQuestAccept(npcDialogue.quest_id);
+                npcDialogue.active = false;
+            } else if (bottomPage == PAGE_USERS && touch.py >= 210) {
                 const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
                 if (touch.px < 160) { if (onlineUserPage) --onlineUserPage; }
                 else if (onlineUserPage + 1 < pageCount) ++onlineUserPage;
+            } else if (bottomPage == PAGE_QUESTS && touch.py >= 216) {
+                const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (questLogPage) --questLogPage; }
+                else if (questLogPage + 1 < pageCount) ++questLogPage;
+            } else if (bottomPage == PAGE_TITLES && touch.py >= 42 && touch.py < 216) {
+                int row = (int)((touch.py - 42) / 30);
+                unsigned visible = playerTitlePage * 6 + row;
+                if (row >= 0 && visible < playerTitleCount) playerTitleSelected = visible;
+            } else if (bottomPage == PAGE_TITLES && touch.py >= 216) {
+                const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (playerTitlePage) --playerTitlePage; }
+                else if (playerTitlePage + 1 < pageCount) ++playerTitlePage;
+            } else if (bottomPage == PAGE_FRIENDS && touch.py >= 42 && touch.py < 216) {
+                int row = (int)((touch.py - 42) / 30);
+                unsigned visible = playerFriendPage * 6 + row;
+                if (row >= 0 && visible < playerFriendCount) playerFriendSelected = visible;
+            } else if (bottomPage == PAGE_FRIENDS && touch.py >= 216) {
+                const unsigned pageCount = playerFriendCount ? (playerFriendCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (playerFriendPage) --playerFriendPage; }
+                else if (playerFriendPage + 1 < pageCount) ++playerFriendPage;
+            } else if (bottomPage == PAGE_GUILD && touch.py >= 216) {
+                const unsigned pageCount = guildMemberCount ? (guildMemberCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (guildMemberPage) --guildMemberPage; }
+                else if (guildMemberPage + 1 < pageCount) ++guildMemberPage;
             } else if (bottomPage == PAGE_CHAT && touch.py >= 40 && touch.py < 68) {
                 globalChat = touch.px >= 160;
                 chatPage = 0;
@@ -2602,6 +3212,22 @@ int main(void) {
         // RFU response windows are much tighter than ordinary presence sync.
         // While linked, service the nonblocking socket once per emulated frame.
         if (now >= nextOnlinePoll) { nextOnlinePoll = now + (linkStarted ? 1 : 100); onlineUpdate(); }
+        if (bottomPage == PAGE_QUESTS && onlineMode == ONLINE_ACTIVE && now >= nextQuestListRequest) {
+            requestQuestList();
+            nextQuestListRequest = now + 5000;
+        }
+        if (bottomPage == PAGE_TITLES && onlineMode == ONLINE_ACTIVE && now >= nextTitleListRequest) {
+            requestTitleList();
+            nextTitleListRequest = now + 5000;
+        }
+        if (bottomPage == PAGE_FRIENDS && onlineMode == ONLINE_ACTIVE && now >= nextFriendListRequest) {
+            requestFriendList();
+            nextFriendListRequest = now + 5000;
+        }
+        if (bottomPage == PAGE_GUILD && onlineMode == ONLINE_ACTIVE && now >= nextGuildInfoRequest) {
+            requestGuildInfo();
+            nextGuildInfoRequest = now + 5000;
+        }
         if (now >= nextSaveCheck) { nextSaveCheck = now + 5000; writeSave(false); }
         if (!fpsStarted) fpsStarted = now;
         if (++fpsFrames && now - fpsStarted >= 1000) {
@@ -2613,6 +3239,7 @@ int main(void) {
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
         drawTop();
         if (renderedFrames < 2 || renderedFrames % 5 == 0) drawBottom();
+        drawNpcDialogueOverlay();
         ++renderedFrames;
         C3D_FrameEnd(0);
     }

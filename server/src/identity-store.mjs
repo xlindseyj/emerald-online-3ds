@@ -92,6 +92,11 @@ export class PostgresIdentityStore {
     return result.rows[0] ?? null;
   }
 
+  async count() {
+    const result = await this.pool.query("SELECT count(*)::int AS count FROM identities WHERE deleted_at IS NULL");
+    return result.rows[0].count;
+  }
+
   async recover(identityId, code) {
     if (!UUID.test(identityId ?? '') || !RECOVERY.test(code ?? '')) return null;
     const client = await this.pool.connect();
@@ -267,6 +272,18 @@ export class PostgresIdentityStore {
     } finally { client.release(); }
   }
 
+  async findByFingerprint(fingerprint) {
+    if (!FINGERPRINT.test(fingerprint ?? '')) return null;
+    const result = await this.pool.query(
+      `SELECT i.id, i.fingerprint,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role='admin') AS is_admin,
+         EXISTS (SELECT 1 FROM identity_roles r WHERE r.identity_id=i.id AND r.role IN ('moderator','admin')) AS is_moderator
+       FROM identities i WHERE i.fingerprint=$1 AND i.deleted_at IS NULL`,
+      [fingerprint]
+    );
+    return result.rows[0] ?? null;
+  }
+
   async revokeRole(actorFingerprint, targetFingerprint, role) {
     if (!FINGERPRINT.test(actorFingerprint ?? '') || !FINGERPRINT.test(targetFingerprint ?? '') || !ROLES.has(role ?? '')) return false;
     const client = await this.pool.connect();
@@ -347,6 +364,7 @@ export class MemoryIdentityStore {
     return { session_id: session.sessionId, identity_id: session.identityId, fingerprint: identity.fingerprint, is_admin: isAdmin, is_moderator: isAdmin || identity.isModerator === true, csrf_token: this.browserCsrf(token) };
   }
   async revokeBrowserSession(token) { const session = this.browserSessions.get(token); if (!session || session.revoked) return false; session.revoked = true; return true; }
+  async count() { return this.identities.size; }
   async exportIdentity(identityId) { const r = this.identities.get(identityId); return r ? { id: r.identityId, fingerprint: r.fingerprint, active_device_credentials: r.credentials.size } : null; }
   async deleteIdentity(identityId) { return this.identities.delete(identityId); }
   async assignRole(actorFingerprint, targetFingerprint, role) {
@@ -357,6 +375,13 @@ export class MemoryIdentityStore {
     this.audit.push({ action: 'role_assigned', actor_identity_id: actor.identityId, target_identity_id: target.identityId, role, created_at: Date.now() });
     return true;
   }
+  async findByFingerprint(fingerprint) {
+    if (!FINGERPRINT.test(fingerprint ?? '')) return null;
+    const r = [...this.identities.values()].find(r => r.fingerprint === fingerprint);
+    if (!r) return null;
+    return { id: r.identityId, fingerprint: r.fingerprint, is_admin: r.isAdmin === true, is_moderator: r.isModerator === true };
+  }
+
   async revokeRole(actorFingerprint, targetFingerprint, role) {
     if (!FINGERPRINT.test(actorFingerprint ?? '') || !FINGERPRINT.test(targetFingerprint ?? '') || !ROLES.has(role ?? '')) return false;
     const actor = [...this.identities.values()].find(r => r.fingerprint === actorFingerprint); if (!actor || actor.isAdmin !== true) return false;
