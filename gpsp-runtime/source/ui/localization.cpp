@@ -222,6 +222,17 @@ static const char* english(LocalizedString key) {
     case LS_QUEST_REWARD_TITLE: return "Title unlocked:";
     case LS_NPC_DIALOGUE_TITLE: return "NPC DIALOGUE";
     case LS_QUEST_ACCEPTED: return "Quest accepted!";
+    case LS_TALK_TO: return "Talk to %s";
+    case LS_HARVEST_NODE: return "Harvest %s";
+    case LS_STAT_AT_LEAST: return "%s %d";
+    case LS_COMPLETE_QUEST: return "Complete quest %s";
+    case LS_QUEST_STAGES: return "STAGES";
+    case LS_QUEST_REWARD: return "Reward";
+    case LS_QUEST_CLAIM: return "CLAIM REWARD";
+    case LS_QUEST_IN_PROGRESS: return "IN PROGRESS";
+    case LS_QUEST_DONE: return "DONE";
+    case LS_QUEST_CLOSE: return "CLOSE";
+    case LS_QUEST_DETAIL: return "QUEST DETAIL";
 
     case LS_TITLE_LOG: return "TITLE LOG";
     case LS_FRIENDS_LIST: return "FRIENDS";

@@ -471,6 +471,48 @@ void drawQuestPage(void) {
         drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_QUESTS));
         return;
     }
+    if (questDetailOpen && questLogSelected >= 0 && questLogSelected < (int)questLogCount) {
+        const QuestLogEntry* entry = &questLog[questLogSelected];
+        drawText(40, 10, .45f, C2D_Color32(255,255,255,255), "%s", localize(LS_QUEST_DETAIL));
+        drawText(10, 10, .32f, C2D_Color32(200,220,220,255), "< %s", localize(LS_QUEST_CLOSE));
+        C2D_DrawRectSolid(10, 40, 0, 300, 2, C2D_Color32(47,184,230,255));
+        drawText(14, 48, .38f, C2D_Color32(255,220,130,255), "%.34s", entry->title);
+        drawText(14, 72, .29f, C2D_Color32(220,230,220,255), "%.92s", entry->description);
+
+        drawText(14, 100, .32f, C2D_Color32(160,232,255,255), "%s", localize(LS_QUEST_STAGES));
+        float y = 118;
+        for (unsigned i = 0; i < entry->requirementCount && y < 190; ++i) {
+            const QuestRequirement* req = &entry->requirements[i];
+            drawText(14, y, .28f, C2D_Color32(220,230,220,255), "%s %.54s", req->completed ? "[x]" : "[ ]", req->label);
+            y += 18;
+        }
+
+        if (entry->reward_kind[0]) {
+            char reward[80] = {};
+            if (!strcmp(entry->reward_kind, "title")) {
+                const char* t = strstr(entry->reward_data, "\"title\":\"");
+                if (t) {
+                    t += 9;
+                    const char* end = strchr(t, '"');
+                    if (end) snprintf(reward, sizeof(reward), "%.*s", (int)(end - t), t);
+                }
+            }
+            if (!reward[0]) snprintf(reward, sizeof(reward), "%.60s", entry->reward_data);
+            drawText(14, y, .29f, C2D_Color32(255,220,130,255), "%s: %s", localize(LS_QUEST_REWARD), reward);
+            y += 22;
+        }
+
+        const bool isAvailable = !strcmp(entry->status, "available");
+        const bool isCompleted = !strcmp(entry->status, "completed");
+        const bool canAct = isAvailable || isCompleted;
+        const char* actionLabel = isAvailable ? localize(LS_ACCEPT_QUEST) :
+            (isCompleted ? localize(LS_QUEST_CLAIM) :
+            (!strcmp(entry->status, "claimed") ? localize(LS_QUEST_DONE) : localize(LS_QUEST_IN_PROGRESS)));
+        C2D_DrawRectSolid(60, 216, 0, 200, 24, canAct ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
+        drawText(90, 221, .34f, C2D_Color32(255,255,255,255), "%s", actionLabel);
+        return;
+    }
+
     const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
     if (questLogPage >= pageCount) questLogPage = pageCount - 1;
     const unsigned start = questLogPage * 6;
@@ -480,8 +522,13 @@ void drawQuestPage(void) {
         const unsigned index = start + row;
         if (index >= questLogCount) continue;
         const QuestLogEntry* entry = &questLog[index];
-        drawText(14, y + 3, .35f, C2D_Color32(255,255,255,255), "%.30s", entry->title);
+        uint32_t statusColor = C2D_Color32(255,255,255,255);
+        if (!strcmp(entry->status, "accepted")) statusColor = C2D_Color32(120,255,150,255);
+        else if (!strcmp(entry->status, "completed")) statusColor = C2D_Color32(255,220,130,255);
+        else if (!strcmp(entry->status, "claimed")) statusColor = C2D_Color32(180,180,180,255);
+        drawText(14, y + 3, .35f, statusColor, "%.30s", entry->title);
         drawText(14, y + 15, .28f, C2D_Color32(190,220,210,255), "%.20s", entry->status);
+        drawText(280, y + 8, .34f, C2D_Color32(200,220,220,255), ">");
     }
     C2D_DrawRectSolid(10, 216, 0, 145, 24, questLogPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(165, 216, 0, 145, 24, questLogPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));

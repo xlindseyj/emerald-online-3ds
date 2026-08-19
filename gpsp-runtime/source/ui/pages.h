@@ -115,16 +115,28 @@ extern ResourceNode resourceNodes[8];
 extern unsigned resourceNodeCount;
 
 // Quest log state from main.cpp.
+struct QuestRequirement {
+    char kind[16];
+    char label[64];
+    bool completed;
+};
+
 struct QuestLogEntry {
     char quest_id[37];
     char slug[65];
     char title[121];
     char description[201];
     char status[16];
+    char reward_kind[16];
+    char reward_data[121];
+    uint8_t requirementCount;
+    QuestRequirement requirements[8];
 };
 extern QuestLogEntry questLog[8];
 extern unsigned questLogCount;
 extern unsigned questLogPage;
+extern int questLogSelected;
+extern bool questDetailOpen;
 
 // Title inventory state from main.cpp.
 struct TitleEntry {

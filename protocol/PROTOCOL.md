@@ -55,7 +55,13 @@ After authentication, clients may send:
 
 Server messages include `snapshot`, `online_users`, `chat`, `emote`, `pong`, `teleport_locations`, `teleport_result`, and `error`. Coordinates are integer tile coordinates from 0 through 4095. Names are 1-12 printable ASCII characters. Chat is 1-80 printable ASCII characters; quotes and backslashes are excluded. Chat is same-map only and limited to one message per second. Each delivered chat includes a server-generated ISO 8601 `sentAt` timestamp. Emotes are `wave`, `battle`, `trade`, or `gg`, same-map only, and limited to one every two seconds. Facing is `up`, `down`, `left`, or `right`. Sequence numbers must increase.
 
-`snapshot` remains strictly same-map and excludes the receiving trainer. `online_users` is a separate global, read-only presence feed containing every authenticated connection, including the receiver. It deliberately exposes only the opaque connection ID, display name, current map, and tile coordinates; it never includes ROM, save, party, inventory, account token, or browser data. A connected trainer that has not sent a valid state yet has an empty map and coordinates of `-1`.
+`snapshot` remains strictly same-map and excludes the receiving trainer. Each player entry contains `id`, `name`, `x`, `y`, `facing`, `avatar`, and optionally `title` (the equipped player title, up to 32 characters). The runtime may interpolate movement between snapshots and layer sprites using a simple depth heuristic.
+
+```json
+{"type":"snapshot","map":"0-9","players":[{"id":"00000000-0000-4000-8000-000000000000","name":"May","x":14,"y":13,"facing":"down","avatar":"girl","title":"Champion"}]}
+```
+
+`online_users` is a separate global, read-only presence feed containing every authenticated connection, including the receiver. It deliberately exposes only the opaque connection ID, display name, current map, and tile coordinates; it never includes ROM, save, party, inventory, account token, or browser data. A connected trainer that has not sent a valid state yet has an empty map and coordinates of `-1`.
 
 The global feed is sorted by display name and opaque ID, divided into at most 16 users per line, and coalesced to at most one refresh per second:
 
@@ -90,6 +96,23 @@ Authenticated clients may request a list of teleport destinations and then ask t
 ```
 
 A failed warp returns `ok:false` and a `code` such as `teleport_unauthorized`, `teleport_not_found`, or `teleport_player_unavailable`. Player destinations resolve against the current online roster and are rejected when the target has no valid state.
+
+## Quests
+
+Authenticated clients can list quests, accept available ones, and claim rewards. The server tracks progress automatically when the player talks to the required NPC or harvests the required resource node; the client only displays the current stage checkmarks.
+
+```json
+{"type":"quest_list"}
+{"type":"quest_list","quests":[{"id":"00000000-0000-4000-8000-000000000000","slug":"welcome-to-hoenn-online","title":"Welcome to Hoenn Online","description":"The scientist in Littleroot needs your help testing the online connection.","status":"available","requirements":[],"progress":{},"reward_kind":"title","reward_data":{"title":"Beta Pioneer"}}]}
+
+{"type":"quest_accept","quest_id":"00000000-0000-4000-8000-000000000000"}
+{"type":"quest_update","quest_id":"00000000-0000-4000-8000-000000000000","status":"accepted","progress":{},"reward":null}
+
+{"type":"quest_claim","quest_id":"00000000-0000-4000-8000-000000000000"}
+{"type":"quest_update","quest_id":"00000000-0000-4000-8000-000000000000","status":"claimed","progress":{},"reward":{"kind":"title","data":{"title":"Beta Pioneer"}}}
+```
+
+Requirement `kind` values are `talk_to_npc`, `interact_resource`, `stat_at_least`, and `quest_completed`. The client may check off `talk_to_npc` and `interact_resource` stages locally by comparing the requirement IDs to the `progress.npcs` and `progress.resources` arrays; other requirement kinds are checked by the server and reflected in `status`.
 
 ## Release updates
 

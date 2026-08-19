@@ -137,6 +137,23 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(gpspSource, /C2D_DrawEllipseSolid/);
   assert.match(gpspSource, /const bool step/);
   assert.match(gpspSource, /localize\(LS_HI\), localize\(LS_EXCLAMATION\), localize\(LS_ANGLED_BRACKETS\), localize\(LS_GG\)/);
+  // Interpolation, depth sorting, and title rendering.
+  assert.match(gpspSource, /REMOTE_INTERPOLATION_MS/);
+  assert.match(gpspSource, /smoothstepf/);
+  assert.match(gpspSource, /visible\[.*\]\.screenY.*visible\[.*\]\.screenY/s);
+  assert.match(gpspSource, /withAlpha\(/);
+  assert.match(gpspSource, /t->title\[0\]/);
+  assert.match(pagesHeaderSource, /int16_t prevX;/);
+  assert.match(pagesHeaderSource, /int16_t prevY;/);
+  assert.match(pagesHeaderSource, /uint64_t updatedAt;/);
+  assert.match(pagesHeaderSource, /char title\[33\];/);
+  // Interactive quest log.
+  assert.match(pagesHeaderSource, /struct QuestRequirement/);
+  assert.match(pagesHeaderSource, /uint8_t requirementCount;/);
+  assert.match(pagesHeaderSource, /char reward_kind\[16\];/);
+  assert.match(pagesSource, /questDetailOpen/);
+  assert.match(pagesSource, /LS_QUEST_STAGES/);
+  assert.match(gpspSource, /sendQuestClaim/);
 });
 
 test('gpSP reports native-map coordinates but suppresses overlay trainers outside the verified overworld', () => {

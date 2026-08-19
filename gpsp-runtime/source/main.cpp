@@ -113,6 +113,8 @@ ResourceNode resourceNodes[8];
 unsigned resourceNodeCount = 0;
 QuestLogEntry questLog[8];
 unsigned questLogCount = 0;
+int questLogSelected = -1;
+bool questDetailOpen = false;
 TitleEntry playerTitles[16];
 unsigned playerTitleCount = 0;
 unsigned playerTitlePage = 0;
@@ -1612,6 +1614,23 @@ static const char* findJsonObjectEnd(const char* at, const char* end) {
     return NULL;
 }
 
+static const char* findJsonArrayEnd(const char* at, const char* end) {
+    if (at >= end || *at != '[') return NULL;
+    int depth = 0;
+    bool inString = false, escaped = false;
+    for (; at < end; ++at) {
+        char value = *at;
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (value == '\\') escaped = true;
+            else if (value == '"') inString = false;
+        } else if (value == '"') inString = true;
+        else if (value == '[') ++depth;
+        else if (value == ']' && --depth == 0) return at + 1;
+    }
+    return NULL;
+}
+
 static int hexNibble(char value) {
     if (value >= '0' && value <= '9') return value - '0';
     if (value >= 'a' && value <= 'f') return value - 'a' + 10;
@@ -2019,6 +2038,8 @@ static void parseOnlineLine(char* line) {
     if (jsonTypeIs(line, "quest_list")) {
         questLogCount = 0;
         questLogPage = 0;
+        questLogSelected = -1;
+        questDetailOpen = false;
         const char* lineEnd = line + strlen(line);
         const char* quests = findJsonValue(line, lineEnd, "quests");
         if (quests && quests < lineEnd && *quests == '[') ++quests;
@@ -2029,13 +2050,103 @@ static void parseOnlineLine(char* line) {
             const char* objectEnd = findJsonObjectEnd(quests, lineEnd);
             if (!objectEnd) break;
             QuestLogEntry* entry = &questLog[questLogCount];
+            memset(entry, 0, sizeof(QuestLogEntry));
             if (!jsonStringBounded(quests, objectEnd, "id", entry->quest_id, sizeof(entry->quest_id)) ||
                 !jsonStringBounded(quests, objectEnd, "title", entry->title, sizeof(entry->title))) break;
             jsonStringBounded(quests, objectEnd, "slug", entry->slug, sizeof(entry->slug));
             jsonStringBounded(quests, objectEnd, "description", entry->description, sizeof(entry->description));
             jsonStringBounded(quests, objectEnd, "status", entry->status, sizeof(entry->status));
+            jsonStringBounded(quests, objectEnd, "reward_kind", entry->reward_kind, sizeof(entry->reward_kind));
+            jsonStringBounded(quests, objectEnd, "reward_data", entry->reward_data, sizeof(entry->reward_data));
+
+            // Parse progress: we only need the npcs and resources arrays to check off stages locally.
+            char progressNpcs[8][37] = {};
+            int progressNpcCount = 0;
+            char progressResources[8][37] = {};
+            int progressResourceCount = 0;
+            const char* progress = findJsonValue(quests, objectEnd, "progress");
+            if (progress && progress < objectEnd && *progress == '{') {
+                const char* progressEnd = findJsonObjectEnd(progress, objectEnd);
+                if (progressEnd) {
+                    const char* npcs = findJsonValue(progress, progressEnd, "npcs");
+                    if (npcs && npcs < progressEnd && *npcs == '[') {
+                        ++npcs;
+                        while (progressNpcCount < 8) {
+                            npcs = skipJsonSpace(npcs, progressEnd);
+                            if (npcs >= progressEnd || *npcs == ']') break;
+                            if (*npcs != '"') break;
+                            char id[37] = {};
+                            if (parseJsonString(&npcs, progressEnd, id, sizeof(id)))
+                                strcpy(progressNpcs[progressNpcCount++], id);
+                            npcs = skipJsonSpace(npcs, progressEnd);
+                            if (npcs < progressEnd && *npcs == ',') ++npcs;
+                        }
+                    }
+                    const char* resources = findJsonValue(progress, progressEnd, "resources");
+                    if (resources && resources < progressEnd && *resources == '[') {
+                        ++resources;
+                        while (progressResourceCount < 8) {
+                            resources = skipJsonSpace(resources, progressEnd);
+                            if (resources >= progressEnd || *resources == ']') break;
+                            if (*resources != '"') break;
+                            char id[37] = {};
+                            if (parseJsonString(&resources, progressEnd, id, sizeof(id)))
+                                strcpy(progressResources[progressResourceCount++], id);
+                            resources = skipJsonSpace(resources, progressEnd);
+                            if (resources < progressEnd && *resources == ',') ++resources;
+                        }
+                    }
+                }
+            }
+
+            // Parse requirements into human-readable stage rows with local completion checks.
+            const char* requirements = findJsonValue(quests, objectEnd, "requirements");
+            if (requirements && requirements < objectEnd && *requirements == '[') {
+                ++requirements;
+                while (entry->requirementCount < 8) {
+                    requirements = skipJsonSpace(requirements, objectEnd);
+                    if (requirements >= objectEnd || *requirements == ']') break;
+                    if (*requirements != '{') break;
+                    const char* reqEnd = findJsonObjectEnd(requirements, objectEnd);
+                    if (!reqEnd) break;
+                    QuestRequirement* req = &entry->requirements[entry->requirementCount];
+                    char kind[16] = {};
+                    jsonStringBounded(requirements, reqEnd, "kind", kind, sizeof(kind));
+                    strcpy(req->kind, kind);
+
+                    char npcId[65] = {}, nodeId[65] = {}, stat[33] = {}, questId[37] = {};
+                    int statValue = jsonIntBounded(requirements, reqEnd, "value", 0);
+                    jsonStringBounded(requirements, reqEnd, "npc_id", npcId, sizeof(npcId));
+                    jsonStringBounded(requirements, reqEnd, "node_id", nodeId, sizeof(nodeId));
+                    jsonStringBounded(requirements, reqEnd, "stat", stat, sizeof(stat));
+                    jsonStringBounded(requirements, reqEnd, "quest_id", questId, sizeof(questId));
+
+                    if (!strcmp(kind, "talk_to_npc")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_TALK_TO), npcId);
+                        for (int i = 0; i < progressNpcCount; ++i)
+                            if (!strcmp(progressNpcs[i], npcId)) req->completed = true;
+                    } else if (!strcmp(kind, "interact_resource")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_HARVEST_NODE), nodeId);
+                        for (int i = 0; i < progressResourceCount; ++i)
+                            if (!strcmp(progressResources[i], nodeId)) req->completed = true;
+                    } else if (!strcmp(kind, "stat_at_least")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_STAT_AT_LEAST), stat, statValue);
+                    } else if (!strcmp(kind, "quest_completed")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_COMPLETE_QUEST), questId);
+                    } else {
+                        snprintf(req->label, sizeof(req->label), "%.50s", kind);
+                    }
+
+                    ++entry->requirementCount;
+                    requirements = reqEnd;
+                    requirements = skipJsonSpace(requirements, objectEnd);
+                    if (requirements < objectEnd && *requirements == ',') ++requirements;
+                }
+            }
+
             ++questLogCount;
-            quests = skipJsonSpace(objectEnd, lineEnd);
+            quests = objectEnd;
+            quests = skipJsonSpace(quests, lineEnd);
             if (quests < lineEnd && *quests == ',') ++quests;
         }
         return;
@@ -2349,6 +2460,13 @@ static void sendQuestAccept(const char* questId) {
     if (onlineMode != ONLINE_ACTIVE || !questId || !questId[0]) return;
     char packet[96];
     snprintf(packet, sizeof(packet), "{\"type\":\"quest_accept\",\"quest_id\":\"%s\"}\n", questId);
+    onlineSend(packet);
+}
+
+static void sendQuestClaim(const char* questId) {
+    if (onlineMode != ONLINE_ACTIVE || !questId || !questId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"quest_claim\",\"quest_id\":\"%s\"}\n", questId);
     onlineSend(packet);
 }
 
@@ -2727,9 +2845,23 @@ static void handleRepeatInput(void) {
         if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && bagPage) --bagPage;
         if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) ++bagPage;
     } else if (bottomPage == PAGE_QUESTS) {
-        const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
-        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && questLogPage) --questLogPage;
-        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && questLogPage + 1 < pageCount) ++questLogPage;
+        if (questDetailOpen) {
+            if (repeatKeys & (KEY_B | KEY_LEFT)) questDetailOpen = false;
+            if (repeatKeys & KEY_A) {
+                const QuestLogEntry* entry = &questLog[questLogSelected];
+                if (!strcmp(entry->status, "available")) sendQuestAccept(entry->quest_id);
+                else if (!strcmp(entry->status, "completed")) sendQuestClaim(entry->quest_id);
+            }
+        } else {
+            const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
+            if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && questLogPage) --questLogPage;
+            if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && questLogPage + 1 < pageCount) ++questLogPage;
+            const unsigned start = questLogPage * 6;
+            const unsigned end = start + 6 < questLogCount ? start + 6 : questLogCount;
+            if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && questLogSelected > (int)start) --questLogSelected;
+            if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && questLogSelected + 1 < (int)end) ++questLogSelected;
+            if (repeatKeys & KEY_A) questDetailOpen = true;
+        }
     } else if (bottomPage == PAGE_TITLES) {
         const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
         if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && playerTitlePage) --playerTitlePage;
@@ -3105,6 +3237,21 @@ int main(void) {
                 const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
                 if (touch.px < 160) { if (onlineUserPage) --onlineUserPage; }
                 else if (onlineUserPage + 1 < pageCount) ++onlineUserPage;
+            } else if (bottomPage == PAGE_QUESTS && questDetailOpen) {
+                if (touch.py < 40) {
+                    questDetailOpen = false;
+                } else if (touch.py >= 216) {
+                    const QuestLogEntry* entry = &questLog[questLogSelected];
+                    if (!strcmp(entry->status, "available")) sendQuestAccept(entry->quest_id);
+                    else if (!strcmp(entry->status, "completed")) sendQuestClaim(entry->quest_id);
+                }
+            } else if (bottomPage == PAGE_QUESTS && touch.py >= 42 && touch.py < 216) {
+                int row = (int)((touch.py - 42) / 30);
+                unsigned visible = questLogPage * 6 + row;
+                if (row >= 0 && visible < questLogCount) {
+                    questLogSelected = (int)visible;
+                    questDetailOpen = true;
+                }
             } else if (bottomPage == PAGE_QUESTS && touch.py >= 216) {
                 const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
                 if (touch.px < 160) { if (questLogPage) --questLogPage; }

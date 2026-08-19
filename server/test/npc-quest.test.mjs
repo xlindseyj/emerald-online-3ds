@@ -121,7 +121,7 @@ test('interacting with an NPC from too far away is rejected', async t => {
   assert.equal((await next(m => m.type === 'error')).code, 'npc_not_nearby');
 });
 
-test('quest_list returns available and accepted quests', async t => {
+test('quest_list returns available and accepted quests with full quest fields', async t => {
   const identityStore = new MemoryIdentityStore();
   const { npcStore, questStore } = seededStores();
   const { server } = createPresenceServer({ host: '127.0.0.1', port: 0, identityStore, npcStore, questStore });
@@ -134,7 +134,14 @@ test('quest_list returns available and accepted quests', async t => {
   s.write('{"type":"quest_list"}\n');
   const list = await next(m => m.type === 'quest_list');
   assert.equal(list.quests.length, 1);
-  assert.equal(list.quests[0].status, 'available');
+  const quest = list.quests[0];
+  assert.equal(quest.status, 'available');
+  assert.equal(quest.slug, 'welcome-to-hoenn-online');
+  assert.equal(quest.title, 'Welcome to Hoenn Online');
+  assert.ok(Array.isArray(quest.requirements));
+  assert.equal(quest.reward_kind, 'title');
+  assert.deepEqual(quest.reward_data, { title: 'Beta Pioneer' });
+  assert.deepEqual(quest.progress, {});
 });
 
 function chainStores() {
