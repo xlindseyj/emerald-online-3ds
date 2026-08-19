@@ -202,6 +202,25 @@ The public source archive contains only the runtime, modified gpSP source, Makef
 - **3DS runtime changes**: The production runtime is in `gpsp-runtime/`, not `client/`. The `client/` directory is a minimal skeleton. Build the production runtime with `npm run build:public` or `scripts/build-runtime.sh`.
 - **RFU/link experiment**: The Gate 4 opt-in link room is disabled by default. It requires `link_room=XXXX-XXXX` in `online.cfg`, exactly two authenticated v2 clients, and uses gpSP’s Emerald RFU backend. Public battle/trade invitations and rankings remain disabled until physical acceptance passes.
 
+## Public repository hygiene
+
+This project keeps a **private Gitea mirror** for day-to-day development and a **public GitHub mirror** for release distribution. The public GitHub repository must never contain anything that could reveal identity, physical location, server infrastructure, or credentials.
+
+**Sanitize before every push to the public GitHub repo.** The private Gitea repo may keep the real values.
+
+Before force-pushing `main` to `github`, verify and replace:
+
+- Private IP addresses and CIDRs (home network, Kubernetes nodes, pods, 3DS FTP endpoint)
+- Internal registry hostnames/ports (e.g., `192.168.0.31:30501`)
+- Kubernetes node hostnames (e.g., `lws-desktop`, `lws-homelab`)
+- Internal namespace names (e.g., `lindseywebsolutions`)
+- Git commit author name/email (use a project identity such as `Emerald Online 3DS <noreply@emeraldonline3ds.com>`)
+- Real 3DS FTP IPs in docs/agent notes
+
+Acceptable placeholders include `<your-registry>`, `<node-1>`, `<node-2>`, `<node-cidr>`, `<pod-cidr>`, `<backup-namespace>`, and `<3ds-ip>`.
+
+Do **not** rewrite history on the private Gitea remote; that mirror is allowed to retain operational details.
+
 ## Useful references
 
 - `README.md` — high-level project description and user-facing setup.
