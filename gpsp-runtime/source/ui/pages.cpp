@@ -5,8 +5,8 @@
 #define EMERALD_ITEM_TABLE_OFFSET 0x5839A0
 #define EMERALD_ITEM_COUNT 377
 #define EMERALD_ITEM_RECORD_SIZE 44
-#define STATIC_TEXT_CACHE_SIZE 128
-#define STATIC_TEXT_BUFFER_SIZE 4096
+#define STATIC_TEXT_CACHE_SIZE 256
+#define STATIC_TEXT_BUFFER_SIZE 8192
 
 // Pre-baked static UI labels. Citro2D text objects are parsed once at first use
 // and reused from a dedicated buffer so per-frame menus do not re-parse the
@@ -65,12 +65,36 @@ static uint32_t read32(const uint8_t* memory, size_t offset) {
     return value;
 }
 
+bool accessibilityMode = false;
+
+float uiScale(float size) {
+    if (!accessibilityMode) return size;
+    float scaled = size * 1.25f;
+    return scaled > 0.6f ? 0.6f : scaled;
+}
+
+uint32_t uiTextColor(uint32_t normal) {
+    if (!accessibilityMode) return normal;
+    // Boost to full white for text in accessibility mode while preserving alpha.
+    uint8_t a = (uint8_t)(normal >> 24);
+    return C2D_Color32(255, 255, 255, a);
+}
+
+uint32_t uiPanelColor(uint32_t normal) {
+    if (!accessibilityMode) return normal;
+    // Make translucent panels more opaque so text sits on a darker background.
+    uint8_t a = (uint8_t)(normal >> 24);
+    if (a < 200) a = 200;
+    return C2D_Color32(0, 0, 0, a);
+}
+
 void drawText(float x, float y, float size, uint32_t color, const char* format, ...) {
     char line[192];
     va_list args;
     va_start(args, format);
     vsnprintf(line, sizeof(line), format, args);
     va_end(args);
+    size = uiScale(size);
     const C2D_Text* cached = findStaticText(line, size, color);
     if (!cached && staticTextBuffer) cached = addStaticText(line, size, color);
     if (cached) {
@@ -82,6 +106,46 @@ void drawText(float x, float y, float size, uint32_t color, const char* format, 
     else C2D_TextParse(&text, textBuffer, line);
     C2D_TextOptimize(&text);
     C2D_DrawText(&text, C2D_WithColor, x, y, 0.5f, size, size, color);
+}
+
+void drawTextStatic(float x, float y, float size, uint32_t color, const char* text) {
+    if (!text) return;
+    size = uiScale(size);
+    const C2D_Text* cached = findStaticText(text, size, color);
+    if (!cached && staticTextBuffer) cached = addStaticText(text, size, color);
+    if (cached) {
+        C2D_DrawText(cached, C2D_WithColor, x, y, 0.5f, size, size, color);
+        return;
+    }
+    C2D_Text textObj;
+    if (uiFont) C2D_TextFontParse(&textObj, uiFont, textBuffer, text);
+    else C2D_TextParse(&textObj, textBuffer, text);
+    C2D_TextOptimize(&textObj);
+    C2D_DrawText(&textObj, C2D_WithColor, x, y, 0.5f, size, size, color);
+}
+
+// Unified message helpers. Keep placement, size, and color consistent across
+// all bottom-screen pages so empty/waiting/connect states read the same way.
+void drawMessageCentered(float y, float size, uint32_t color, const char* text) {
+    if (!text) return;
+    size = uiScale(size);
+    // Approximate width: each glyph is roughly size * 8 pixels at these scales.
+    float width = strlen(text) * size * 8.0f;
+    float x = (320.0f - width) / 2.0f;
+    if (x < 8.0f) x = 8.0f;
+    drawTextStatic(x, y, size, uiTextColor(color), text);
+}
+
+void drawWaitingMessage(const char* text) {
+    drawMessageCentered(110.0f, .45f, C2D_Color32(190, 210, 200, 255), text);
+}
+
+void drawEmptyMessage(const char* text) {
+    drawMessageCentered(110.0f, .45f, C2D_Color32(190, 210, 200, 255), text);
+}
+
+void drawConnectOnlineMessage(const char* text) {
+    drawMessageCentered(110.0f, .42f, C2D_Color32(180, 205, 200, 255), text);
 }
 
 char decodeEmerald(uint8_t value) {
@@ -179,7 +243,7 @@ void drawBagPage(void) {
     const uint8_t* block1;
     const uint8_t* block2;
     if (!getSaveBlocks(&block1, &block2)) {
-        drawText(34, 116, .42f, C2D_Color32(190,210,200,255), "%s", localize(LS_WAITING_VALID_EMERALD_MEMORY));
+        drawWaitingMessage(localize(LS_WAITING_VALID_EMERALD_MEMORY));
         return;
     }
     uint32_t encryptionKey = read32(block2, 0xAC);
@@ -210,7 +274,7 @@ void drawBagPage(void) {
         drawText(256, y + 4, .36f, C2D_Color32(190,225,210,255), "x%u", quantity);
         ++shown;
     }
-    if (!shown) drawText(112, 140, .40f, C2D_Color32(180,205,200,255), "%s", localize(LS_POCKET_IS_EMPTY));
+    if (!shown) drawEmptyMessage(localize(LS_POCKET_IS_EMPTY));
     C2D_DrawRectSolid(10, 216, 0, 145, 24, bagPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(165, 216, 0, 145, 24, bagPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     drawText(64, 221, .35f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
@@ -219,7 +283,7 @@ void drawBagPage(void) {
 
 void drawMapPage(void) {
     if (!presence.valid) {
-        drawText(38, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_WAITING_EMERALD_OVERWORLD));
+        drawWaitingMessage(localize(LS_WAITING_EMERALD_OVERWORLD));
         return;
     }
     const float radarX = 12, radarY = 45, radarWidth = 200, radarHeight = 180;
@@ -266,7 +330,7 @@ void drawMapPage(void) {
         int distance = abs(remoteTrainers[index].x - presence.x) + abs(remoteTrainers[index].y - presence.y);
         drawText(224, 150 + index * 18, .29f, C2D_Color32(255,255,255,255), "%.8s %dt", remoteTrainers[index].name, distance);
     }
-    if (!remoteCount) drawText(228, 153, .29f, C2D_Color32(180,205,200,255), "%s", localize(LS_NO_TRAINERS));
+    if (!remoteCount) drawEmptyMessage(localize(LS_NO_TRAINERS));
     for (unsigned index = 0; index < onlineNpcCount; ++index) {
         if (abs(onlineNpcs[index].x - presence.x) + abs(onlineNpcs[index].y - presence.y) <= 2) {
             C2D_DrawRectSolid(10, 200, 0, 300, 24, C2D_Color32(35, 145, 88, 255));
@@ -285,7 +349,7 @@ void drawMapPage(void) {
 
 void drawStatsPage(void) {
     drawText(12,42,.30f,C2D_Color32(255,213,128,255),"%s",localize(LS_PRIVATE_BY_DEFAULT));
-    if (!saveStats.valid) drawText(40,61,.37f,C2D_Color32(190,210,200,255),"%s",localize(LS_WAITING_VALID_EMERALD_MEMORY));
+    if (!saveStats.valid) drawWaitingMessage(localize(LS_WAITING_VALID_EMERALD_MEMORY));
     else drawText(18,61,.36f,C2D_Color32(220,245,235,255),localize(LS_LOCAL_SEEN_CAUGHT_BADGES_FORMAT),saveStats.seen,saveStats.caught,saveStats.badges);
     const char* labels[4]={localize(LS_POKEDEX_SEEN),localize(LS_POKEDEX_CAUGHT),localize(LS_BADGE_COUNT),localize(LS_FRONTIER_STREAKS)};
     const bool values[4]={statsSeenEnabled,statsCaughtEnabled,statsBadgesEnabled,statsFrontierEnabled};
@@ -331,8 +395,12 @@ void drawOnlineUsersPage(void) {
             drawText(214, y + 3, .30f, C2D_Color32(190,225,210,255), "%.10s %d,%d", user->map, user->x, user->y);
         else drawText(236, y + 3, .29f, C2D_Color32(180,205,200,255), "%s", localize(LS_WAITING));
     }
-    if (!onlineUserCount)
-        drawText(71, 126, .40f, C2D_Color32(180,205,200,255), "%s", onlineMode == ONLINE_ACTIVE ? localize(LS_WAITING_ONLINE_ROSTER) : localize(LS_CONNECT_ONLINE_VIEW_USERS));
+    if (!onlineUserCount) {
+        if (onlineMode == ONLINE_ACTIVE)
+            drawWaitingMessage(localize(LS_WAITING_ONLINE_ROSTER));
+        else
+            drawConnectOnlineMessage(localize(LS_CONNECT_ONLINE_VIEW_USERS));
+    }
     C2D_DrawRectSolid(10, 216, 0, 145, 24, onlineUserPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(165, 216, 0, 145, 24, onlineUserPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     drawText(42, 221, .34f, C2D_Color32(255,255,255,255), "%s", localize(LS_PREVIOUS));
@@ -401,8 +469,14 @@ void drawChatPage(void) {
         drawText(263, y + 4, .32f, C2D_Color32(190,220,210,255), "%s", message->time);
         drawText(18, y + 20, .34f, C2D_Color32(255,255,255,255), "%.38s", message->text);
     }
-    if (!count)
-        drawText(64, 132, .39f, C2D_Color32(180,205,200,255), "%s", globalChat ? localize(LS_NO_GLOBAL_MESSAGES_SESSION) : presence.valid ? localize(LS_NO_MESSAGES_MAP) : localize(LS_WAITING_OVERWORLD_CHAT));
+    if (!count) {
+        if (globalChat)
+            drawEmptyMessage(localize(LS_NO_GLOBAL_MESSAGES_SESSION));
+        else if (presence.valid)
+            drawEmptyMessage(localize(LS_NO_MESSAGES_MAP));
+        else
+            drawWaitingMessage(localize(LS_WAITING_OVERWORLD_CHAT));
+    }
     C2D_DrawRectSolid(10, 216, 0, 94, 24, chatPage ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(113, 216, 0, 94, 24, onlineMode == ONLINE_ACTIVE && presence.valid ? C2D_Color32(35,145,88,255) : C2D_Color32(45,55,51,255));
     C2D_DrawRectSolid(216, 216, 0, 94, 24, chatPage + 1 < pageCount ? C2D_Color32(45,105,76,255) : C2D_Color32(45,55,51,255));
@@ -431,7 +505,10 @@ void drawTeleportPage(void) {
         drawText(x + 5, 47, .24f, C2D_Color32(255,255,255,255), "%s", categories[i]);
     }
     if (!teleportDestinationCount) {
-        drawText(70, 110, .42f, C2D_Color32(190,210,200,255), "%s", onlineMode == ONLINE_ACTIVE ? localize(LS_WAITING_DESTINATIONS) : localize(LS_CONNECT_ONLINE_TELEPORT));
+        if (onlineMode == ONLINE_ACTIVE)
+            drawWaitingMessage(localize(LS_WAITING_DESTINATIONS));
+        else
+            drawConnectOnlineMessage(localize(LS_CONNECT_ONLINE_TELEPORT));
         return;
     }
     unsigned filtered[64];
@@ -468,7 +545,7 @@ void drawTeleportPage(void) {
 
 void drawQuestPage(void) {
     if (!questLogCount) {
-        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_QUESTS));
+        drawEmptyMessage(localize(LS_NO_QUESTS));
         return;
     }
     if (questDetailOpen && questLogSelected >= 0 && questLogSelected < (int)questLogCount) {
@@ -538,7 +615,7 @@ void drawQuestPage(void) {
 
 void drawTitlesPage(void) {
     if (!playerTitleCount) {
-        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_TITLES));
+        drawEmptyMessage(localize(LS_NO_TITLES));
         return;
     }
     const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
@@ -563,7 +640,7 @@ void drawTitlesPage(void) {
 
 void drawFriendsPage(void) {
     if (!playerFriendCount) {
-        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_FRIENDS));
+        drawEmptyMessage(localize(LS_NO_FRIENDS));
         return;
     }
     const unsigned pageCount = playerFriendCount ? (playerFriendCount + 5) / 6 : 1;
@@ -588,7 +665,7 @@ void drawFriendsPage(void) {
 
 void drawGuildPage(void) {
     if (!guildInfo.active) {
-        drawText(60, 110, .45f, C2D_Color32(190,210,200,255), "%s", localize(LS_NO_GUILD));
+        drawEmptyMessage(localize(LS_NO_GUILD));
         return;
     }
     drawText(14, 42, .38f, C2D_Color32(255,213,128,255), "[%.6s] %.30s", guildInfo.tag, guildInfo.name);
@@ -659,4 +736,108 @@ void drawUpdatePage(void) {
 
     if (updateStatus[0] && (!updateStatusUntil || osGetTime() < updateStatusUntil))
         drawText(15, 92, .32f, C2D_Color32(255,220,130,255), "%.46s", updateStatus);
+}
+
+static const char* settingValueLabel(bool enabled) {
+    return enabled ? localize(LS_ON) : localize(LS_OFF);
+}
+
+static const char* trailLengthLabel(unsigned length) {
+    if (length == 0) return localize(LS_OFF);
+    if (length <= 3) return "SHORT";
+    if (length <= 6) return "MEDIUM";
+    return "LONG";
+}
+
+static const char* fadeDistanceLabel(unsigned distance) {
+    if (distance == 0) return localize(LS_OFF);
+    if (distance <= 3) return "NEAR";
+    return "FAR";
+}
+
+uint64_t settingsSavedUntil = 0;
+
+void drawSettingsPage(void) {
+    struct SettingRow {
+        const char* label;
+        const char* value;
+    };
+    const SettingRow rows[5] = {
+        { localize(LS_TOP_SCREEN_HUD), settingValueLabel(hudVisible) },
+        { localize(LS_FPS_DISPLAY), settingValueLabel(fpsVisible) },
+        { localize(LS_TRAIL_LENGTH), trailLengthLabel(trailLength) },
+        { localize(LS_LABEL_FADE_DISTANCE), fadeDistanceLabel(labelFadeDistance) },
+        { localize(LS_ACCESSIBILITY_MODE), settingValueLabel(accessibilityMode) },
+    };
+    const unsigned rowCount = 5;
+    const float rowHeight = 30.0f;
+    const float rowSpacing = 34.0f;
+    for (unsigned i = 0; i < rowCount; ++i) {
+        float y = 46 + i * rowSpacing;
+        bool selected = i == settingsSelected;
+        uint32_t bg = selected ? C2D_Color32(34, 126, 82, 255) : C2D_Color32(i & 1 ? 22 : 25, i & 1 ? 61 : 74, i & 1 ? 46 : 54, 255);
+        C2D_DrawRectSolid(10, y, 0, 300, rowHeight, bg);
+        drawTextStatic(18, y + 4, .34f, uiTextColor(C2D_Color32(255, 255, 255, 255)), rows[i].label);
+        drawTextStatic(250, y + 6, .32f, C2D_Color32(160, 232, 255, 255), rows[i].value);
+    }
+    C2D_DrawRectSolid(10, 216, 0, 300, 24, C2D_Color32(45, 105, 76, 255));
+    drawTextStatic(76, 221, .34f, C2D_Color32(255, 255, 255, 255), localize(LS_PREVIOUS));
+    drawTextStatic(188, 221, .34f, C2D_Color32(255, 255, 255, 255), localize(LS_NEXT));
+    if (settingsSavedUntil && osGetTime() < settingsSavedUntil)
+        drawTextStatic(90, 200, .30f, C2D_Color32(130, 255, 176, 255), localize(LS_SETTINGS_SAVED));
+}
+
+// Top-screen toast notification queue. Up to two slots: one active and one pending.
+// Toasts auto-dismiss after their `until` timestamp.
+Toast toastQueue[2] = {};
+
+void showToast(const char* fmt, ...) {
+    char text[81] = {};
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+    if (!text[0]) return;
+
+    // If an active toast exists, queue as pending; otherwise take slot 0.
+    int slot = toastQueue[0].active ? 1 : 0;
+    if (slot == 1 && toastQueue[1].active) {
+        // Pending slot already occupied: drop the oldest pending toast.
+        slot = 1;
+    }
+    strncpy(toastQueue[slot].text, text, sizeof(toastQueue[slot].text) - 1);
+    toastQueue[slot].text[sizeof(toastQueue[slot].text) - 1] = 0;
+    toastQueue[slot].until = osGetTime() + 3000;
+    toastQueue[slot].color = C2D_Color32(130, 220, 255, 255);
+    toastQueue[slot].active = true;
+}
+
+static void advanceToastQueue(void) {
+    if (!toastQueue[0].active && toastQueue[1].active) {
+        toastQueue[0] = toastQueue[1];
+        toastQueue[1] = {};
+    }
+}
+
+void drawToasts(void) {
+    advanceToastQueue();
+    const uint64_t now = osGetTime();
+    if (toastQueue[0].active && now >= toastQueue[0].until) {
+        toastQueue[0] = {};
+        advanceToastQueue();
+    }
+    if (!toastQueue[0].active) return;
+
+    float size = uiScale(.34f);
+    float width = strlen(toastQueue[0].text) * size * 8.0f;
+    if (width < 120.0f) width = 120.0f;
+    if (width > 360.0f) width = 360.0f;
+    float x = (400.0f - width) / 2.0f;
+    float y = 12.0f;
+    float textY = y + 6.0f;
+
+    uint32_t panel = uiPanelColor(C2D_Color32(20, 24, 22, 200));
+    C2D_DrawRectSolid(x, y, 0.5f, width, 24, panel);
+    C2D_DrawRectSolid(x, y, 0.51f, 4, 24, toastQueue[0].color);
+    drawTextStatic(x + 10, textY, .34f, uiTextColor(C2D_Color32(255, 255, 255, 255)), toastQueue[0].text);
 }

@@ -108,6 +108,49 @@ test('gpSP input handling uses hidKeysRepeat and debounces touch', () => {
   assert.match(gpspSource, /KEY_DOWN \| KEY_CPAD_DOWN/);
 });
 
+test('gpSP caches static labels and exposes a larger static text cache', () => {
+  assert.match(pagesSource, /STATIC_TEXT_CACHE_SIZE 256/);
+  assert.match(pagesSource, /STATIC_TEXT_BUFFER_SIZE 8192/);
+  assert.match(runtimeSource, /void drawTextStatic\(/);
+  assert.match(runtimeSource, /drawTextStatic\(/);
+  assert.match(pagesSource, /void drawWaitingMessage/);
+  assert.match(pagesSource, /void drawEmptyMessage/);
+  assert.match(pagesSource, /void drawConnectOnlineMessage/);
+  assert.match(pagesSource, /drawMessageCentered\(110\.0f/);
+});
+
+test('gpSP exposes a Settings page and persisted display preferences', () => {
+  assert.match(pagesHeaderSource, /PAGE_SETTINGS/);
+  assert.match(gpspSource, /DISPLAY_CONFIG_PATH/);
+  assert.match(gpspSource, /loadDisplayConfig/);
+  assert.match(gpspSource, /saveDisplayConfig/);
+  assert.match(pagesSource, /void drawSettingsPage/);
+  assert.match(gpspSource, /hudVisible/);
+  assert.match(gpspSource, /fpsVisible/);
+  assert.match(gpspSource, /trailLength/);
+  assert.match(gpspSource, /labelFadeDistance/);
+  assert.match(gpspSource, /bottomPage == PAGE_SETTINGS/);
+});
+
+test('gpSP supports accessibility mode and top-screen toast notifications', () => {
+  assert.match(pagesHeaderSource, /bool accessibilityMode/);
+  assert.match(pagesSource, /float uiScale\(/);
+  assert.match(pagesSource, /uint32_t uiTextColor\(/);
+  assert.match(pagesSource, /uint32_t uiPanelColor\(/);
+  assert.match(gpspSource, /accessibilityMode = !accessibilityMode/);
+  assert.match(gpspSource, /accessibility_mode/);
+  assert.match(pagesSource, /Toast toastQueue\[2\]/);
+  assert.match(pagesSource, /void showToast\(/);
+  assert.match(pagesSource, /void drawToasts\(/);
+  assert.match(gpspSource, /drawToasts\(\)/);
+  assert.match(localizationSource, /LS_ACCESSIBILITY_MODE/);
+  assert.match(localizationSource, /LS_TOAST_NEW_MESSAGE/);
+  assert.match(localizationSource, /LS_TOAST_QUEST_ACCEPTED/);
+  assert.match(localizationSource, /LS_TOAST_QUEST_COMPLETED/);
+  assert.match(localizationSource, /LS_TOAST_FRIEND_ONLINE/);
+  assert.match(localizationSource, /LS_TOAST_GUILD_UPDATED/);
+});
+
 test('gpSP nonblocking connect polling initializes sockaddr for Azahar', () => {
   assert.match(gpspSource, /sockaddr_in peer = \{\};\s*peer\.sin_family = AF_INET;\s*socklen_t peerSize = sizeof\(peer\);\s*if \(!getpeername/s);
 });
@@ -147,6 +190,20 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(pagesHeaderSource, /int16_t prevY;/);
   assert.match(pagesHeaderSource, /uint64_t updatedAt;/);
   assert.match(pagesHeaderSource, /char title\[33\];/);
+  assert.match(pagesHeaderSource, /MapTrailPoint trail\[8\];/);
+  assert.match(pagesHeaderSource, /unsigned trailCount;/);
+  assert.match(pagesHeaderSource, /unsigned trailNext;/);
+  assert.match(gpspSource, /C2D_DrawLine/);
+  assert.match(gpspSource, /labelAlpha/);
+  assert.match(gpspSource, /clampf\(v\.screenX, 12\.0f, 400\.0f - spriteW - 12\.0f\)/);
+  assert.match(gpspSource, /clampf\(v\.screenY, labelH, 240\.0f - spriteH\)/);
+  // Top-screen HUD shows FPS, connection status, and nearby count.
+  assert.match(gpspSource, /localize\(LS_FPS_FORMAT\)/);
+  assert.match(gpspSource, /localize\(LS_NEARBY_FORMAT\)/);
+  assert.match(gpspSource, /localize\(LS_ONLINE\)/);
+  assert.match(gpspSource, /localize\(LS_CONNECTING\)/);
+  assert.match(gpspSource, /localize\(LS_RETRYING\)/);
+  assert.match(gpspSource, /localize\(LS_OFFLINE\)/);
   // Interactive quest log.
   assert.match(pagesHeaderSource, /struct QuestRequirement/);
   assert.match(pagesHeaderSource, /uint8_t requirementCount;/);
@@ -234,7 +291,10 @@ test('gpSP bottom screen exposes paged users plus readable map and global chat l
   assert.match(runtimeSource, /TAP TO READ/);
   assert.match(pagesSource, /chatPage \* 3/);
   assert.match(pagesSource, /localize\(LS_COMPOSE\)/);
-  assert.match(gpspSource, /bottomPage \+ 1\) % 13/);
+  assert.match(gpspSource, /bottomPage \+ 1\) % PAGE_COUNT/);
+  assert.match(gpspSource, /KEY_L/);
+  assert.match(gpspSource, /KEY_R/);
+  assert.match(gpspSource, /bottomPage \+ PAGE_COUNT - 1\) % PAGE_COUNT/);
   assert.match(gpspSource, /!strcmp\(equals, "users"\) \? PAGE_USERS/);
   assert.match(gpspSource, /!strcmp\(equals, "chat"\) \? PAGE_CHAT/);
   assert.match(gpspSource, /!strcmp\(equals, "titles"\) \? PAGE_TITLES/);
@@ -289,7 +349,7 @@ test('gpSP update page detects, downloads, verifies, and installs releases', () 
   assert.match(gpspSource, /replace3dsx/);
   assert.match(gpspSource, /\/api\/release/);
   assert.match(gpspSource, /UPDATE_DIRECTORY/);
-  assert.match(gpspSource, /% 13/);
+  assert.match(gpspSource, /% PAGE_COUNT/);
 });
 
 test('gpSP Emerald link mode uses RFU and gates startup on rotating save backups', () => {

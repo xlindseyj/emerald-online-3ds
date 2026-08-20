@@ -49,6 +49,8 @@ extern uint8_t gpspIwram[] __asm__("iwram");
 #define IDENTITY_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg.tmp"
 #define STATS_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg"
 #define STATS_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg.tmp"
+#define DISPLAY_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/display.cfg"
+#define DISPLAY_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/display.cfg.tmp"
 #define LINK_BACKUP_DIRECTORY "sdmc:/3ds/emerald-online-3ds/link-backups"
 #define LINK_BACKUP_RETENTION 5
 #define DEFAULT_HOST "live.emeraldonline3ds.com"
@@ -98,6 +100,15 @@ static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
 static BottomPage bottomPage = PAGE_ONLINE;
+
+// Display settings persisted in display.cfg.
+bool hudVisible = true;
+bool fpsVisible = true;
+unsigned trailLength = 8;
+unsigned labelFadeDistance = 4;
+unsigned settingsSelected = 0;
+bool accessibilityMode = false;
+
 unsigned bagPocket;
 unsigned bagPage;
 unsigned onlineUserPage;
@@ -1342,6 +1353,40 @@ static bool saveStatsConfig(void) {
     return true;
 }
 
+static void loadDisplayConfig(void) {
+    FILE* file = fopen(DISPLAY_CONFIG_PATH, "r");
+    if (!file) return;
+    char line[80];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '='); if (!equals) continue; *equals++ = 0;
+        if (!strcmp(line, "hud_visible")) hudVisible = !strcmp(equals, "1");
+        else if (!strcmp(line, "fps_visible")) fpsVisible = !strcmp(equals, "1");
+        else if (!strcmp(line, "trail_length")) {
+            unsigned value = strtoul(equals, NULL, 10);
+            trailLength = value > 8 ? 8 : value;
+        }
+        else if (!strcmp(line, "label_fade_distance")) {
+            unsigned value = strtoul(equals, NULL, 10);
+            labelFadeDistance = value > 8 ? 8 : value;
+        }
+        else if (!strcmp(line, "accessibility_mode")) {
+            accessibilityMode = !strcmp(equals, "1");
+        }
+    }
+    fclose(file);
+}
+
+static bool saveDisplayConfig(void) {
+    FILE* file = fopen(DISPLAY_CONFIG_TEMP_PATH, "w"); if (!file) return false;
+    bool ok = fprintf(file, "hud_visible=%d\nfps_visible=%d\ntrail_length=%u\nlabel_fade_distance=%u\naccessibility_mode=%d\n",
+        hudVisible, fpsVisible, trailLength, labelFadeDistance, accessibilityMode) > 0;
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    if (fclose(file)) ok = false;
+    if (!ok || rename(DISPLAY_CONFIG_TEMP_PATH, DISPLAY_CONFIG_PATH)) { remove(DISPLAY_CONFIG_TEMP_PATH); return false; }
+    return true;
+}
+
 static void onlineDisconnect(void) {
     if (linkStarted && coreNetpacketInterface && coreNetpacketInterface->stop) coreNetpacketInterface->stop();
     linkStarted = false;
@@ -1872,6 +1917,7 @@ static void parseOnlineLine(char* line) {
             snprintf(message->time, sizeof(message->time), "%c%c:%c%cZ", sentAt[11], sentAt[12], sentAt[14], sentAt[15]);
         else strcpy(message->time, "NOW");
         chatPage = ~0u;
+        showToast(localize(LS_TOAST_NEW_MESSAGE), name);
         return;
     }
     if (jsonTypeIs(line, "leave")) {
@@ -1911,6 +1957,15 @@ static void parseOnlineLine(char* line) {
                     trainer->emoteUntil = remoteTrainers[old].emoteUntil;
                     trainer->prevX = remoteTrainers[old].x;
                     trainer->prevY = remoteTrainers[old].y;
+                    memcpy(trainer->trail, remoteTrainers[old].trail, sizeof(trainer->trail));
+                    trainer->trailCount = remoteTrainers[old].trailCount;
+                    trainer->trailNext = remoteTrainers[old].trailNext;
+                    // Append a new trail point when the trainer moves to a different tile.
+                    if (trainer->x != remoteTrainers[old].x || trainer->y != remoteTrainers[old].y) {
+                        trainer->trail[trainer->trailNext] = { presence.mapGroup, presence.mapNum, trainer->x, trainer->y };
+                        trainer->trailNext = (trainer->trailNext + 1) % 8;
+                        if (trainer->trailCount < 8) ++trainer->trailCount;
+                    }
                     found = true;
                     break;
                 }
@@ -1918,6 +1973,10 @@ static void parseOnlineLine(char* line) {
             if (!found) {
                 trainer->prevX = trainer->x;
                 trainer->prevY = trainer->y;
+                trainer->trailCount = 0;
+                trainer->trailNext = 0;
+                trainer->trail[0] = { presence.mapGroup, presence.mapNum, trainer->x, trainer->y };
+                trainer->trailCount = 1;
             }
             trainer->updatedAt = now;
             ++updatedCount;
@@ -2033,6 +2092,10 @@ static void parseOnlineLine(char* line) {
         if (npcDialogue.active && !strcmp(npcDialogue.quest_id, questId)) {
             npcDialogue.active = false;
         }
+        if (!strcmp(status, "accepted") && title[0])
+            showToast(localize(LS_TOAST_QUEST_ACCEPTED), title);
+        else if (!strcmp(status, "completed") && title[0])
+            showToast(localize(LS_TOAST_QUEST_COMPLETED), title);
         return;
     }
     if (jsonTypeIs(line, "quest_list")) {
@@ -2182,6 +2245,10 @@ static void parseOnlineLine(char* line) {
         return;
     }
     if (jsonTypeIs(line, "friend_list")) {
+        // Snapshot previous online state so we can toast offline -> online transitions.
+        FriendEntry previousFriends[32];
+        unsigned previousFriendCount = playerFriendCount;
+        memcpy(previousFriends, playerFriends, sizeof(previousFriends));
         playerFriendCount = 0;
         playerFriendPage = 0;
         playerFriendSelected = 0;
@@ -2203,6 +2270,17 @@ static void parseOnlineLine(char* line) {
             jsonStringBounded(friends, objectEnd, "map", entry->map, sizeof(entry->map));
             entry->x = jsonIntBounded(friends, objectEnd, "x", -1);
             entry->y = jsonIntBounded(friends, objectEnd, "y", -1);
+            if (entry->online) {
+                bool wasOnline = false;
+                for (unsigned i = 0; i < previousFriendCount; ++i) {
+                    if (!strcmp(previousFriends[i].fingerprint, entry->fingerprint)) {
+                        wasOnline = previousFriends[i].online;
+                        break;
+                    }
+                }
+                if (!wasOnline && entry->name[0])
+                    showToast(localize(LS_TOAST_FRIEND_ONLINE), entry->name);
+            }
             ++playerFriendCount;
             friends = skipJsonSpace(objectEnd, lineEnd);
             if (friends < lineEnd && *friends == ',') ++friends;
@@ -2257,6 +2335,8 @@ static void parseOnlineLine(char* line) {
     }
     if (jsonTypeIs(line, "guild_update")) {
         requestGuildInfo();
+        if (guildInfo.active)
+            showToast(localize(LS_TOAST_GUILD_UPDATED));
         return;
     }
     if (!jsonTypeIs(line, "presence") && !jsonTypeIs(line, "state") && !jsonTypeIs(line, "emote")) return;
@@ -2683,12 +2763,19 @@ static void drawPageIndicators(float y) {
         C2D_Color32(120, 120, 220, 255), // Guild
         C2D_Color32(200, 130, 60, 255),  // Teleport
         C2D_Color32(200, 100, 160, 255), // Update
+        C2D_Color32(180, 180, 180, 255), // Settings
     };
-    const float startX = 160 - (13 * 14) / 2.0f;
-    for (unsigned page = 0; page < 13; ++page) {
+    const float startX = 160 - (PAGE_COUNT * 14) / 2.0f;
+    for (unsigned page = 0; page < PAGE_COUNT; ++page) {
         float cx = startX + page * 14 + 4;
-        uint32_t dotColor = (page == (unsigned) bottomPage) ? C2D_Color32(255, 255, 255, 255) : colors[page];
-        C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
+        bool active = page == (unsigned) bottomPage;
+        uint32_t dotColor = active ? C2D_Color32(255, 255, 255, 255) : colors[page];
+        if (active) {
+            C2D_DrawEllipseSolid(cx, y, .05f, 7, 7, C2D_Color32(255, 255, 255, 255));
+            C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
+        } else {
+            C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
+        }
     }
 }
 
@@ -2709,11 +2796,13 @@ static void drawBottom(void) {
         bottomPage == PAGE_FRIENDS ? localize(LS_FRIENDS_LIST) :
         bottomPage == PAGE_GUILD ? localize(LS_GUILD) :
         bottomPage == PAGE_TELEPORT ? localize(LS_TELEPORT) :
-        bottomPage == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) : localize(LS_EMERALD_ONLINE);
-    drawText(16, 11, .55f, C2D_Color32(255,255,255,255), "%s", title);
+        bottomPage == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) :
+        bottomPage == PAGE_SETTINGS ? localize(LS_SETTINGS) : localize(LS_EMERALD_ONLINE);
+    drawTextStatic(16, 11, .55f, C2D_Color32(255,255,255,255), title);
     drawConnectionDot(306, 16);
-    drawText(280, 14, .30f, C2D_Color32(180,220,205,255), "%s", localize(LS_Y_ARROW));
+    drawTextStatic(224, 14, .30f, C2D_Color32(180,220,205,255), localize(LS_Y_ARROW));
     drawPageIndicators(31);
+    if (bottomPage == PAGE_SETTINGS) { drawSettingsPage(); return; }
     if (bottomPage == PAGE_UPDATE) { drawUpdatePage(); return; }
     if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
     if (bottomPage == PAGE_GUILD) { drawGuildPage(); return; }
@@ -2726,7 +2815,7 @@ static void drawBottom(void) {
     if (bottomPage == PAGE_MAP) { drawMapPage(); return; }
     if (bottomPage == PAGE_BAG) { drawBagPage(); return; }
     if (bottomPage == PAGE_PARTY) {
-        if (!gbaEwram) drawText(30, 95, .48f, C2D_Color32(190,210,200,255), "%s", localize(LS_WAITING_EMERALD_MEMORY_PARTY));
+        if (!gbaEwram) drawWaitingMessage(localize(LS_WAITING_EMERALD_MEMORY_PARTY));
         else {
             unsigned count = gbaEwram[0x244E9];
             if (count > 6) count = 0;
@@ -2744,13 +2833,13 @@ static void drawBottom(void) {
                 drawText(248, y + 5, .39f, C2D_Color32(255,255,255,255), "%u/%u", hp, maxHp);
             }
         }
-        drawText(119, 222, .38f, C2D_Color32(190,220,210,255), "%s", localize(LS_Y_BAG));
+        drawTextStatic(119, 222, .38f, C2D_Color32(190,220,210,255), localize(LS_Y_BAG));
         return;
     }
     const char* status = onlineMode == ONLINE_ACTIVE ? localize(LS_ONLINE) : onlineMode == ONLINE_CONNECTING ? localize(LS_CONNECTING) : onlineEnabled ? localize(LS_RETRYING) : localize(LS_OFFLINE);
     uint32_t statusColor = onlineMode == ONLINE_ACTIVE ? C2D_Color32(78,168,95,255) : onlineEnabled ? C2D_Color32(58,143,207,255) : C2D_Color32(77,80,96,255);
     C2D_DrawRectSolid(205, 7, 0, 103, 24, statusColor);
-    drawText(225, 12, .42f, C2D_Color32(255,255,255,255), "%s", status);
+    drawTextStatic(225, 12, .42f, C2D_Color32(255,255,255,255), status);
     C2D_DrawRectSolid(10, 46, 0, 300, 43, C2D_Color32(25,74,54,255));
         drawText(20, 52, .43f, C2D_Color32(160,232,255,255), "%s", trainerName);
         if (identityFingerprint[0]) drawText(126, 52, .32f, C2D_Color32(185,215,205,255), localize(LS_ID_FORMAT), identityFingerprint);
@@ -2759,7 +2848,7 @@ static void drawBottom(void) {
             C2D_DrawRectSolid(198, 49, .05f, 52, 18, localRoleColor);
             drawText(224, 52, .28f, C2D_Color32(255,255,255,255), "%s", roleLabel(trainerRole));
         }
-    drawText(270, 52, .43f, C2D_Color32(200,220,220,255), localize(LS_FPS_FORMAT), measuredFps);
+    if (fpsVisible) drawText(270, 52, .43f, C2D_Color32(200,220,220,255), localize(LS_FPS_FORMAT), measuredFps);
     if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), localize(LS_MAP_TILE_FORMAT), presence.mapGroup, presence.mapNum, presence.x, presence.y);
     else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "%s", localize(LS_WAITING_OVERWORLD));
         if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), localize(LS_RECOVERY_WRITE_DOWN_FORMAT), recoveryCode);
@@ -2773,11 +2862,11 @@ static void drawBottom(void) {
         // overlay. They are left as literals because they map 1:1 to server logs.
         const char* stage = onlineProtocolStage >= 0 && onlineProtocolStage <= 7 ? stages[onlineProtocolStage] : "UNKNOWN";
         C2D_DrawRectSolid(10, 104, 0, 300, 90, C2D_Color32(44,52,49,255));
-        drawText(20, 110, .40f, C2D_Color32(160,232,255,255), "%s", localize(LS_NETWORK_DIAGNOSTIC));
+        drawTextStatic(20, 110, .40f, C2D_Color32(160,232,255,255), localize(LS_NETWORK_DIAGNOSTIC));
         drawText(20, 130, .39f, C2D_Color32(255,220,130,255), localize(LS_NETWORK_DIAGNOSTIC_DETAIL_FORMAT), onlineLastError, stage, onlineProtocolStage);
         drawText(20, 150, .38f, C2D_Color32(255,255,255,255), localize(LS_TLS_RESULT_FORMAT), onlineTlsResult);
         drawText(20, 169, .34f, C2D_Color32(255,255,255,255), localize(LS_VERIFY_CLOCK_FORMAT), (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
-        drawText(20, 186, .24f, C2D_Color32(180,205,200,255), "%s", localize(LS_LOG_PATH_LABEL));
+        drawTextStatic(20, 186, .24f, C2D_Color32(180,205,200,255), localize(LS_LOG_PATH_LABEL));
     } else {
         C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
         C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
@@ -2795,7 +2884,7 @@ static void drawBottom(void) {
     const char* labels[4] = {localize(LS_WAVE), localize(LS_BATTLE), localize(LS_TRADE), localize(LS_GG)};
     for (int i = 0; i < 4; ++i) {
         C2D_DrawRectSolid(i * 81, 202, 0, i == 2 ? 77 : 78, 38, colors[i]);
-        drawText(i * 81 + 17, 214, .36f, C2D_Color32(255,255,255,255), "%s", labels[i]);
+        drawTextStatic(i * 81 + 17, 214, .36f, C2D_Color32(255,255,255,255), labels[i]);
     }
     if (linkConfigured) drawText(12, 193, .24f, C2D_Color32(255,220,130,255), localize(LS_LINK_STATUS_TX_RX_FORMAT), linkStatus, linkPacketsSent, linkPacketsReceived);
 }
@@ -2810,7 +2899,44 @@ static unsigned filteredTeleportCount(void) {
 static void handleRepeatInput(void) {
     if (!repeatKeys) return;
     if (repeatKeys & KEY_Y) {
-        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % 13);
+        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % PAGE_COUNT);
+        return;
+    }
+    if (repeatKeys & KEY_L) {
+        bottomPage = (BottomPage) (((unsigned) bottomPage + PAGE_COUNT - 1) % PAGE_COUNT);
+        return;
+    }
+    if (repeatKeys & KEY_R) {
+        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % PAGE_COUNT);
+        return;
+    }
+    if (bottomPage == PAGE_SETTINGS) {
+        const unsigned settingCount = 5;
+        if (repeatKeys & (KEY_UP | KEY_CPAD_UP)) {
+            settingsSelected = settingsSelected ? settingsSelected - 1 : settingCount - 1;
+        }
+        if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) {
+            settingsSelected = (settingsSelected + 1) % settingCount;
+        }
+        bool changed = false;
+        if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT | KEY_A)) {
+            if (settingsSelected == 0) { hudVisible = !hudVisible; changed = true; }
+            else if (settingsSelected == 1) { fpsVisible = !fpsVisible; changed = true; }
+            else if (settingsSelected == 2) { trailLength = trailLength ? trailLength - 1 : 8; changed = true; }
+            else if (settingsSelected == 3) { labelFadeDistance = labelFadeDistance ? labelFadeDistance - 1 : 8; changed = true; }
+            else if (settingsSelected == 4) { accessibilityMode = !accessibilityMode; changed = true; }
+        }
+        if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
+            if (settingsSelected == 0) { hudVisible = !hudVisible; changed = true; }
+            else if (settingsSelected == 1) { fpsVisible = !fpsVisible; changed = true; }
+            else if (settingsSelected == 2) { trailLength = (trailLength + 1) % 9; changed = true; }
+            else if (settingsSelected == 3) { labelFadeDistance = (labelFadeDistance + 1) % 9; changed = true; }
+            else if (settingsSelected == 4) { accessibilityMode = !accessibilityMode; changed = true; }
+        }
+        if (changed) {
+            saveDisplayConfig();
+            settingsSavedUntil = osGetTime() + 1500;
+        }
         return;
     }
     if (bottomPage == PAGE_TELEPORT) {
@@ -2961,11 +3087,38 @@ static void drawTop(void) {
     C2D_TargetClear(topTarget, C2D_Color32(0,0,0,255));
     C2D_SceneBegin(topTarget);
     if (videoReady) C2D_DrawImageAt(gameImage, 0, 0, 0, NULL, 400.0f / 240.0f, 240.0f / 160.0f);
+    C2D_TextBufClear(textBuffer);
+
+    // Minimal top-screen HUD: FPS, connection status, and nearby count.
+    // Drawn before the early overworld return so it is visible in menus too.
+    if (hudVisible) {
+        const char* status = onlineMode == ONLINE_ACTIVE ? localize(LS_ONLINE) :
+            onlineMode == ONLINE_CONNECTING ? localize(LS_CONNECTING) :
+            onlineEnabled ? localize(LS_RETRYING) : localize(LS_OFFLINE);
+        uint32_t statusColor = onlineMode == ONLINE_ACTIVE ? C2D_Color32(78, 168, 95, 255) :
+            onlineEnabled ? C2D_Color32(58, 143, 207, 255) : C2D_Color32(120, 120, 120, 255);
+        unsigned hudLines = 1;
+        if (fpsVisible) ++hudLines;
+        if (presence.valid) ++hudLines;
+        C2D_DrawRectSolid(6, 6, 0.05f, 80, 10 + hudLines * 14, uiPanelColor(C2D_Color32(0, 0, 0, 140)));
+        float hy = 10;
+        if (fpsVisible) {
+            drawText(12, hy, .28f, C2D_Color32(200, 220, 210, 255), localize(LS_FPS_FORMAT), measuredFps);
+            hy += 14;
+        }
+        drawText(12, hy, .28f, statusColor, "%s", status);
+        hy += 14;
+        if (presence.valid)
+            drawText(12, hy, .28f, C2D_Color32(160, 232, 255, 255), localize(LS_NEARBY_FORMAT), remoteCount);
+    }
+
+    // Toast banners are drawn above overlays so they remain readable.
+    drawToasts();
+
     // Coordinates remain populated while Emerald is in battles and menus.
     // Recheck callback2 at draw time so stale presence can never place a
     // network trainer over a non-overworld framebuffer.
     if (!isEmeraldOverworld() || !presence.valid) return;
-    C2D_TextBufClear(textBuffer);
 
     const uint64_t now = osGetTime();
     // Build a list of visible remote trainers with interpolated positions.
@@ -2975,6 +3128,7 @@ static void drawTop(void) {
         float screenX, screenY;  // pixel position on the 400x240 top screen
         bool moving;
         float alpha;
+        float labelAlpha;
     } visible[8];
     int visibleCount = 0;
 
@@ -2996,8 +3150,16 @@ static void drawTop(void) {
         const bool behind = tileY < (float)presence.y;
         float alpha = behind ? 0.55f : 1.0f;
 
+        // Fade name/title labels at the edge of the visible window so distant
+        // trainers do not clutter the screen with text. Distance 0 disables the fade.
+        float distance = (dx < 0.0f ? -dx : dx) + (dy < 0.0f ? -dy : dy);
+        float labelAlpha = alpha;
+        if (labelFadeDistance > 0 && distance > (float)labelFadeDistance) {
+            labelAlpha *= clampf(1.0f - (distance - (float)labelFadeDistance) / 4.0f, 0.0f, 1.0f);
+        }
+
         bool moving = (t->x != t->prevX || t->y != t->prevY) && elapsed < REMOTE_INTERPOLATION_MS;
-        visible[visibleCount++] = { t, tileX, tileY, sx, sy, moving, alpha };
+        visible[visibleCount++] = { t, tileX, tileY, sx, sy, moving, alpha, labelAlpha };
     }
 
     // Y-sort so lower-on-screen trainers draw last (correct layering).
@@ -3014,19 +3176,48 @@ static void drawTop(void) {
     for (int i = 0; i < visibleCount; ++i) {
         const VisibleTrainer& v = visible[i];
         const RemoteTrainer* t = v.trainer;
-        drawRemoteTrainer(t, v.screenX, v.screenY, v.alpha, v.moving);
+
+        // Clamp the whole overlay (sprite + name/title/emote) to the top screen
+        // so trainers at the edge of the visible window stay fully readable.
+        const float spriteW = 36.0f;
+        const float spriteH = 57.0f;
+        const float labelH = 28.0f;
+        float sx = clampf(v.screenX, 12.0f, 400.0f - spriteW - 12.0f);
+        float sy = clampf(v.screenY, labelH, 240.0f - spriteH);
+
+        // Draw a faint movement trail behind the sprite if the trainer has moved
+        // recently on the same map. trailLength 0 disables trails entirely.
+        if (trailLength > 1 && t->trailCount > 1) {
+            uint32_t trailColor = withAlpha(C2D_Color32(200, 230, 255, 255), v.alpha * 0.25f);
+            unsigned renderedCount = t->trailCount < trailLength ? t->trailCount : trailLength;
+            for (unsigned n = 1; n < renderedCount; ++n) {
+                const unsigned a = (t->trailNext + 8 - renderedCount + n - 1) % 8;
+                const unsigned b = (t->trailNext + 8 - renderedCount + n) % 8;
+                const MapTrailPoint& pa = t->trail[a];
+                const MapTrailPoint& pb = t->trail[b];
+                if (pa.mapGroup != presence.mapGroup || pa.mapNum != presence.mapNum ||
+                    pb.mapGroup != presence.mapGroup || pb.mapNum != presence.mapNum) continue;
+                float ax = 200.0f + ((float)pa.x - (float)presence.x) * OVERLAY_TILE_W;
+                float ay = 120.0f + ((float)pa.y - (float)presence.y) * OVERLAY_TILE_H;
+                float bx = 200.0f + ((float)pb.x - (float)presence.x) * OVERLAY_TILE_W;
+                float by = 120.0f + ((float)pb.y - (float)presence.y) * OVERLAY_TILE_H;
+                C2D_DrawLine(ax, ay, trailColor, bx, by, trailColor, 2.0f, 0.01f);
+            }
+        }
+
+        drawRemoteTrainer(t, sx, sy, v.alpha, v.moving);
 
         // Draw title above name, then name above sprite.
-        float labelY = v.screenY - 12.0f;
+        float labelY = sy - 12.0f;
         if (t->title[0]) {
-            drawText(v.screenX, labelY - 10.0f, .28f, withAlpha(C2D_Color32(255, 220, 130, 255), v.alpha), "%.14s", t->title);
+            drawText(sx, labelY - 10.0f, .28f, withAlpha(C2D_Color32(255, 220, 130, 255), v.labelAlpha), "%.14s", t->title);
         }
-        drawText(v.screenX - 9.0f, labelY, .32f, withAlpha(C2D_Color32(255, 255, 255, 255), v.alpha), "%.8s", t->name);
+        drawText(sx - 9.0f, labelY, .32f, withAlpha(C2D_Color32(255, 255, 255, 255), v.labelAlpha), "%.8s", t->name);
 
         if (t->emote && now < t->emoteUntil) {
             static const char* bubbles[] = {"", localize(LS_HI), localize(LS_EXCLAMATION), localize(LS_ANGLED_BRACKETS), localize(LS_GG)};
-            C2D_DrawRectSolid(v.screenX + 17.0f, v.screenY - 28.0f, .4f, 22, 15, withAlpha(C2D_Color32(255,255,240,235), v.alpha));
-            drawText(v.screenX + 20.0f, v.screenY - 26.0f, .34f, withAlpha(C2D_Color32(35,45,50,255), v.alpha), "%s", bubbles[t->emote]);
+            C2D_DrawRectSolid(sx + 17.0f, sy - 28.0f, .4f, 22, 15, withAlpha(C2D_Color32(255,255,240,235), v.alpha));
+            drawText(sx + 20.0f, sy - 26.0f, .34f, withAlpha(C2D_Color32(35,45,50,255), v.alpha), "%s", bubbles[t->emote]);
         }
     }
 }
@@ -3092,6 +3283,7 @@ int main(void) {
         loadConfig();
         loadIdentity();
         loadStatsConfig();
+        loadDisplayConfig();
     debugStage("config-loaded");
     socBuffer = (uint32_t*) memalign(0x1000, SOC_BUFFER_SIZE);
     if (!socBuffer || R_FAILED(socInit(socBuffer, SOC_BUFFER_SIZE))) {
@@ -3276,6 +3468,20 @@ int main(void) {
                 const unsigned pageCount = guildMemberCount ? (guildMemberCount + 5) / 6 : 1;
                 if (touch.px < 160) { if (guildMemberPage) --guildMemberPage; }
                 else if (guildMemberPage + 1 < pageCount) ++guildMemberPage;
+            } else if (bottomPage == PAGE_SETTINGS) {
+                if (touch.py >= 46 && touch.py < 216) {
+                    unsigned row = (unsigned)(touch.py - 46) / 34;
+                    if (row < 5) {
+                        settingsSelected = row;
+                        if (settingsSelected == 0) hudVisible = !hudVisible;
+                        else if (settingsSelected == 1) fpsVisible = !fpsVisible;
+                        else if (settingsSelected == 2) trailLength = (trailLength + 1) % 9;
+                        else if (settingsSelected == 3) labelFadeDistance = (labelFadeDistance + 1) % 9;
+                        else if (settingsSelected == 4) accessibilityMode = !accessibilityMode;
+                        saveDisplayConfig();
+                        settingsSavedUntil = osGetTime() + 1500;
+                    }
+                }
             } else if (bottomPage == PAGE_CHAT && touch.py >= 40 && touch.py < 68) {
                 globalChat = touch.px >= 160;
                 chatPage = 0;

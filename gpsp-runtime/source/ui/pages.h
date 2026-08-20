@@ -21,7 +21,9 @@ enum BottomPage {
     PAGE_FRIENDS,
     PAGE_GUILD,
     PAGE_TELEPORT,
-    PAGE_UPDATE
+    PAGE_UPDATE,
+    PAGE_SETTINGS,
+    PAGE_COUNT
 };
 
 // Shared UI resources from main.cpp.
@@ -47,6 +49,16 @@ struct GamePresence {
 };
 extern GamePresence presence;
 
+struct MapTrailPoint {
+    uint8_t mapGroup;
+    uint8_t mapNum;
+    int16_t x;
+    int16_t y;
+};
+extern MapTrailPoint mapTrail[16];
+extern unsigned mapTrailCount;
+extern unsigned mapTrailNext;
+
 struct RemoteTrainer {
     char id[37];
     char name[13];
@@ -60,19 +72,12 @@ struct RemoteTrainer {
     uint8_t emote;
     uint64_t emoteUntil;
     uint64_t updatedAt;
+    MapTrailPoint trail[8];
+    unsigned trailCount;
+    unsigned trailNext;
 };
 extern RemoteTrainer remoteTrainers[8];
 extern int remoteCount;
-
-struct MapTrailPoint {
-    uint8_t mapGroup;
-    uint8_t mapNum;
-    int16_t x;
-    int16_t y;
-};
-extern MapTrailPoint mapTrail[16];
-extern unsigned mapTrailCount;
-extern unsigned mapTrailNext;
 
 // Online users state from main.cpp.
 struct OnlineUser {
@@ -280,10 +285,33 @@ extern char linkStatus[48];
 extern unsigned linkPacketsSent;
 extern unsigned linkPacketsReceived;
 
+// Display settings from main.cpp.
+extern bool hudVisible;
+extern bool fpsVisible;
+extern unsigned trailLength;
+extern unsigned labelFadeDistance;
+extern unsigned settingsSelected;
+extern bool accessibilityMode;
+
+// Accessibility helpers. uiScale multiplies font sizes when accessibility mode
+// is enabled; uiTextColor/uiPanelColor boost contrast on shared surfaces.
+float uiScale(float size);
+uint32_t uiTextColor(uint32_t normal);
+uint32_t uiPanelColor(uint32_t normal);
+
 #define APP_VERSION "0.8.8"
 
 // Common text helper used by pages and the main renderer.
 void drawText(float x, float y, float size, uint32_t color, const char* format, ...);
+// Static-label variant: text must be a stable literal or persistent string.
+// It is cached and never parsed into the dynamic per-frame text buffer.
+void drawTextStatic(float x, float y, float size, uint32_t color, const char* text);
+
+// Unified empty/waiting/connect message helpers.
+void drawMessageCentered(float y, float size, uint32_t color, const char* text);
+void drawWaitingMessage(const char* text);
+void drawEmptyMessage(const char* text);
+void drawConnectOnlineMessage(const char* text);
 
 // Static UI label cache. Init after C2D is ready; shutdown before deleting the
 // dynamic text buffer so Citro2D objects are freed in the correct order.
@@ -308,7 +336,21 @@ void drawQuestPage(void);
 void drawTitlesPage(void);
 void drawFriendsPage(void);
 void drawGuildPage(void);
+void drawSettingsPage(void);
 void drawNpcDialogueOverlay(void);
+
+extern uint64_t settingsSavedUntil;
+
+// Top-screen toast notifications. Queue a short-lived banner; drawn after HUD.
+struct Toast {
+    char text[81];
+    uint64_t until;
+    uint32_t color;
+    bool active;
+};
+extern Toast toastQueue[2];
+void showToast(const char* fmt, ...);
+void drawToasts(void);
 
 // Helpers used by the main loop touch dispatch.
 unsigned currentChatIndices(unsigned indices[24]);

@@ -1,0 +1,36 @@
+Homebrew App Store (FortTheUsers) Submission
+==============================================
+URL: https://submit.fortheusers.org/
+
+Form fields:
+------------
+Console:        3DS
+App title:      Emerald Online 3DS
+Author:         Emerald Online 3DS
+Category:       Game
+Contact info:   <your email or Discord handle>
+Version:        0.8.8
+License:        GPL-3.0
+App URL:        https://github.com/xlindseyj/emerald-online-3ds
+Short desc:     Multiplayer presence for your own Emerald cartridge dump
+Detailed desc:  Emerald Online 3DS is a clean-room homebrew framework that adds online presence to your own legally obtained Pokémon Emerald (US) cartridge dump running on Nintendo 3DS.
+
+Features:
+- Same-map trainer overlays with smooth interpolation, facing frames, and emote bubbles
+- Map-local and global chat
+- Online user roster with roles
+- Browser-paired community forums and opt-in leaderboards
+- Interactive quest log with NPCs and resource nodes
+- Friends, guilds, and titles
+- In-app updater and FBI-installable CIA
+
+The ROM and save stay on your SD card; the app never ships with copyrighted game data. The public server code is open source and the game endpoint can be changed via online.cfg.
+
+Changelog:      v0.8.8 adds interactive quests, NPC/resource nodes, smoother trainer overlays, and store-ready assets.
+
+Files to upload:
+----------------
+Banner image:   assets/emerald-online-3ds-banner-720.png (1280x720)
+Icon image:     assets/emerald-online-3ds-icon-512.png (512x512)
+
+Note: After approval, new GitHub releases are tracked automatically for updates.

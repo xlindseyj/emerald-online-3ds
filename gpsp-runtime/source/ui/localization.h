@@ -17,6 +17,7 @@ enum LocalizedString {
 
     // Header / navigation.
     LS_Y_ARROW,
+    LS_SETTINGS,
 
     // Party page.
     LS_WAITING_EMERALD_MEMORY_PARTY,
@@ -234,6 +235,21 @@ enum LocalizedString {
     // Guild strings.
     LS_GUILD,
     LS_NO_GUILD,
+
+    // Settings page.
+    LS_TOP_SCREEN_HUD,
+    LS_FPS_DISPLAY,
+    LS_TRAIL_LENGTH,
+    LS_LABEL_FADE_DISTANCE,
+    LS_SETTINGS_SAVED,
+    LS_ACCESSIBILITY_MODE,
+
+    // Toast notifications.
+    LS_TOAST_NEW_MESSAGE,
+    LS_TOAST_QUEST_ACCEPTED,
+    LS_TOAST_QUEST_COMPLETED,
+    LS_TOAST_FRIEND_ONLINE,
+    LS_TOAST_GUILD_UPDATED,
 
     LS_COUNT
 };

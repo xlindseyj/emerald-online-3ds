@@ -44,7 +44,8 @@ static const char* english(LocalizedString key) {
     case LS_TELEPORT: return "TELEPORT";
     case LS_SYSTEM_UPDATE: return "SYSTEM UPDATE";
 
-    case LS_Y_ARROW: return "Y >";
+    case LS_Y_ARROW: return "< L   Y   R >";
+    case LS_SETTINGS: return "SETTINGS";
 
     case LS_WAITING_EMERALD_MEMORY_PARTY: return "Waiting for Emerald memory...";
     case LS_Y_BAG: return "Y  BAG";
@@ -242,6 +243,19 @@ static const char* english(LocalizedString key) {
 
     case LS_GUILD: return "GUILD";
     case LS_NO_GUILD: return "Not in a guild";
+
+    case LS_TOP_SCREEN_HUD: return "TOP-SCREEN HUD";
+    case LS_FPS_DISPLAY: return "FPS DISPLAY";
+    case LS_TRAIL_LENGTH: return "TRAIL LENGTH";
+    case LS_LABEL_FADE_DISTANCE: return "LABEL FADE DISTANCE";
+    case LS_SETTINGS_SAVED: return "SETTINGS SAVED";
+    case LS_ACCESSIBILITY_MODE: return "ACCESSIBILITY MODE";
+
+    case LS_TOAST_NEW_MESSAGE: return "New message from %s";
+    case LS_TOAST_QUEST_ACCEPTED: return "Quest accepted: %s";
+    case LS_TOAST_QUEST_COMPLETED: return "Quest completed: %s";
+    case LS_TOAST_FRIEND_ONLINE: return "%s is online";
+    case LS_TOAST_GUILD_UPDATED: return "Guild roster updated";
 
     case LS_COUNT: break;
     }
