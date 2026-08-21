@@ -21,7 +21,10 @@ spec:
   # until room state is moved to a shared backend.
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: emerald-online
@@ -231,6 +234,20 @@ spec:
         - name: database-ca
           secret:
             secretName: emerald-pg-ca
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: emerald-online
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-online
+    app.kubernetes.io/part-of: emerald-online-3ds
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: emerald-online
 ---
 apiVersion: v1
 kind: Service
