@@ -100,14 +100,11 @@ spec:
               - matchExpressions:
                   - key: kubernetes.io/hostname
                     operator: In
-                    values: [lws-desktop, lws-homelab]
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values: [lws-homelab]
+                    values: [lws-desktop]
+                  # TODO: restore lws-homelab once the container image ships an
+                  # arm64 variant. Current digest is amd64-only, so scheduling to
+                  # lws-homelab (arm64) causes ImagePullBackOff and prevents
+                  # RollingUpdate from completing.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
