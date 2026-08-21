@@ -380,28 +380,18 @@ spec:
         - protocol: TCP
           port: 3211
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: allow-node-health-probes
   namespace: pokemonemeraldonline3ds
 spec:
-  podSelector: {}
-  policyTypes: [Ingress]
+  endpointSelector: {}
   ingress:
-    - from:
-        - ipBlock:
-            cidr: 192.168.0.31/32
-        - ipBlock:
-            cidr: 192.168.15.5/32
-        - ipBlock:
-            cidr: 10.42.0.0/32
-        - ipBlock:
-            cidr: 10.42.0.1/32
-        - ipBlock:
-            cidr: 10.42.1.0/32
-        - ipBlock:
-            cidr: 10.42.1.1/32
+    - fromEntities:
+        - host
+        - remote-node
+        - kube-apiserver
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -463,19 +453,20 @@ spec:
         - protocol: TCP
           port: 8000
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: allow-cnpg-kubernetes-api
   namespace: pokemonemeraldonline3ds
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       cnpg.io/cluster: emerald-pg
-  policyTypes: [Egress]
-  # CNPG's instance manager must reach the host-network Kubernetes API. In this
-  # cluster's Cilium/Flannel chaining mode, host traffic cannot be represented
-  # by a portable Kubernetes ipBlock after DNAT. This exception is confined to
-  # CNPG-managed pods; application and maintenance pods retain explicit egress.
+  # CNPG's instance manager must reach the host-network Kubernetes API. In
+  # Cilium/Flannel chaining mode, host traffic is classified by Cilium identity
+  # (host / kube-apiserver) rather than by DNAT'd destination IP, so we allow
+  # those entities explicitly instead of using an unrestricted egress rule.
   egress:
-    - {}
+    - toEntities:
+        - host
+        - kube-apiserver
