@@ -23,6 +23,9 @@
 !release/release-catalog.json
 !release/known-issues.json
 !release/community-pages.json
+!desktop/dist/
+desktop/dist/**
+!desktop/dist/EmeraldOnline3DS-Setup-*.exe
 
 # Defense in depth: private/legal-copy inputs must never enter an image layer.
 *.gba

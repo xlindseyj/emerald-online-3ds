@@ -1,6 +1,6 @@
 # Hardware smoke test
 
-The current public release is 0.8.8 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes Online Users plus switchable Map and Global Chat in the lower-page cycle and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
+The current public release is 0.8.9 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes Online Users plus switchable Map and Global Chat in the lower-page cycle, the 0.8.9 frame-timing and render-pacing improvements, and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
 
@@ -131,6 +131,8 @@ Production v0.8.1 uses multi-architecture image index `sha256:64134b4dc71f754abf
 
 Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. With the ignored official Azahar AppImage and project-local Xvfb dependencies prepared, `npm run smoke:emulator` performs the network/reconnect smoke without a desktop session. Physical Old 3DS behavior remains the release authority for performance, controls, Wi-Fi, audio, and HOME lifecycle.
 
+Run `npm run smoke:web:visual` when changing the installer or community UI. It starts isolated local presence/web processes and writes desktop and 390×844 mobile captures to ignored `generated/ui-review/`. Review all four images for content order, clipping, focusable controls, and accidental private data before release.
+
 ## Optional LAN server smoke
 
 1. Connect the workstation and 3DS to the same Wi-Fi/LAN.
@@ -151,10 +153,10 @@ Run `npm ci`, `npm test`, `npm run build:public`, and `npm run audit:release`. W
 9. With another client in the same map, tap each lower-edge emote button: `WAVE`, `BATTLE`, `TRADE`, and `GG`. Confirm the matching colored indicator appears briefly above your trainer on the other client. Confirm rapidly repeated taps are rate-limited without interrupting play.
 10. Leave the player stationary online for at least 45 seconds and confirm the status remains `ONLINE`.
 11. Disable Wi-Fi briefly. Confirm the panel changes to `RETRYING` while Emerald keeps running. Restore Wi-Fi and confirm it returns to `ONLINE` without pressing X or moving.
-12. Press `Y` and confirm the native party page shows each party nickname, level, and current/maximum HP. Damage or heal a party member and confirm HP updates without reopening the page.
-13. Press `Y` for Bag. Compare money, item names, and quantities against Emerald's own Bag; use all five pocket tabs and both page arrows. Confirm the page is labeled local-only and that no inventory data appears in browser profiles or network payloads.
-14. Press `Y` for Map/Radar. Walk and change facing to build a trail, then change maps and confirm the old trail clears. With a same-map peer, verify the remote marker, name, gender color, and distance update.
-15. Press `Y` again for Player Stats. Confirm Seen, Caught, Badges, and Frontier are shown locally while every upload switch is off. Tap Enable, cancel once and verify no upload, then enable by typing `YES`. Toggle each field independently and verify the paired browser profile/leaderboard follows. Confirm no Trainer ID, Pokémon, party, moves, inventory, save, or ROM field appears in network/profile data.
+12. Press `Y` and confirm the grouped launcher opens. Check Online, Adventure, Social, and System with touch and `L`/`R`; verify D-pad selection plus `A`, `B`, and `Y` work without sending an in-game interaction. Open Party and confirm each nickname, level, and current/maximum HP updates without reopening the page.
+13. Reopen the launcher, choose Adventure → Bag, and compare money, item names, and quantities against Emerald's own Bag. Use all five pocket tabs and both page arrows. Confirm the page is labeled local-only and that no inventory data appears in browser profiles or network payloads.
+14. Choose Adventure → Map & Radar. Walk and change facing to build a trail, then change maps and confirm the old trail clears. With a same-map peer, verify the remote marker, name, gender color, and distance update.
+15. Choose Social → Stats & Privacy. Confirm Seen, Caught, Badges, and Frontier are shown locally while every upload switch is off. Tap Enable, cancel once and verify no upload, then enable by typing `YES`. Toggle each field independently and verify the paired browser profile/leaderboard follows. Confirm no Trainer ID, Pokémon, party, moves, inventory, save, or ROM field appears in network/profile data.
 16. Tap Delete All Stats, cancel once, then type `DELETE`. Confirm the profile is immediately empty and stays absent after page refresh. Disable uploads before testing identity-wide browser deletion so the device cannot re-upload on its next minute sync.
 17. Save through Emerald's normal menu, close using HOME, relaunch, and confirm the save loads and the local `stats.cfg` consent choices persist.
 
@@ -180,6 +182,28 @@ kubectl exec -i -n pokemonemeraldonline3ds deployment/emerald-online -c presence
 The temporary `Brendan` peer privately discovers the first positioned trainer, stays on that trainer's exact observed starting tile, sends one greeting, waves, and disconnects after the requested duration. It never invents or infers movement because coordinates alone omit collision, surfing, elevation, and foreground/object priority; use a real second client for movement acceptance. The utility does not expose the private client-discovery endpoint publicly and never creates a database identity, score, forum account, ROM, or save. Move away from the starting tile and confirm the lower screen shows stationary `Brendan` under Nearby. The current external overlay is composited after Emerald's completed framebuffer, so a trainer on a valid tile can still appear in front of a sign or tree canopy that should visually occlude it; terrain/locomotion state and foreground-priority integration remain separate roadmap items.
 
 Record console model, system version, Homebrew Launcher version, each pass/fail result, and any crash/error screen. Real hardware is authoritative for Wi-Fi and lifecycle behavior.
+
+## Windows desktop launcher smoke test
+
+1. Build the installer with `npm run build:desktop` on a Windows runner, or download the CI artifact.
+2. Run `EmeraldOnline3DS-Setup-<version>.exe`. Confirm the license page shows GPL version 2 and the installed `resources/licenses/` directory contains the Azahar source/checksum notice, GPL text, and third-party notice.
+3. Complete the one-click install and confirm Start Menu and desktop shortcuts are created.
+4. Launch the application. Confirm the branded title screen renders with an animated emerald background, the project banner, and the current version.
+5. Click **Continue**. Confirm a file picker opens with the filter set to `.gba` files.
+6. Select a valid Pokémon Emerald (U) ROM. Confirm the status changes to "ROM ready. Click Continue to launch."
+7. Click **Play**. Confirm the launcher hides, Azahar opens and boots the 3DSX runtime, and both the 400×240 top screen and 320×240 bottom screen are visible.
+8. Use Arrow keys, A, S, M, and N to advance past the title screen and enter the overworld. Confirm Z toggles online mode, X opens the grouped dashboard launcher, Q/W change launcher groups, F10 changes the screen layout, and F11 toggles fullscreen.
+9. With online enabled (default), confirm the lower screen reaches `ONLINE` and, on first launch, presents a one-time recovery code. Confirm `identity.cfg` is created in the launcher's application data `sdmc/3ds/emerald-online-3ds/` directory.
+11. Press X to open the lower-screen launcher. Check all Online, Adventure, Social, and System destinations, including Online Users, Chat, Party, Bag, Map/Radar, Stats, Quests, Titles, Friends, Guild, Teleport, Updates, and Settings.
+12. Close Azahar and confirm the launcher returns. Click **Play** again and confirm it reuses the existing identity and reconnects.
+13. Open **Settings**, disable online, save, and relaunch. Confirm the lower screen reports `OFFLINE` and gameplay continues.
+14. Select an invalid or non-Emerald ROM and confirm the launcher rejects it with a clear error message.
+15. Open **Data & recovery**, create a backup, and inspect it with `inspectLocalBackup` or restore it into a disposable profile. Confirm the save, identity, settings, avatar atlas if present, and recognized link backups restore; confirm `emerald.gba`, the 3DSX, debug log, and update files are absent.
+16. Export diagnostics after a deliberate invalid launch. Confirm the report includes component readiness and the failure event but excludes ROM/save/configuration contents, identity values, custom endpoint values, private IPs, email addresses, and user paths.
+17. Check for launcher updates. Confirm no download occurs until **Download verified update** is selected, a checksum mismatch is rejected, an unsigned installer is rejected, the verified signer is shown, and opening the installer requires separate approval.
+18. Use **Delete all local data**, cancel once, then confirm deletion. Verify the ROM, save, identity, settings, logs, and downloaded updates are gone while a backup saved outside application data remains. Uninstall separately and confirm normal uninstall continues to preserve data when the delete action was not used.
+19. For a tagged `v*` build, inspect both `desktop/dist/win-unpacked/Emerald Online 3DS.exe` and the NSIS installer with `Get-AuthenticodeSignature`; both must report `Valid`. Confirm the CI job fails when the signing secrets are absent. Branch and pull-request installers may be unsigned and must be rejected by the updater.
+20. Inspect `desktop/dist/win-unpacked/resources/` and run `node desktop/tools/audit-package.mjs desktop/dist/win-unpacked`. Confirm Azahar, its Qt platform plugin, the 3DSX, and notices are present and no ROM, save, identity, config, or avatar atlas is packaged.
 
 ## Container and Kubernetes server
 

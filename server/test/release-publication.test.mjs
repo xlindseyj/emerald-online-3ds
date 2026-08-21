@@ -15,12 +15,12 @@ const rawCommunityPublications = JSON.parse(fs.readFileSync(path.join(root, 'rel
 
 test('release catalog produces structured, image-safe official posts', () => {
   const catalog = validateReleaseCatalog(rawCatalog);
-  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7', '0.8.8']);
+  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7', '0.8.8', '0.8.9']);
   const current = catalog.at(-1);
   const topic = formatReleaseTopic(current);
-  assert.match(topic.title, /v0\.8\.8/);
+  assert.match(topic.title, /v0\.8\.9/);
   assert.match(topic.body, /## Highlights/);
-  assert.match(topic.body, /Map Chat and Global Chat/);
+  assert.match(topic.body, /performance/i);
   assert.match(topic.body, /battle acceptance is blocked/);
   assert.match(topic.body, /\[CIA\]\(\/emerald-online-3ds\.cia\)/);
   const rendered = renderMarkdown(topic.body);

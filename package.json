@@ -1,6 +1,6 @@
 {
   "name": "emerald-online-3ds",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,10 +17,17 @@
     "smoke:emulator:link": "node tools/emulator-link-spike.mjs",
     "smoke:live:gate3": "node tools/live-gate3-smoke.mjs",
     "smoke:live:link": "node tools/live-link-spike.mjs",
+    "smoke:web:visual": "node tools/web-visual-smoke.mjs",
     "live:peer": "node tools/live-peer.mjs",
     "load:test": "node tools/load-test.mjs",
     "prepare:link-test": "node tools/prepare-link-test.mjs",
-    "test": "node --test server/test/*.test.mjs web/*.test.mjs"
+    "test": "node --test server/test/*.test.mjs web/*.test.mjs desktop/test/*.test.mjs",
+    "test:desktop": "cd desktop && npm test",
+    "start:desktop": "cd desktop && npm start",
+    "build:desktop": "cd desktop && npm ci && npm run dist:win",
+    "build:desktop:linux": "cd desktop && npm ci && npm run dist:linux",
+    "smoke:desktop:linux": "cd desktop && npm run smoke:linux -- --duration=8000",
+    "smoke:desktop:windows": "cd desktop && npm run smoke:windows"
   },
   "dependencies": {
     "pg": "^8.16.3",

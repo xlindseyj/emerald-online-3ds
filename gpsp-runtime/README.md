@@ -19,8 +19,17 @@ custom cache-invalidation SVC used by the dynarec.
 The CIA uses the same Luma backdoor bootstrap model as RetroArch's 3DS
 frontend, then maps gpSP's translation caches with explicit result checking.
 The top framebuffer is padded to 256x256 before a tiled GPU transfer and drawn
-at 400x240. The main loop relies on Citro3D synchronization alone; adding a
-second explicit VBlank wait reduces physical Old 3DS performance to 30 FPS.
+at 400x240. The GBA framebuffer upload is ping-ponged across two 256x256
+textures so the CPU can overlap emulation and network work with the GPU
+DisplayTransfer; the previous frame's transfer completes during
+`C3D_FrameBegin(C3D_FRAME_SYNCDRAW)`. Emulation is decoupled from the display
+frame rate: `retro_run()` advances based on the GBA's ~59.73 Hz clock and can
+catch up a small number of frames per rendered frame, which keeps audio pitch
+stable when the renderer dips. Outgoing WebSocket/TCP traffic is queued and
+drained during the periodic `onlineUpdate()` poll, replacing the previous
+busy-wait write path. The main loop relies on Citro3D synchronization alone;
+adding a second explicit VBlank wait reduces physical Old 3DS performance to
+30 FPS.
 
 As of 2026-08-14, a blue Old 3DS XL boots the pre-v2 runtime at 60 FPS, renders the
 lower dashboard correctly, plays smooth 32768 Hz audio, and reaches the LAN

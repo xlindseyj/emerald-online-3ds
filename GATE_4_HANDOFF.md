@@ -1,6 +1,6 @@
 # Gate 4 handoff: experimental link feasibility
 
-Gate 4 is an evidence-gathering spike, not a released promise that physical battles or trades are accepted. Release 0.8.8 exposes gpSP's Emerald RFU backend only when a private `online.cfg` contains a valid `link_room`. Testers use Emerald's Wireless Club / Union Room route, not the unsupported Direct Corner path. Ordinary installs remain unchanged and link invitations and battle/trade leaderboards remain disabled.
+Gate 4 is an evidence-gathering spike, not a released promise that physical battles or trades are accepted. Release 0.8.9 exposes gpSP's Emerald RFU backend only when a private `online.cfg` contains a valid `link_room`. Testers use Emerald's Wireless Club / Union Room route, not the unsupported Direct Corner path. Ordinary installs remain unchanged and link invitations and battle/trade leaderboards remain disabled.
 
 ## Implemented and proven
 
@@ -22,7 +22,7 @@ Gate 4 is an evidence-gathering spike, not a released promise that physical batt
 
 Under the documented go/no-go rule, the present result is still `spike in progress`; it is not sufficient to expose public trade invitations or enable battle/trade rankings.
 
-Release 0.8.8 retains the complete two-Azahar native trade evidence and records the failed battle result above without widening the RFU claim. The repository's `npm run prepare:link-test` command creates a fresh ignored physical SD tree and isolated Azahar profile while keeping ROMs, saves, identities, preferences, and avatar assets out of the physical handoff. Physical v0.8.8 acceptance remains open; see `GATE_4_PHYSICAL_TEST.md` for the exact hashes and remaining steps.
+Release 0.8.9 retains the complete two-Azahar native trade evidence and records the failed battle result above without widening the RFU claim. The repository's `npm run prepare:link-test` command creates a fresh ignored physical SD tree and isolated Azahar profile while keeping ROMs, saves, identities, preferences, and avatar assets out of the physical handoff. Physical v0.8.9 acceptance remains open; see `GATE_4_PHYSICAL_TEST.md` for the exact hashes and remaining steps.
 
 ## Physical test configuration
 
@@ -39,10 +39,10 @@ link_room=TEST-2345
 
 Use a fresh unpredictable code instead of the example on the public service. Confirm both screens show `LINK <room> ACTIVE - BACKUP OK` before entering the Wireless Club / Union Room. Back up the whole SD save directory separately, then record battle/trade outcome, both post-session save hashes, restart behavior, interruption behavior, FPS, audio, packet counters, and the complete WSS diagnostic if the connection fails.
 
-## Current release 0.8.8
+## Current release 0.8.9
 
-- CIA: `release/emerald-online-3ds.cia` — `444b06079ac89a7116a2cb5ac43318352de07d14d5b77034a060ca63c9ab1e42`
-- 3DSX: `release/emerald-online-3ds.3dsx` — `959793d3a472ff8262cdf3c83d9e40fb4cbc5a0872e168bfeb5e358537936ea0`
-- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.8.8.tar.gz` — `64040c0887851bd106dac74138528486849df27db3f4fe53a1f1ff33d2a93266`
+- CIA: `release/emerald-online-3ds.cia` — `beed0f0b1f14c5c4b7e56745686ac8f8f2895141a3d479a829bdcb21c1b6a5ea`
+- 3DSX: `release/emerald-online-3ds.3dsx` — `b325d14c7977191e5c824504a4182120d66383a7bd2cfbd5e45b77af1917825c`
+- Complete first-party and corresponding gpSP source: `release/emerald-online-3ds-source-0.8.9.tar.gz` — `44fd717443216cda8fc11db827e04408e0da49e5643181ba1238c2aa9dd2ff4e`
 - Example opt-in configuration: `release/online-link-spike.example.cfg`
 - Production image: `sha256:152b9643f8961cc53d420d331a0a694a5be1e87a4d5f14b7683d0310a62ed419`

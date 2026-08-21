@@ -132,7 +132,7 @@ export function createCommunityApp({ identityStore, communityStore, statsStore =
     if (pathname === '/community' || pathname === '/community/') {
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
-        'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY'
       });
       res.end(page);

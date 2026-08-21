@@ -634,5 +634,79 @@
         "caption": "The verified two-client trade remains emulator evidence only; Gate 4 physical acceptance is still open."
       }
     ]
+  },
+  {
+    "version": "0.8.9",
+    "releasedAt": "2026-08-20T00:00:00Z",
+    "title": "Old 3DS Performance and Frame-Pacing Improvements",
+    "status": "Current experimental beta",
+    "summary": "Targets the 48-52 FPS Old 3DS regression with ping-ponged async GPU uploads, emulation/rendering decoupling, cached remote-trainer overlays, non-blocking network writes, and built-in frame-timing instrumentation.",
+    "highlights": [
+      "Pings the GBA framebuffer upload between two 256x256 textures so the GPU transfer overlaps CPU work instead of blocking every frame.",
+      "Decouples emulation from rendering: retro_run advances at the GBA's ~59.73 Hz clock and can catch up a small number of frames per rendered frame, keeping audio pitch stable.",
+      "Caches the interpolated, y-sorted remote-trainer visible list and rebuilds it only when state changes or every 250 ms.",
+      "Adds an overlay_quality display setting that defaults to a reduced-cost mode on Old 3DS: 2-frame walk cycle, no trails, no emote bubbles.",
+      "Replaces the outgoing network write busy-wait with a lock-protected queue drained during the periodic online poll.",
+      "Adds per-section frame timers that log min/max/avg timings once per second to the debug log."
+    ],
+    "verification": [
+      "All 31 runtime-source assertions pass, including the new cached visible-list helpers and ping-pong texture setup.",
+      "The full Node test suite passes with zero failures.",
+      "The runtime builds successfully with the devkitARM Docker image used by scripts/build-public.sh and `npm run audit:release` passes."
+    ],
+    "knownIssues": [
+      "Native RFU battle acceptance is blocked: one two-Azahar peer received Emerald's communication error after party exchange.",
+      "Physical Old 3DS 60 FPS acceptance requires fresh timing logs from the new instrumentation; emulator builds are not authoritative.",
+      "Remote trainer overlays can still appear in front of foreground objects because ROM-derived priority data is not sent to the service."
+    ],
+    "upgradeNotes": [
+      "Back up and preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, online.cfg, display.cfg, and link-backups when replacing the 3DSX or reinstalling the CIA.",
+      "The new overlay_quality setting is persisted in display.cfg; set overlay_quality=0 to force the high-quality overlay.",
+      "Copying a CIA onto the SD card does not update an installed HOME Menu title; reinstall it through FBI."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "beed0f0b1f14c5c4b7e56745686ac8f8f2895141a3d479a829bdcb21c1b6a5ea",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "b325d14c7977191e5c824504a4182120d66383a7bd2cfbd5e45b77af1917825c",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "44fd717443216cda8fc11db827e04408e0da49e5643181ba1238c2aa9dd2ff4e",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.9 focuses on Old 3DS frame pacing and overlay performance."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Back up every private file and reinstall the current CIA through FBI; copying the CIA alone does not update the installed title."
+      },
+      {
+        "url": "/release-media/0.8.4-online-users.png",
+        "alt": "Read-only global Online Users list on the 3DS lower screen",
+        "caption": "The global roster remains read-only and shows the current map and tile coordinates for connected trainers."
+      },
+      {
+        "url": "/release-media/0.8.8-map-global-chat.png",
+        "alt": "Map Chat and Global Chat scope buttons with larger session message text on the 3DS lower screen",
+        "caption": "The 0.8.8 chat interface remains unchanged in 0.8.9; this release focuses on performance and frame pacing."
+      },
+      {
+        "url": "/release-media/0.8.7-union-room-trade.png",
+        "alt": "Native Emerald Union Room trade animation sending Marill",
+        "caption": "The verified two-client trade remains emulator evidence only; Gate 4 physical acceptance is still open."
+      }
+    ]
   }
 ]

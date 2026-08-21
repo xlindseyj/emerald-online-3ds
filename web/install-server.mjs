@@ -11,6 +11,7 @@ import { MemoryCommunityStore, PostgresCommunityStore } from '../server/src/comm
 import { MemoryStatsStore, PostgresStatsStore } from '../server/src/stats-store.mjs';
 import { createCommunityApp } from './community-app.mjs';
 import { communityPage, communityScript } from './community-page.mjs';
+import { installPage } from './install-page.mjs';
 import { statusPage } from './status-page.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -21,9 +22,38 @@ const sourceFilename = `emerald-online-3ds-source-${packageInfo.version}.tar.gz`
 const sourcePath = path.join(root, 'release', sourceFilename);
 const checksumsPath = path.join(root, 'release', 'SHA256SUMS');
 const unistorePath = path.join(root, 'release', 'emerald-online-3ds.unistore');
+const desktopDistPath = path.join(root, 'desktop', 'dist');
+const desktopInstallerFilename = `EmeraldOnline3DS-Setup-${packageInfo.version}.exe`;
+const desktopInstallerPath = path.join(desktopDistPath, desktopInstallerFilename);
+const desktopDistEntries = fs.existsSync(desktopDistPath) ? (fs.readdirSync(desktopDistPath, { withFileTypes: true }) ?? []) : [];
+const desktopLinuxInstallerFilename = (() => {
+  const exactPatterns = [
+    `EmeraldOnline3DS-Setup-${packageInfo.version}.AppImage`,
+    `EmeraldOnline3DS-Setup-${packageInfo.version}.appimage`,
+    `EmeraldOnline3DS-${packageInfo.version}.AppImage`,
+    `EmeraldOnline3DS-${packageInfo.version}.appimage`,
+    `Emerald Online 3DS Setup ${packageInfo.version}.AppImage`,
+    `Emerald Online 3DS Setup ${packageInfo.version}.appimage`
+  ];
+  const candidates = desktopDistEntries
+    .filter(entry => entry.isFile())
+    .map(entry => entry.name)
+    .filter(name => !name.toLowerCase().endsWith('.blockmap'))
+    .filter(name => {
+      if (!name.includes(packageInfo.version)) return false;
+      return name.toLowerCase().match(/\.(appimage|deb|rpm|tar\.gz|zip)$/) !== null;
+    });
+  return exactPatterns.find(name => candidates.includes(name)) ?? candidates[0] ?? null;
+})();
+const desktopLinuxInstallerPath = desktopLinuxInstallerFilename ? path.join(desktopDistPath, desktopLinuxInstallerFilename) : null;
+const desktopLinuxArtifactPresent = desktopLinuxInstallerFilename !== null;
+const desktopInstallerPresent = fs.statSync(desktopInstallerPath, { throwIfNoEntry: false })?.isFile() ?? false;
 const logoPath = path.join(root, 'assets', 'emerald-online-3ds-web-logo.png');
 const iconPath = path.join(root, 'assets', 'emerald-online-3ds-icon.png');
 const releaseMediaPath = path.join(root, 'assets', 'release-media');
+const siteCssPath = path.join(root, 'web', 'site.css');
+const communityCssPath = path.join(root, 'web', 'community.css');
+const installPageScriptPath = path.join(root, 'web', 'install-page.js');
 const host = process.env.INSTALL_HOST ?? '0.0.0.0';
 const port = Number(process.env.INSTALL_PORT ?? 8080);
 const gameHost = process.env.GAME_UPSTREAM_HOST ?? '127.0.0.1';
@@ -53,13 +83,24 @@ function clientIp(req) {
 
 function securityHeaders(extra = {}) {
   return {
-    'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
+    'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'",
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
     ...extra
   };
+}
+
+function chooseDownloadContentType(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.exe')) return 'application/vnd.microsoft.portable-executable';
+  if (lower.endsWith('.appimage')) return 'application/octet-stream';
+  if (lower.endsWith('.deb')) return 'application/vnd.debian.binary-package';
+  if (lower.endsWith('.rpm')) return 'application/x-rpm';
+  if (lower.endsWith('.tar.gz')) return 'application/gzip';
+  if (lower.endsWith('.zip')) return 'application/zip';
+  return 'application/octet-stream';
 }
 
 function readStatus() {
@@ -145,8 +186,12 @@ function readReleaseInfo() {
     version: packageInfo.version,
     cia_url: `${publicBase}/emerald-online-3ds.cia`,
     threedsx_url: `${publicBase}/emerald-online-3ds.3dsx`,
+    desktop_url: desktopInstallerPresent ? `${publicBase}/download/desktop` : null,
+    desktop_linux_url: desktopLinuxArtifactPresent ? `${publicBase}/download/desktop-linux` : null,
     sha256_cia: checksums['emerald-online-3ds.cia'] ?? null,
     sha256_threedsx: checksums['emerald-online-3ds.3dsx'] ?? null,
+    sha256_desktop: checksums[desktopInstallerFilename] ?? null,
+    sha256_desktop_linux: desktopLinuxInstallerFilename ? checksums[desktopLinuxInstallerFilename] ?? null : null,
     release_notes_url: `${publicBase}/`
   };
 }
@@ -189,72 +234,29 @@ if (databaseConfig) {
 }
 const community = createCommunityApp({ identityStore, communityStore, statsStore, secureCookies: publicBase.startsWith('https://'), page: communityPage });
 
-let page = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" type="image/png" href="/favicon.png">
-<meta name="description" content="Install Emerald Online 3DS, see verified Union Room trading, and check the public service status.">
-<title>Emerald Online 3DS</title><style>
-:root{color-scheme:dark;font-family:ui-rounded,system-ui,sans-serif;background:#061b16;color:#effff8}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 12% 0,#176348,#061b16 52%);padding:32px 16px}main{width:min(980px,100%);margin:auto}.hero,.card,.showcase{border:1px solid #65d6a255;border-radius:24px;background:#09251fe8;box-shadow:0 24px 80px #0007}.hero{display:grid;grid-template-columns:1fr clamp(112px,22vw,190px);align-items:center;gap:28px;padding:34px;margin-bottom:22px}.hero-copy{min-width:0}.hero-logo{display:block;width:100%;height:auto;border-radius:23%;filter:drop-shadow(0 16px 25px #0008)}.eyebrow{color:#71e6ad;font-weight:800;letter-spacing:.12em;text-transform:uppercase;font-size:.78rem}h1{font-size:clamp(2.2rem,7vw,4.8rem);line-height:.96;margin:.35em 0 .25em;color:#eafff5}h1 span{color:#6ce0a7}.lede{max-width:680px;color:#bfe9d5;font-size:1.08rem}.status{display:inline-flex;align-items:center;gap:9px;margin-top:12px;padding:8px 12px;border-radius:999px;background:#0e342a;color:#d9ffed}.dot{width:10px;height:10px;border-radius:50%;background:#f3c969;box-shadow:0 0 14px #f3c969}body.ready .dot{background:#58e49b;box-shadow:0 0 14px #58e49b}.grid{display:grid;grid-template-columns:minmax(250px,360px) 1fr;gap:22px}.card{padding:26px}.qr{padding:14px;background:white;border-radius:18px;line-height:0}.qr svg{width:100%;height:auto}code{word-break:break-all;color:#9de9c4}.button{display:inline-block;margin:10px 10px 0 0;padding:13px 18px;border-radius:11px;background:#51d596;color:#052017;text-decoration:none;font-weight:800}.warning{color:#ffd68a}.endpoint,pre{padding:13px;border-radius:12px;background:#061b16;border:1px solid #4e9f7a55}pre{overflow:auto;color:#bff5da;line-height:1.55}li{margin:.55em 0}.showcase{margin-top:22px;padding:26px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.info-grid h3{margin-top:0}.shots{display:grid;grid-template-columns:1fr 1fr;gap:18px}.shots figure{margin:0}.shots img{display:block;width:100%;aspect-ratio:16/10;object-fit:contain;background:#04120f;border:1px solid #65d6a244;border-radius:14px}.shots figcaption{color:#a9d2c0;font-size:.86rem;line-height:1.45;margin-top:9px}.site-footer{margin-top:26px;padding:24px 4px 8px;border-top:1px solid #65d6a244;color:#acd6c3;font-size:.86rem;line-height:1.55}.site-footer h2{margin:0 0 8px;color:#dfffee;font-size:1rem}.site-footer p{margin:8px 0}.site-footer nav{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px}.site-footer a,.showcase a{color:#75e3ae}.legal{color:#91bbaa}@media(max-width:720px){.grid,.shots,.info-grid{grid-template-columns:1fr}.hero{grid-template-columns:1fr}.hero-logo{width:118px;grid-row:1;justify-self:start}.hero,.card,.showcase{padding:22px}body{padding:18px 12px}}
-</style></head><body><main><section class="hero"><div class="hero-copy"><div class="eyebrow">Public multiplayer presence service · v${packageInfo.version}</div><h1>Emerald <span>Online</span> 3DS</h1><p class="lede">Play your own legally obtained Emerald copy on 3DS while seeing trainers on the same map, chatting, and sharing emotes. The ROM and save remain on your SD card.</p><div class="status"><span class="dot"></span><span id="status">Checking server…</span></div></div><img class="hero-logo" src="/logo.png" width="256" height="256" alt="Emerald Online 3DS emerald network emblem"></section><div class="grid"><section class="card"><div class="qr">${qrSvg}</div></section><section class="card" id="install"><h2>Install with FBI</h2><ol><li>Prepare the private ROM and <code>online.cfg</code> on the SD card using the checklist below.</li><li>Open FBI on the 3DS.</li><li>Choose <b>Remote Install</b>, then <b>Scan QR Code</b>.</li><li>Scan the code and confirm installation.</li></ol><a class="button" href="/emerald-online-3ds.cia">Download CIA</a><a class="button" href="/community">Open community</a><a class="button" href="/status">View live status</a><p><code>${ciaUrl}</code></p><p><a href="/emerald-online-3ds.3dsx">3DSX</a> · <a href="/source">3DS runtime source (code only)</a> · <a href="/SHA256SUMS">Verify downloads</a></p><h3>Game endpoint</h3><p class="endpoint"><code>${gamePublicUrl}</code></p><p class="warning"><b>Current beta boundary:</b> presence, roster, same-map chat, emotes, pairing, and forums are available. Native RFU/Union Room battles and trades remain a private opt-in experiment and are not claimed working.</p></section></div><section class="showcase" id="prepare"><div class="eyebrow">Required before launch</div><h2>Prepare the SD card</h2><div class="info-grid"><div><h3>Private files</h3><p>The runtime supports the unmodified Pokémon Emerald US cartridge revision with game code <code>BPEE</code>, revision 0, and SHA-256 <code>a9dec84dfe7f62ab2220bafaef7479da0929d066ece16a6885f6226db19085af</code>. Validate it locally; never upload it.</p><pre>sd:/3ds/emerald-online-3ds/<br>  emerald.gba<br>  online.cfg<br>  emerald-online-3ds.3dsx  (3DSX only)</pre><p>Preserve <code>emerald.sav</code>, <code>identity.cfg</code>, <code>stats.cfg</code>, <code>avatars.t3x</code>, and <code>link-backups/</code> when updating. Back up the whole folder first.</p></div><div><h3>Normal public configuration</h3><pre>server=live.emeraldonline3ds.com<br>port=443<br>transport=wss<br>path=/game<br>name=Trainer</pre><p>Do not put credentials or recovery codes in <code>online.cfg</code>. The app creates <code>identity.cfg</code> separately on first connection. See the <a href="/community?guide=install-on-3ds">full 3DS installation guide</a> for CIA and 3DSX update details.</p></div></div></section><section class="showcase"><div class="eyebrow">What the service sees</div><h2>Privacy at a glance</h2><div class="info-grid"><div><h3>Online presence</h3><p>While connected, the service receives an anonymous device identity plus your display name and current presence state. Authenticated online players can see your display name, current map, and tile coordinates in the global roster. Gameplay snapshots, chat, and emotes remain map-local.</p></div><div><h3>Data kept on your device</h3><p>The service never receives your ROM, save file, Trainer ID, Pokémon, moves, party, or inventory. Routine map chat is relayed without server storage. Save-derived leaderboard fields are off until you explicitly enable them.</p><p><a href="/community?guide=privacy-and-data">Read the privacy and data-control guide</a>.</p></div></div></section><section class="showcase"><div class="eyebrow">Authentic project captures</div><h2>See the interface before installing</h2><div class="shots"><figure><img src="/release-media/0.8.4-online-users.png" alt="Read-only global Online Users list with maps and tile coordinates on the 3DS lower screen" loading="lazy"><figcaption>Online Users is a touch-paged global roster. Names stay on the left; each trainer's current map and tile coordinates are aligned on the right.</figcaption></figure><figure><img src="/release-media/0.8.4-map-chat.png" alt="Timestamped current-map chat list on the 3DS lower screen" loading="lazy"><figcaption>Map Chat keeps a session-only, current-map list with sender, UTC timestamp, message, paging, and a Compose control.</figcaption></figure><figure><img src="/release-media/community-forums.png" alt="Emerald Online 3DS community forum in a desktop browser" loading="lazy"><figcaption>Public releases, installation help, live service status, confirmed issues, and paired-player boards.</figcaption></figure><figure><img src="/release-media/online-dashboard.png" alt="Emerald Online lower-screen dashboard running in Azahar" loading="lazy"><figcaption>The original lower-screen online dashboard in Azahar. ROM-derived gameplay pixels and private save information are not used as website media.</figcaption></figure></div></section><footer class="site-footer"><h2>Independent community project</h2><p>Emerald Online 3DS is an unofficial, fan-made homebrew beta. It is not affiliated with, endorsed by, or sponsored by Nintendo, The Pokémon Company, or Game Freak. Nintendo 3DS, Pokémon, Pokémon Emerald, and related names, characters, artwork, and trademarks belong to their respective owners.</p><p class="legal">This project does not host, provide, sell, or distribute ROMs, game files, encryption keys, copyrighted artwork, or copyrighted audio. You must supply your own legally obtained cartridge dump and comply with the laws that apply to you. Only the original homebrew runtime and its required corresponding source are distributed here.</p><p class="legal">Beta software may contain defects or cause data loss. Back up your save before use. Your ROM, save, party, and inventory remain on your device; never share <code>identity.cfg</code> or a recovery code.</p><nav aria-label="Project links"><a href="#install">Install</a><a href="/community">Community &amp; defects</a><a href="/community?guide=privacy-and-data">Privacy &amp; data controls</a><a href="/status">Live status</a><a href="/source">3DS runtime source</a><a href="/SHA256SUMS">Verify downloads</a></nav></footer></main><script>
-fetch('/api/status',{cache:'no-store'}).then(async response=>{const data=await response.json();if(!response.ok||!data.ok)throw new Error();document.body.classList.add('ready');const registered=data.registered!=null?' · '+data.registered+' registered':'';const peak=data.peak24h!=null?' · 24h peak '+data.peak24h:'';document.getElementById('status').textContent='Online · '+data.authenticated+' trainer'+(data.authenticated===1?'':'s')+' connected'+registered+peak;}).catch(()=>{document.getElementById('status').textContent='Server temporarily unavailable';});
-</script></body></html>`;
-
-page = page
-  .replace(
-    '<h2>Install with FBI</h2><ol><li>Prepare the private ROM and <code>online.cfg</code> on the SD card using the checklist below.</li><li>Open FBI on the 3DS.</li><li>Choose <b>Remote Install</b>, then <b>Scan QR Code</b>.</li><li>Scan the code and confirm installation.</li></ol>',
-    '<h2>Install</h2><div class="steps"><div class="step"><h3>1. Prepare</h3><ol><li>Have your legally obtained Pokémon Emerald ROM and <code>online.cfg</code> ready on the SD card (use the checklist below).</li></ol></div><div class="step"><h3>2. Install with FBI</h3><ol><li>Open FBI on the 3DS.</li><li>Choose <b>Remote Install</b>, then <b>Scan QR Code</b>.</li><li>Scan the code and confirm installation.</li></ol></div><div class="step"><h3>3. Connect</h3><ol><li>Launch <b>Emerald Online 3DS</b> from the home menu.</li><li>Connect to the public game endpoint shown below.</li></ol></div></div>'
-  )
-  .replace(
-    '<p><code>' + ciaUrl + '</code></p>',
-    '<p><code id="cia-url">' + ciaUrl + '</code><button class="copy-btn" id="copy-cia" type="button">Copy URL</button></p>'
-  )
-  .replace(
-    'presence, roster, same-map chat, emotes, pairing, and forums are available.',
-    'presence, roster, switchable map/global chat, emotes, pairing, and forums are available.'
-  )
-  .replace(
-    'Gameplay snapshots, chat, and emotes remain map-local.',
-    'Gameplay snapshots and emotes remain map-local. Chat is session-only: Map Chat stays map-local, while Global Chat is visible to every authenticated online trainer.'
-  )
-  .replace(
-    'Routine map chat is relayed without server storage.',
-    'Routine Map and Global Chat are relayed without server storage.'
-  )
-  .replace(
-    'Map Chat keeps a session-only, current-map list with sender, UTC timestamp, message, paging, and a Compose control.',
-    'Chat switches between session-only Map and Global views, uses larger rows, and opens a full message when tapped.'
-  )
-  .replace(
-    'Native RFU/Union Room battles and trades remain a private opt-in experiment and are not claimed working.',
-    'A complete two-Azahar RFU/Union Room trade now passes, including the native animation, save, restart, and party exchange. Physical 3DS trading, battles, interruption recovery, audio, and hardware performance remain private acceptance work.'
-  )
-  .replace(
-    '<div class="shots">',
-    '<div class="shots"><figure><img src="/release-media/0.8.8-map-global-chat.png" alt="Emerald Online 3DS Chat page with Map Chat and Global Chat scope buttons, large message text, and tap-to-read guidance" loading="lazy"><figcaption>Version 0.8.8 switches between Map and Global Chat, shows three larger message rows per page, and opens the full text when a row is tapped.</figcaption></figure><figure><img src="/release-media/0.8.7-trading-board.png" alt="CODEX offering Torchic for a Water-type Pokemon on Emerald\'s native Union Room Trading Board" loading="lazy"><figcaption>Two isolated Azahar clients found the same native Trading Board offer through the public relay.</figcaption></figure><figure><img src="/release-media/0.8.7-union-room-trade.png" alt="Native Pokemon Emerald Union Room trade animation sending Marill" loading="lazy"><figcaption>The v0.8.7 acceptance run completed Emerald\'s native trade animation, automatic save, restart, and exchanged-party verification.</figcaption></figure>'
-  )
-  .replace(
-    'ROM-derived gameplay pixels and private save information are not used as website media.',
-    'The project publishes limited test screenshots for documentation, never ROM or save files.'
-  )
-  .replace(
-    '</style>',
-    '.health-badge{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:999px;background:#0e342a;color:#d9ffed;font-size:.88rem}.health-badge::before{content:\'\';width:8px;height:8px;border-radius:50%;background:#82938b;box-shadow:0 0 10px #82938b}.health-badge.ok::before{background:#58e49b;box-shadow:0 0 10px #58e49b}.health-badge.outage::before{background:#ff646f;box-shadow:0 0 10px #ff646f}.status-sep{opacity:.6;padding:0 6px}.copy-btn{display:inline-block;margin:0 0 0 8px;padding:6px 10px;border-radius:8px;background:#2a6b52;color:#eafff5;border:none;font-weight:700;cursor:pointer;font-size:.85rem}.copy-btn:active{transform:translateY(1px)}.copy-btn.copied{background:#176348}.steps{display:grid;gap:14px;margin:18px 0}.step{background:#061b16;border:1px solid #4e9f7a55;border-radius:14px;padding:16px}.step h3{margin:0 0 10px;font-size:1rem;color:#71e6ad}.step ol{margin:0;padding-left:20px}.step li{margin:.4em 0}</style>'
-  )
-  .replace(
-    '</head>',
-    '<meta property="og:title" content="Emerald Online 3DS"><meta property="og:description" content="Play your own legally obtained Pokémon Emerald copy on Nintendo 3DS with online presence, same-map chat, emotes, and community forums."><meta property="og:type" content="website"><meta property="og:url" content="' + publicBase + '/"><meta property="og:image" content="' + publicBase + '/logo.png"><meta name="twitter:card" content="summary_large_image"><meta name="theme-color" content="#061b16"></head>'
-  )
-  .replace(
-    '<span id="status">Checking server…</span></div>',
-    '<span id="status">Checking server…</span><span class="status-sep">·</span><span id="health" class="health-badge">Checking services…</span></div>'
-  )
-  .replace(
-    "fetch('/api/status',{cache:'no-store'}).then(async response=>{const data=await response.json();if(!response.ok||!data.ok)throw new Error();document.body.classList.add('ready');const registered=data.registered!=null?' · '+data.registered+' registered':'';const peak=data.peak24h!=null?' · 24h peak '+data.peak24h:'';document.getElementById('status').textContent='Online · '+data.authenticated+' trainer'+(data.authenticated===1?'':'s')+' connected'+registered+peak;}).catch(()=>{document.getElementById('status').textContent='Server temporarily unavailable';});",
-    "fetch('/api/status',{cache:'no-store'}).then(async response=>{const data=await response.json();if(!response.ok||!data.ok)throw new Error();document.body.classList.add('ready');const registered=data.registered!=null?' · '+data.registered+' registered':'';const peak=data.peak24h!=null?' · 24h peak '+data.peak24h:'';document.getElementById('status').textContent='Online · '+data.authenticated+' trainer'+(data.authenticated===1?'':'s')+' connected'+registered+peak;}).catch(()=>{document.getElementById('status').textContent='Server temporarily unavailable';});fetch('/api/public-status',{cache:'no-store'}).then(async response=>{const data=await response.json();const el=document.getElementById('health');if(!response.ok||!data.ok){el.classList.add('outage');el.textContent='Service outage';return;}el.classList.add('ok');el.textContent='All services operational';}).catch(()=>{const el=document.getElementById('health');el.classList.add('outage');el.textContent='Status unavailable';});document.getElementById('copy-cia').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(document.getElementById('cia-url').textContent);const btn=document.getElementById('copy-cia');btn.classList.add('copied');btn.textContent='Copied!';setTimeout(()=>{btn.textContent='Copy URL';btn.classList.remove('copied');},1500);}catch{}});"
-  );
-
+const page = installPage({
+  version: packageInfo.version,
+  publicBase,
+  gamePublicUrl,
+  ciaUrl,
+  desktopInstallerPresent,
+  desktopLinuxInstallerPresent: desktopLinuxArtifactPresent
+});
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const pathname = url.pathname;
+  const webAssets = new Map([
+    ['/site.css', [siteCssPath, 'text/css; charset=utf-8']],
+    ['/community.css', [communityCssPath, 'text/css; charset=utf-8']],
+    ['/install-page.js', [installPageScriptPath, 'text/javascript; charset=utf-8']]
+  ]);
+  if (webAssets.has(pathname)) {
+    const [filename, contentType] = webAssets.get(pathname);
+    const stat = fs.statSync(filename);
+    res.writeHead(200, securityHeaders({ 'content-type': contentType, 'content-length': stat.size, 'cache-control': 'public, max-age=300' }));
+    fs.createReadStream(filename).pipe(res);
+    return;
+  }
   if (pathname === '/community.js') {
     res.writeHead(200, securityHeaders({ 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' }));
     res.end(communityScript);
@@ -330,6 +332,38 @@ const server = http.createServer(async (req, res) => {
       'cache-control': 'public, max-age=300'
     }));
     fs.createReadStream(filename).pipe(res);
+    return;
+  }
+  if (pathname === '/download/desktop') {
+    if (!desktopInstallerPresent) {
+      res.writeHead(404, securityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));
+      res.end('Windows desktop installer is not available in this deployment.');
+      return;
+    }
+    const stat = fs.statSync(desktopInstallerPath);
+    res.writeHead(200, securityHeaders({
+      'content-type': 'application/vnd.microsoft.portable-executable',
+      'content-length': stat.size,
+      'content-disposition': `attachment; filename="${desktopInstallerFilename}"`,
+      'cache-control': 'public, max-age=300'
+    }));
+    fs.createReadStream(desktopInstallerPath).pipe(res);
+    return;
+  }
+  if (pathname === '/download/desktop-linux') {
+    if (!desktopLinuxArtifactPresent || !desktopLinuxInstallerPath) {
+      res.writeHead(404, securityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));
+      res.end('Linux desktop artifact is not available in this deployment.');
+      return;
+    }
+    const stat = fs.statSync(desktopLinuxInstallerPath);
+    res.writeHead(200, securityHeaders({
+      'content-type': chooseDownloadContentType(desktopLinuxInstallerFilename),
+      'content-length': stat.size,
+      'content-disposition': `attachment; filename="${desktopLinuxInstallerFilename}"`,
+      'cache-control': 'public, max-age=300'
+    }));
+    fs.createReadStream(desktopLinuxInstallerPath).pipe(res);
     return;
   }
   if (pathname === '/health') {

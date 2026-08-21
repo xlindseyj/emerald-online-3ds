@@ -29,7 +29,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: retention
-              image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee0994d1387d79c79ab7cd2054d205b4d322fd14b510584908e53dfb228dae6f
+              image: 192.168.0.31:30501/pokemon-emerald-online@sha256:dd3812cddfe1ec1dc8e2d6b68186a2528c818aa818ccdbcc834a71d234d00c48
               imagePullPolicy: IfNotPresent
               command: ["node", "server/tools/retention.mjs"]
               envFrom:

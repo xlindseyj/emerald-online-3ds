@@ -109,6 +109,8 @@ This file tracks the planned improvements to `gpsp-runtime` based on a survey of
 
 **Expected impact:** Fewer CPU spikes on Old 3DS when rendering static menus.
 
+**Status:** Partially addressed. A static-label cache was added earlier; the remote-trainer overlay now caches its interpolated, y-sorted visible list and rebuilds it only when remote state or local presence changes. An `overlay_quality` setting defaults to a reduced-cost mode on Old 3DS (2-frame walk cycle, no trails, no emote bubbles).
+
 ---
 
 ## 10. Improve audio threading
@@ -118,6 +120,44 @@ This file tracks the planned improvements to `gpsp-runtime` based on a survey of
 **Ecosystem pattern:** Audio is usually decoupled from the main loop in networked emulators.
 
 **Expected impact:** Smoother audio during lag spikes.
+
+**Status:** Addressed indirectly. Audio was already on a dedicated thread. The remaining source of main-thread stalls was the outgoing network write path, which busy-waited up to 250 ms. It has been replaced with a lock-protected outgoing queue drained during the periodic `onlineUpdate()` poll, so network sends no longer block emulation or audio.
+
+---
+
+## 13. Make the GBA framebuffer upload asynchronous
+
+**Goal:** Overlap the 240x160 RGB565 GPU transfer with CPU-side emulation and network work instead of blocking the main thread each frame.
+
+**Ecosystem pattern:** Ping-ponged texture uploads are the standard way to keep the GPU busy while the CPU does other work.
+
+**Expected impact:** Recovers several milliseconds per frame on Old 3DS, helping reach a locked 60 FPS.
+
+**Status:** Implemented. Two 256x256 RGB565 textures and two linear upload buffers are allocated; `uploadVideo()` kicks a non-blocking `C3D_DisplayTransfer` into the back buffer, and the indices are swapped after `C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` each frame.
+
+---
+
+## 14. Decouple emulation from rendering frame rate
+
+**Goal:** Keep `retro_run()` advancing at the GBA's ~59.73 Hz regardless of occasional render-frame drops, so audio pitch stays stable.
+
+**Ecosystem pattern:** Emulators typically run the core on its own clock and render whatever frame is latest.
+
+**Expected impact:** Smoother audio and more consistent game timing when the renderer occasionally misses 16.7 ms.
+
+**Status:** Implemented. The main loop tracks real time versus emulated time and can run up to `MAX_CATCHUP_FRAMES` emulated frames per rendered frame.
+
+---
+
+## 15. Add frame-timing instrumentation
+
+**Goal:** Measure exactly where the 16.7 ms frame budget is spent so future optimization is data-driven.
+
+**Ecosystem pattern:** Built-in timing HUDs or debug logs are common in performance-sensitive homebrew.
+
+**Expected impact:** Removes guesswork from Old 3DS performance tuning.
+
+**Status:** Implemented. Per-section timers cover emulation, presence reads, network I/O, video upload, top-screen overlay, bottom-screen UI, render submit, and total frame time; min/max/avg are logged once per second.
 
 ---
 
@@ -154,11 +194,14 @@ This file tracks the planned improvements to `gpsp-runtime` based on a survey of
 6. Publish a Universal-Updater manifest
 7. Strengthen save backup and integrity
 
-### Phase 3
+### Phase 3 (done)
 8. Add APT sleep/resume hooks
-9. Optimize UI text rendering
-10. Improve audio threading
+9. Optimize UI text rendering (overlay cache + quality setting)
+10. Improve audio threading (outgoing network queue, no busy-wait writes)
 
-### Phase 4
+### Phase 4 (done)
 11. Add localization support
 12. Add runtime observability
+13. Make the GBA framebuffer upload asynchronous
+14. Decouple emulation from rendering frame rate
+15. Add frame-timing instrumentation

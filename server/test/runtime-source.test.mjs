@@ -151,6 +151,22 @@ test('gpSP supports accessibility mode and top-screen toast notifications', () =
   assert.match(localizationSource, /LS_TOAST_GUILD_UPDATED/);
 });
 
+test('gpSP uses a grouped page launcher and context-aware online home', () => {
+  assert.match(gpspSource, /static const BottomPage launcherPages\[4\]\[5\]/);
+  assert.match(gpspSource, /PAGE_ONLINE, PAGE_USERS, PAGE_CHAT/);
+  assert.match(gpspSource, /PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_QUESTS, PAGE_TELEPORT/);
+  assert.match(gpspSource, /PAGE_FRIENDS, PAGE_GUILD, PAGE_TITLES, PAGE_STATS/);
+  assert.match(gpspSource, /PAGE_UPDATE, PAGE_SETTINGS/);
+  assert.match(gpspSource, /static void drawLauncher\(void\)/);
+  assert.match(gpspSource, /if \(launcherOpen\) \{ drawLauncher\(\); return; \}/);
+  assert.match(gpspSource, /selectLauncherGroup\(touch\.px \/ 80\)/);
+  assert.match(gpspSource, /static void drawContextPrompt\(void\)/);
+  assert.match(localizationSource, /Y MENU/);
+  assert.match(localizationSource, /TRAINER%s NEARBY/);
+  assert.match(localizationSource, /MESSAGE FROM/);
+  assert.match(localizationSource, /LINK ROOM READY/);
+});
+
 test('gpSP nonblocking connect polling initializes sockaddr for Azahar', () => {
   assert.match(gpspSource, /sockaddr_in peer = \{\};\s*peer\.sin_family = AF_INET;\s*socklen_t peerSize = sizeof\(peer\);\s*if \(!getpeername/s);
 });
@@ -183,7 +199,11 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   // Interpolation, depth sorting, and title rendering.
   assert.match(gpspSource, /REMOTE_INTERPOLATION_MS/);
   assert.match(gpspSource, /smoothstepf/);
-  assert.match(gpspSource, /visible\[.*\]\.screenY.*visible\[.*\]\.screenY/s);
+  assert.match(gpspSource, /CachedVisibleTrainer/);
+  assert.match(gpspSource, /rebuildVisibleTrainers/);
+  assert.match(gpspSource, /visibleCacheDirty/);
+  assert.match(gpspSource, /VISIBLE_TRAINER_REBUILD_MS/);
+  assert.match(gpspSource, /cachedVisible\[.*\]\.screenY.*cachedVisible\[.*\]\.screenY/s);
   assert.match(gpspSource, /withAlpha\(/);
   assert.match(gpspSource, /t->title\[0\]/);
   assert.match(pagesHeaderSource, /int16_t prevX;/);

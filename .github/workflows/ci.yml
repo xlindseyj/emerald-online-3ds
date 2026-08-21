@@ -10,6 +10,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: ubuntu-24.04
+    needs: build-desktop
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +22,13 @@ jobs:
       - run: npm test
       - run: npm run build:public
       - run: npm run audit:release
+      - name: Download Windows desktop installer
+        uses: actions/download-artifact@v4
+        with:
+          name: emerald-online-3ds-desktop-${{ github.sha }}
+          path: desktop/dist/
+      - name: Add desktop installer to the public checksum manifest
+        run: node desktop/tools/record-release-checksum.mjs desktop/dist release/SHA256SUMS
       - run: docker build -t emerald-online-3ds:ci .
       - uses: actions/upload-artifact@v4
         with:
@@ -30,4 +38,58 @@ jobs:
             release/emerald-online-3ds.3dsx
             release/emerald-online-3ds-source-*.tar.gz
             release/SHA256SUMS
+          if-no-files-found: error
+
+  build-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Download Azahar 2126.0 Windows portable build
+        shell: bash
+        run: |
+          mkdir -p desktop/resources/azahar
+          curl --fail --location --silent --show-error -o desktop/resources/azahar.zip \
+            https://github.com/azahar-emu/azahar/releases/download/2126.0/azahar-windows-msvc-2126.0.zip
+          echo "bacf010b89c8b0ec38164a9aa11bdfce98f47c99e8364c93a4a97240ba86e3ed  desktop/resources/azahar.zip" | sha256sum --check --strict
+          unzip -q desktop/resources/azahar.zip -d desktop/resources/azahar-extracted
+          mv desktop/resources/azahar-extracted/azahar-windows-msvc-2126.0/* desktop/resources/azahar/
+          rm -r desktop/resources/azahar-extracted desktop/resources/azahar.zip
+      - name: Install desktop dependencies and build installer
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && { [[ -z "$CSC_LINK" ]] || [[ -z "$CSC_KEY_PASSWORD" ]]; }; then
+            echo "Tagged desktop releases require WINDOWS_CSC_LINK and WINDOWS_CSC_KEY_PASSWORD." >&2
+            exit 1
+          fi
+          cd desktop
+          npm ci
+          npm run dist
+          npm audit --omit=optional
+      - name: Require valid Authenticode signatures on tagged releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $installer = Get-Item "desktop/dist/EmeraldOnline3DS-Setup-*.exe"
+          $application = Get-Item "desktop/dist/win-unpacked/Emerald Online 3DS.exe"
+          foreach ($file in @($installer, $application)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne "Valid" -or -not $signature.SignerCertificate) {
+              throw "Authenticode verification failed for $($file.Name): $($signature.Status)"
+            }
+            Write-Host "$($file.Name) signed by $($signature.SignerCertificate.Subject)"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emerald-online-3ds-desktop-${{ github.sha }}
+          path: desktop/dist/*.exe
           if-no-files-found: error

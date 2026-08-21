@@ -11,6 +11,8 @@ import { communityPublicationContentHash, validateCommunityPublicationCatalog } 
 import fs from 'node:fs';
 import path from 'node:path';
 
+const communityStyles = fs.readFileSync(path.join(import.meta.dirname, 'community.css'), 'utf8');
+
 async function startApp(t) {
   const identityStore = new MemoryIdentityStore();
   const communityStore = new MemoryCommunityStore();
@@ -53,13 +55,23 @@ test('community page is public, anonymous, and explains 3DS pairing', async t =>
   const response = await fetch(`${base}/community`);
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-security-policy'), /script-src 'self'/);
+  assert.match(response.headers.get('content-security-policy'), /style-src 'self'/);
   const body = await response.text();
   assert.match(body, /tap your trainer profile on the bottom screen/);
+  assert.match(body, /optional identity linking—not registration/);
   assert.match(body, /Not affiliated with Nintendo/);
   assert.doesNotMatch(body, /Lindsey|LWS/);
   assert.match(body, /Leaderboards/);
   assert.match(body, /id="defectfields" class="composer hidden" disabled/);
+  assert.match(body, /id="boardtoggle"[^>]+aria-expanded="false"/);
+  assert.match(body, /id="community-main"/);
+  assert.match(body, /role="status" aria-live="polite"/);
   assert.match(communityScript, /fields\.disabled=!isDefect/);
+  assert.match(communityScript, /document\.createElement\('a'\)/);
+  assert.match(communityScript, /closeBoardNavigation/);
+  assert.match(communityScript, /event\.key==='Escape'/);
+  assert.match(communityScript, /querySelector\('button,a'\)\.focus\(\)/);
+  assert.match(communityStyles, /\.sidebar\{order:2;position:fixed/);
 });
 
 test('profiles and leaderboards are paired-only and stats deletion requires CSRF plus confirmation', async t => {

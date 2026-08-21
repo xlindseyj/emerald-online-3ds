@@ -29,6 +29,11 @@ third_party/gpsp/**/*.o
 third_party/gpsp/*.d
 third_party/gpsp/**/*.d
 node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/build/
+desktop/out/
+desktop/resources/azahar/
 .tools/
 third_party/*/build*/
 

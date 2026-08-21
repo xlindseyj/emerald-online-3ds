@@ -28,6 +28,13 @@ COPY release/SHA256SUMS ./release/SHA256SUMS
 COPY release/release-catalog.json ./release/release-catalog.json
 COPY release/known-issues.json ./release/known-issues.json
 COPY release/community-pages.json ./release/community-pages.json
+# Optional Windows desktop installer. The file is built by the Windows CI job;
+# when present it enables the homepage download button and /download/desktop.
+RUN --mount=type=bind,source=desktop/dist,target=/tmp/desktop-dist \
+    if ls /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.exe >/dev/null 2>&1; then \
+      mkdir -p /app/desktop/dist && \
+      cp /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.exe /app/desktop/dist/; \
+    fi
 
 USER node
 EXPOSE 3210/tcp 3211/tcp 8080/tcp

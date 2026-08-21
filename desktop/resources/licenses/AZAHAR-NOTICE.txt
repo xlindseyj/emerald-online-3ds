@@ -1,0 +1,20 @@
+Azahar 2126.0 redistribution notice
+===================================
+
+The Windows installer includes an unmodified official Azahar 2126.0 MSVC
+portable build. Azahar is an open-source Nintendo 3DS emulator based on Citra
+and is distributed under the GNU General Public License, version 2 or later.
+
+Official release and corresponding source code:
+https://github.com/azahar-emu/azahar/releases/tag/2126.0
+
+Source repository at the exact release tag:
+https://github.com/azahar-emu/azahar/tree/2126.0
+
+Bundled archive name: azahar-windows-msvc-2126.0.zip
+Bundled archive SHA-256:
+bacf010b89c8b0ec38164a9aa11bdfce98f47c99e8364c93a4a97240ba86e3ed
+
+The complete GPL version 2 text is installed beside this notice as
+GPL-2.0.txt. Third-party files in the official Azahar archive retain their
+original copyright notices and licenses.

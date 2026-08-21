@@ -98,7 +98,8 @@ export class PostgresQuestStore {
       const row = { quest_id: questId, status, progress };
       if (autoComplete) {
         const claimed = await this.claimReward(identityId, questId);
-        return { progress: { ...row, status: 'claimed', ...claimed }, quest, reward: claimed.reward };
+        if (claimed.error) return { progress: row, quest };
+        return { progress: claimed.progress, quest, reward: claimed.reward };
       }
       return { progress: row, quest };
     } catch (error) {
@@ -277,7 +278,8 @@ export class MemoryQuestStore {
     this.progress.set(key, row);
     if (autoComplete) {
       const claimed = await this.claimReward(identityId, questId);
-      return { progress: { ...row, status: 'claimed', ...claimed }, quest, reward: claimed.reward };
+      if (claimed.error) return { progress: row, quest };
+      return { progress: row, quest, reward: claimed.reward };
     }
     return { progress: row, quest };
   }

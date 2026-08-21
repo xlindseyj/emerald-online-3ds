@@ -6,6 +6,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 
+function findDesktopLinuxDownload(dir, releaseVersion) {
+  const entries = fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : [];
+  const exactCandidates = [
+    `EmeraldOnline3DS-Setup-${releaseVersion}.AppImage`,
+    `EmeraldOnline3DS-Setup-${releaseVersion}.appimage`,
+    `EmeraldOnline3DS-${releaseVersion}.AppImage`,
+    `EmeraldOnline3DS-${releaseVersion}.appimage`,
+    `Emerald Online 3DS Setup ${releaseVersion}.AppImage`,
+    `Emerald Online 3DS Setup ${releaseVersion}.appimage`
+  ];
+  const linuxArtifacts = entries
+    .filter(entry => entry.isFile())
+    .map(entry => entry.name)
+    .filter(name => !name.toLowerCase().endsWith('.blockmap'))
+    .filter(name => {
+      if (!name.includes(releaseVersion)) return false;
+      return name.toLowerCase().match(/\.(appimage|deb|rpm|tar\.gz|zip)$/) !== null;
+    });
+  return exactCandidates.find(name => linuxArtifacts.includes(name)) ?? linuxArtifacts[0] ?? null;
+}
+
 async function waitFor(url) {
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
@@ -20,6 +41,8 @@ async function waitFor(url) {
 test('public page exposes the CIA and bridges WebSocket gameplay to the presence server', async t => {
   const root = path.resolve(import.meta.dirname, '..');
   const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  const desktopLinuxFile = findDesktopLinuxDownload(path.join(root, 'desktop', 'dist'), releaseVersion);
+  const hasDesktopLinuxDownload = Boolean(desktopLinuxFile);
   const installPort = 18080;
   const gamePort = 18210;
   const statusPort = 18211;
@@ -66,38 +89,63 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
 
   const page = await fetch(base);
   const pageBody = await page.text();
-  assert.match(pageBody, /registered/);
-  assert.match(pageBody, /peak24h/);
   assert.match(pageBody, /id="health"/);
   assert.match(pageBody, /copy-cia/);
-  assert.match(pageBody, /Copy URL/);
-  assert.match(pageBody, /1\. Prepare/);
-  assert.match(pageBody, /2\. Install with FBI/);
-  assert.match(pageBody, /3\. Connect/);
+  assert.match(pageBody, /Copy CIA URL/);
+  assert.match(pageBody, /role="tablist"/);
+  assert.match(pageBody, /data-install-tab="windows"/);
+  assert.match(pageBody, /data-install-tab="linux"/);
+  assert.match(pageBody, /data-install-tab="cia"/);
+  assert.match(pageBody, /data-install-tab="3dsx"/);
+  if (hasDesktopLinuxDownload) {
+    assert.match(pageBody, /href="\/download\/desktop-linux"/);
+  }
+  assert.match(pageBody, /class="skip-link"/);
   assert.match(pageBody, /<meta property="og:title" content="Emerald Online 3DS">/);
   assert.match(pageBody, /live\.emeraldonline3ds\.com/);
-  assert.match(pageBody, new RegExp(`Public multiplayer presence service · v${releaseVersion.replaceAll('.', '\\.')}`));
-  assert.match(pageBody, /\.button\{display:inline-block;margin:10px 10px 0 0/);
-  assert.match(pageBody, /3DS runtime source \(code only\)/);
+  assert.match(pageBody, new RegExp(`Public multiplayer beta · v${releaseVersion.replaceAll('.', '\\.')}`));
+  assert.match(pageBody, /3DS runtime source/);
   assert.match(pageBody, /Verify downloads/);
   assert.doesNotMatch(pageBody, /Corresponding source|SHA-256 checksums/);
   assert.match(pageBody, /not affiliated with, endorsed by, or sponsored by Nintendo/);
-  assert.match(pageBody, /does not host, provide, sell, or distribute ROMs/);
-  assert.match(pageBody, /Back up your save before use/);
+  assert.match(pageBody, /does not host, sell, or distribute ROMs/);
+  assert.match(pageBody, /Back up your save before testing/);
   assert.match(pageBody, /a9dec84dfe7f62ab2220bafaef7479da0929d066ece16a6885f6226db19085af/);
   assert.match(pageBody, /server=live\.emeraldonline3ds\.com/);
-  assert.match(pageBody, /complete two-Azahar RFU\/Union Room trade now passes/);
+  assert.match(pageBody, /complete two-Azahar Union Room trade passes/);
   assert.match(pageBody, /0\.8\.7-trading-board\.png/);
   assert.match(pageBody, /0\.8\.7-union-room-trade\.png/);
-  assert.match(pageBody, /Authenticated online players can see your display name, current map, and tile coordinates/);
+  assert.match(pageBody, /without creating an account/);
   assert.match(pageBody, /community\?guide=privacy-and-data/);
   assert.match(pageBody, /src="\/logo\.png"/);
   assert.match(pageBody, /release-media\/community-forums\.png/);
-  assert.match(pageBody, /release-media\/online-dashboard\.png/);
   assert.match(pageBody, /release-media\/0\.8\.4-online-users\.png/);
-  assert.match(pageBody, /release-media\/0\.8\.4-map-chat\.png/);
+  assert.match(pageBody, /release-media\/0\.8\.8-map-global-chat\.png/);
   assert.doesNotMatch(pageBody, /Lindsey Web Solutions|LindseyWebSolutions/);
   assert.match(page.headers.get('content-security-policy'), /default-src/);
+  assert.match(page.headers.get('content-security-policy'), /style-src 'self'/);
+  assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
+
+  const siteCss = await fetch(`${base}/site.css`);
+  assert.equal(siteCss.status, 200);
+  assert.match(siteCss.headers.get('content-type'), /text\/css/);
+  const siteCssBody = await siteCss.text();
+  assert.match(siteCssBody, /@media\(max-width:620px\)/);
+  assert.match(siteCssBody, /:focus-visible/);
+  assert.match(siteCssBody, /prefers-reduced-motion/);
+
+  const communityCss = await fetch(`${base}/community.css`);
+  assert.equal(communityCss.status, 200);
+  const communityCssBody = await communityCss.text();
+  assert.match(communityCssBody, /\.layout>main\{order:1\}/);
+  assert.match(communityCssBody, /\.sidebar\[data-open=false\]\{display:none\}/);
+
+  const installScript = await fetch(`${base}/install-page.js`);
+  assert.equal(installScript.status, 200);
+  const installScriptBody = await installScript.text();
+  assert.match(installScriptBody, /ArrowLeft/);
+  assert.match(installScriptBody, /registered/);
+  assert.match(installScriptBody, /peak24h/);
 
   const logo = await fetch(`${base}/logo.png`);
   assert.equal(logo.status, 200);
@@ -155,9 +203,21 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(source.headers.get('content-type'), 'application/gzip');
   assert.ok(Number(source.headers.get('content-length')) > 100000);
 
+  if (hasDesktopLinuxDownload) {
+    const linuxDownload = await fetch(`${base}/download/desktop-linux`);
+    assert.equal(linuxDownload.status, 200);
+    assert.equal(linuxDownload.headers.get('content-type'), 'application/octet-stream');
+    assert.ok(Number(linuxDownload.headers.get('content-length')) > 1000);
+  }
+
   const checksums = await fetch(`${base}/SHA256SUMS`);
   assert.equal(checksums.status, 200);
-  assert.match(await checksums.text(), /emerald-online-3ds\.cia/);
+  const checksumsBody = await checksums.text();
+  assert.match(checksumsBody, /emerald-online-3ds\.cia/);
+  const checksumsHaveLinuxDownload = hasDesktopLinuxDownload && checksumsBody.includes(desktopLinuxFile);
+  if (checksumsHaveLinuxDownload) {
+    assert.match(checksumsBody, new RegExp(`${desktopLinuxFile.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`));
+  }
 
   const unistore = await fetch(`${base}/emerald-online-3ds.unistore`);
   assert.equal(unistore.status, 200);
@@ -189,8 +249,23 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(releaseBody.version, releaseVersion);
   assert.equal(releaseBody.cia_url, 'https://emeraldonline3ds.com/emerald-online-3ds.cia');
   assert.equal(releaseBody.threedsx_url, 'https://emeraldonline3ds.com/emerald-online-3ds.3dsx');
+  assert.equal(releaseBody.desktop_url, 'https://emeraldonline3ds.com/download/desktop');
+  assert.equal(releaseBody.desktop_linux_url, hasDesktopLinuxDownload ? 'https://emeraldonline3ds.com/download/desktop-linux' : null);
   assert.match(releaseBody.sha256_cia, /^[a-f0-9]{64}$/);
   assert.match(releaseBody.sha256_threedsx, /^[a-f0-9]{64}$/);
+  if (hasDesktopLinuxDownload) {
+    const linuxHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'desktop', 'dist', desktopLinuxFile))).digest('hex');
+    if (checksumsHaveLinuxDownload) {
+      assert.equal(releaseBody.sha256_desktop_linux, linuxHash);
+    } else {
+      assert.equal(releaseBody.sha256_desktop_linux, null);
+    }
+  } else {
+    assert.equal(releaseBody.sha256_desktop_linux, null);
+  }
+  assert.equal(releaseBody.sha256_desktop, crypto.createHash('sha256')
+    .update(fs.readFileSync(path.join(root, 'desktop', 'dist', `EmeraldOnline3DS-Setup-${releaseVersion}.exe`)))
+    .digest('hex'));
   assert.equal(releaseBody.release_notes_url, 'https://emeraldonline3ds.com/');
 
   const welcome = await new Promise((resolve, reject) => {

@@ -16,7 +16,16 @@ for artifact in "${required[@]}"; do
   [[ -s "${artifact}" ]] || { echo "missing or empty artifact: ${artifact}" >&2; exit 1; }
 done
 
-(cd "${release_dir}" && sha256sum --check SHA256SUMS)
+(cd "${release_dir}" && sha256sum --check --ignore-missing SHA256SUMS)
+# The Windows desktop installer is produced by the Windows CI job and lives in
+# desktop/dist; verify it separately against the SHA256SUMS entry.
+desktop_installer="${project_root}/desktop/dist/EmeraldOnline3DS-Setup-${version}.exe"
+expected_desktop_sha="$(awk '$2 == "EmeraldOnline3DS-Setup-'"${version}"'.exe" {print $1}' "${release_dir}/SHA256SUMS")"
+if [[ -n "${expected_desktop_sha}" ]]; then
+  [[ -s "${desktop_installer}" ]] || { echo "missing or empty desktop installer: ${desktop_installer}" >&2; exit 1; }
+  actual_desktop_sha="$(sha256sum "${desktop_installer}" | cut -d' ' -f1)"
+  [[ "${actual_desktop_sha}" == "${expected_desktop_sha}" ]] || { echo "desktop installer checksum mismatch" >&2; exit 1; }
+fi
 node "${project_root}/server/tools/publish-releases.mjs" --validate-only
 
 archive_listing="$(tar -tzf "${source_archive}")"

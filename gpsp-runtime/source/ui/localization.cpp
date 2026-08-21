@@ -44,8 +44,14 @@ static const char* english(LocalizedString key) {
     case LS_TELEPORT: return "TELEPORT";
     case LS_SYSTEM_UPDATE: return "SYSTEM UPDATE";
 
-    case LS_Y_ARROW: return "< L   Y   R >";
+    case LS_Y_ARROW: return "Y MENU";
     case LS_SETTINGS: return "SETTINGS";
+    case LS_PAGE_MENU: return "PAGE MENU";
+    case LS_MENU_ONLINE: return "ONLINE";
+    case LS_MENU_ADVENTURE: return "ADVENTURE";
+    case LS_MENU_SOCIAL: return "SOCIAL";
+    case LS_MENU_SYSTEM: return "SYSTEM";
+    case LS_MENU_CLOSE_GROUPS: return "Y CLOSE   L/R GROUP";
 
     case LS_WAITING_EMERALD_MEMORY_PARTY: return "Waiting for Emerald memory...";
     case LS_Y_BAG: return "Y  BAG";
@@ -63,6 +69,10 @@ static const char* english(LocalizedString key) {
     case LS_RECOVERY_WRITE_DOWN_FORMAT: return "RECOVERY %s  WRITE THIS DOWN";
     case LS_VERSION_HOST_PORT_FORMAT: return "v%s %s:%u";
     case LS_TAP_PROFILE_PAIR_BROWSER: return "TAP PROFILE TO PAIR BROWSER";
+    case LS_CONTEXT_NEARBY_FORMAT: return "%d TRAINER%s NEARBY - TAP TO VIEW";
+    case LS_CONTEXT_MESSAGE_FORMAT: return "MESSAGE FROM %.12s - TAP CHAT";
+    case LS_CONTEXT_LINK_READY: return "LINK ROOM READY - ENTER THE UNION ROOM";
+    case LS_CONTEXT_QUESTS_FORMAT: return "%u QUEST%s ACTIVE - Y MENU";
 
     case LS_NETWORK_DIAGNOSTIC: return "NETWORK DIAGNOSTIC";
     case LS_NETWORK_DIAGNOSTIC_DETAIL_FORMAT: return "E%d  %s  (STAGE %d)";
@@ -254,6 +264,7 @@ static const char* english(LocalizedString key) {
     case LS_TOAST_NEW_MESSAGE: return "New message from %s";
     case LS_TOAST_QUEST_ACCEPTED: return "Quest accepted: %s";
     case LS_TOAST_QUEST_COMPLETED: return "Quest completed: %s";
+    case LS_TOAST_QUEST_CLAIMED: return "Quest reward claimed: %s";
     case LS_TOAST_FRIEND_ONLINE: return "%s is online";
     case LS_TOAST_GUILD_UPDATED: return "Guild roster updated";
 

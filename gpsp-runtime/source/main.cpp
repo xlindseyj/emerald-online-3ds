@@ -67,6 +67,29 @@ static constexpr float OVERLAY_TILE_W = 400.0f / 15.0f; // ~26.67 px per overwor
 static constexpr float OVERLAY_TILE_H = 240.0f / 10.0f; // 24 px per overworld tile
 static constexpr uint64_t REMOTE_INTERPOLATION_MS = 1000; // match server snapshot cadence
 static constexpr float REMOTE_SPRITE_SCALE = 1.5f;
+static constexpr uint64_t VISIBLE_TRAINER_REBUILD_MS = 250; // recompute interpolated positions a few times per second
+
+enum OverlayQuality { OVERLAY_QUALITY_HIGH, OVERLAY_QUALITY_PERFORMANCE };
+static OverlayQuality overlayQuality = OVERLAY_QUALITY_PERFORMANCE;
+
+struct CachedVisibleTrainer {
+    const RemoteTrainer* trainer;
+    float tileX, tileY;
+    float screenX, screenY;
+    bool moving;
+    float alpha;
+    float labelAlpha;
+};
+
+static CachedVisibleTrainer cachedVisible[8];
+static int cachedVisibleCount = 0;
+static uint8_t cachedVisibleMapGroup = 0;
+static uint8_t cachedVisibleMapNum = 0;
+static int16_t cachedVisibleX = 0;
+static int16_t cachedVisibleY = 0;
+static uint64_t cachedVisibleBuiltAt = 0;
+static unsigned remoteTrainerVersion = 0;
+static unsigned cachedRemoteTrainerVersion = 0;
 #define UPDATE_DIRECTORY "sdmc:/3ds/emerald-online-3ds/update"
 #define UPDATE_CIA_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.cia"
 #define UPDATE_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.3dsx"
@@ -75,10 +98,12 @@ static constexpr float REMOTE_SPRITE_SCALE = 1.5f;
 
 static C3D_RenderTarget* topTarget;
 static C3D_RenderTarget* bottomTarget;
-static C3D_Tex gameTexture;
-static uint16_t* gameUploadBuffer;
+static C3D_Tex gameTexture[2];
+static uint16_t* gameUploadBuffer[2];
 static Tex3DS_SubTexture gameSubTex = {240, 160, 0.0f, 1.0f, 240.0f / 256.0f, 1.0f - 160.0f / 256.0f};
-static C2D_Image gameImage = {&gameTexture, &gameSubTex};
+static C2D_Image gameImage = {&gameTexture[0], &gameSubTex};
+static int gameTextureBack = 1;
+static int gameTextureFront = 0;
 C2D_Font uiFont;
 static C2D_SpriteSheet avatarSheet;
 C2D_TextBuf textBuffer;
@@ -100,6 +125,110 @@ static unsigned fpsFrames;
 static unsigned renderedFrames;
 static uint64_t fpsStarted;
 static BottomPage bottomPage = PAGE_ONLINE;
+static bool launcherOpen = false;
+static unsigned launcherGroup = 0;
+static unsigned launcherSelection = 0;
+
+static const BottomPage launcherPages[4][5] = {
+    {PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_ONLINE, PAGE_ONLINE},
+    {PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_QUESTS, PAGE_TELEPORT},
+    {PAGE_FRIENDS, PAGE_GUILD, PAGE_TITLES, PAGE_STATS, PAGE_ONLINE},
+    {PAGE_UPDATE, PAGE_SETTINGS, PAGE_ONLINE, PAGE_ONLINE, PAGE_ONLINE}
+};
+static const unsigned launcherPageCounts[4] = {3, 5, 4, 2};
+
+// Frame-timing instrumentation.  svcGetSystemTick runs at the CPU clock and
+// gives microsecond-resolution measurements on Old/New 3DS.  Timers are logged
+// once per second so we can see exactly where the 16.7 ms budget is spent.
+#define FRAME_TIMING_ENABLED 1
+#define FRAME_TIMER_SAMPLES 60
+#define TICKS_PER_US 268u
+
+struct FrameSection {
+    const char* name;
+    uint64_t samples[FRAME_TIMER_SAMPLES];
+    unsigned index;
+    unsigned count;
+    uint64_t startTick;
+};
+
+enum FrameSectionId {
+    FS_EMULATION,
+    FS_PRESENCE,
+    FS_NETWORK,
+    FS_UPLOAD,
+    FS_DRAW_TOP,
+    FS_DRAW_BOTTOM,
+    FS_RENDER_SUBMIT,
+    FS_FRAME_TOTAL,
+    FS_COUNT
+};
+
+static FrameSection frameSections[FS_COUNT] = {
+    {"emu", {}, 0, 0, 0},
+    {"presence", {}, 0, 0, 0},
+    {"network", {}, 0, 0, 0},
+    {"upload", {}, 0, 0, 0},
+    {"draw_top", {}, 0, 0, 0},
+    {"draw_bottom", {}, 0, 0, 0},
+    {"render_submit", {}, 0, 0, 0},
+    {"frame_total", {}, 0, 0, 0}
+};
+static uint64_t frameTimingLogStarted = 0;
+
+// Emulation/rendering decoupling.  GBA titles run at ~59.7275 Hz.  We track
+// how much real time has elapsed and run enough emulated frames to keep pace,
+// up to a small cap so a single slow render frame does not trigger an avalanche.
+static constexpr uint64_t GBA_FRAME_PERIOD_US = 16742; // 1000000 / 59.7275
+static constexpr unsigned MAX_CATCHUP_FRAMES = 3;
+static int64_t emulationTimeDebtUs = 0;
+static uint64_t lastFrameRealTimeUs = 0;
+
+static inline uint64_t frameTimingNow(void) { return svcGetSystemTick(); }
+
+static inline uint64_t frameTimingUs(uint64_t ticks) { return ticks / TICKS_PER_US; }
+
+static void frameTimingStart(FrameSectionId id) {
+#if FRAME_TIMING_ENABLED
+    frameSections[id].startTick = frameTimingNow();
+#endif
+}
+
+static void frameTimingStop(FrameSectionId id) {
+#if FRAME_TIMING_ENABLED
+    FrameSection& s = frameSections[id];
+    uint64_t elapsed = frameTimingNow() - s.startTick;
+    s.samples[s.index] = elapsed;
+    s.index = (s.index + 1) % FRAME_TIMER_SAMPLES;
+    if (s.count < FRAME_TIMER_SAMPLES) ++s.count;
+#endif
+}
+
+static void frameTimingLog(uint64_t now) {
+#if FRAME_TIMING_ENABLED
+    if (now - frameTimingLogStarted < 1000) return;
+    frameTimingLogStarted = now;
+    uint64_t totalAvg = 0;
+    for (unsigned i = 0; i < FS_COUNT; ++i) {
+        const FrameSection& s = frameSections[i];
+        if (s.count == 0) continue;
+        uint64_t minUs = (uint64_t)-1, maxUs = 0, sumUs = 0;
+        for (unsigned n = 0; n < s.count; ++n) {
+            uint64_t us = frameTimingUs(s.samples[n]);
+            if (us < minUs) minUs = us;
+            if (us > maxUs) maxUs = us;
+            sumUs += us;
+        }
+        uint64_t avgUs = sumUs / s.count;
+        if (i == FS_FRAME_TOTAL) totalAvg = avgUs;
+        runtimeLogPrintf("timing %s avg=%llu min=%llu max=%llu",
+            s.name, (unsigned long long) avgUs,
+            (unsigned long long) minUs, (unsigned long long) maxUs);
+    }
+    runtimeLogPrintf("timing fps=%u frame_budget_us=%llu", measuredFps,
+        (unsigned long long) totalAvg);
+#endif
+}
 
 // Display settings persisted in display.cfg.
 bool hudVisible = true;
@@ -107,7 +236,6 @@ bool fpsVisible = true;
 unsigned trailLength = 8;
 unsigned labelFadeDistance = 4;
 unsigned settingsSelected = 0;
-bool accessibilityMode = false;
 
 unsigned bagPocket;
 unsigned bagPage;
@@ -250,6 +378,10 @@ static char receiveBuffer[4097];
 static size_t receiveLength;
 static unsigned char webSocketBuffer[8192];
 static size_t webSocketLength;
+#define OUTGOING_BUFFER_SIZE 16384
+static unsigned char outgoingBuffer[OUTGOING_BUFFER_SIZE];
+static size_t outgoingLength = 0;
+static LightLock outgoingLock;
 static mbedtls_ssl_context tlsContext;
 static bool tlsActive;
 static int onlineProtocolStage;
@@ -1093,26 +1225,40 @@ static void updateTrainerNameFromSave(void) {
 }
 
 static int onlineWriteBytes(const unsigned char* data, size_t size) {
-    size_t written = 0;
-    unsigned waits = 0;
-    while (written < size) {
-        int count = tlsActive
-            ? mbedtls_ssl_write(&tlsContext, data + written, size - written)
-            : (int) send(onlineSocket, data + written, size - written, MSG_NOSIGNAL);
-        if (count > 0) {
-            written += (size_t) count;
-            waits = 0;
-            continue;
-        }
-        if ((tlsActive && (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE)) ||
-            (!tlsActive && count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) {
-            if (++waits > 250) return -1;
-            svcSleepThread(1000000);
-            continue;
-        }
-        return -1;
+    if (onlineSocket < 0 && !tlsActive) return -1;
+    int count = tlsActive
+        ? mbedtls_ssl_write(&tlsContext, data, size)
+        : (int) send(onlineSocket, data, size, MSG_NOSIGNAL);
+    if (count >= 0) return count;
+    if ((tlsActive && (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE)) ||
+        (!tlsActive && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) {
+        return 0;
     }
-    return (int) written;
+    return -1;
+}
+
+static bool queueOutgoingBytes(const unsigned char* data, size_t size) {
+    if (size > OUTGOING_BUFFER_SIZE) return false;
+    LightLock_Lock(&outgoingLock);
+    bool ok = outgoingLength + size <= OUTGOING_BUFFER_SIZE;
+    if (ok) {
+        memcpy(outgoingBuffer + outgoingLength, data, size);
+        outgoingLength += size;
+    }
+    LightLock_Unlock(&outgoingLock);
+    return ok;
+}
+
+static void drainOutgoingBuffer(void) {
+    LightLock_Lock(&outgoingLock);
+    while (outgoingLength > 0) {
+        int count = onlineWriteBytes(outgoingBuffer, outgoingLength);
+        if (count <= 0) break;
+        if ((size_t)count < outgoingLength)
+            memmove(outgoingBuffer, outgoingBuffer + count, outgoingLength - count);
+        outgoingLength -= (size_t)count;
+    }
+    LightLock_Unlock(&outgoingLock);
 }
 
 static bool webSocketWriteFrame(uint8_t opcode, const unsigned char* payload, size_t size) {
@@ -1132,7 +1278,7 @@ static bool webSocketWriteFrame(uint8_t opcode, const unsigned char* payload, si
     memcpy(frame + header, mask, sizeof(mask));
     header += sizeof(mask);
     for (size_t i = 0; i < size; ++i) frame[header + i] = payload[i] ^ mask[i & 3];
-    return onlineWriteBytes(frame, header + size) == (int) (header + size);
+    return queueOutgoingBytes(frame, header + size);
 }
 
 static bool asciiCaseEqual(const char* left, size_t leftSize, const char* right) {
@@ -1274,6 +1420,7 @@ static void loadConfig(void) {
         else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
         else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
         else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "quest") ? PAGE_QUESTS : !strcmp(equals, "titles") ? PAGE_TITLES : !strcmp(equals, "friends") ? PAGE_FRIENDS : !strcmp(equals, "guild") ? PAGE_GUILD : !strcmp(equals, "teleport") ? PAGE_TELEPORT : !strcmp(equals, "update") ? PAGE_UPDATE : PAGE_ONLINE;
+        else if (!strcmp(line, "online")) onlineEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
         else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
             strcpy(linkRoom, equals);
@@ -1373,14 +1520,17 @@ static void loadDisplayConfig(void) {
         else if (!strcmp(line, "accessibility_mode")) {
             accessibilityMode = !strcmp(equals, "1");
         }
+        else if (!strcmp(line, "overlay_quality")) {
+            overlayQuality = !strcmp(equals, "1") ? OVERLAY_QUALITY_PERFORMANCE : OVERLAY_QUALITY_HIGH;
+        }
     }
     fclose(file);
 }
 
 static bool saveDisplayConfig(void) {
     FILE* file = fopen(DISPLAY_CONFIG_TEMP_PATH, "w"); if (!file) return false;
-    bool ok = fprintf(file, "hud_visible=%d\nfps_visible=%d\ntrail_length=%u\nlabel_fade_distance=%u\naccessibility_mode=%d\n",
-        hudVisible, fpsVisible, trailLength, labelFadeDistance, accessibilityMode) > 0;
+    bool ok = fprintf(file, "hud_visible=%d\nfps_visible=%d\ntrail_length=%u\nlabel_fade_distance=%u\naccessibility_mode=%d\noverlay_quality=%d\n",
+        hudVisible, fpsVisible, trailLength, labelFadeDistance, accessibilityMode, overlayQuality == OVERLAY_QUALITY_PERFORMANCE ? 1 : 0) > 0;
     if (fflush(file) || fsync(fileno(file))) ok = false;
     if (fclose(file)) ok = false;
     if (!ok || rename(DISPLAY_CONFIG_TEMP_PATH, DISPLAY_CONFIG_PATH)) { remove(DISPLAY_CONFIG_TEMP_PATH); return false; }
@@ -1398,11 +1548,13 @@ static void onlineDisconnect(void) {
     onlineSocket = -1;
     onlineMode = ONLINE_OFFLINE;
     remoteCount = 0;
+    ++remoteTrainerVersion;
     onlineUserCount = 0;
     onlineUserPage = 0;
     onlineUserExpectedPage = onlineUserExpectedPages = 0;
     receiveLength = 0;
     webSocketLength = 0;
+    outgoingLength = 0;
     onlineAuthenticated = false;
     teleportLocationsRequested = false;
     memset(&lastSentPresence, 0, sizeof(lastSentPresence));
@@ -1420,7 +1572,7 @@ bool onlineSend(const char* message) {
     size_t size = strlen(message);
     bool sent = secureWebSocket
         ? webSocketWriteFrame(0x1, (const unsigned char*) message, size)
-        : onlineWriteBytes((const unsigned char*) message, size) == (int) size;
+        : queueOutgoingBytes((const unsigned char*) message, size);
     if (sent) return true;
     onlineFail(EIO);
     return false;
@@ -1924,6 +2076,7 @@ static void parseOnlineLine(char* line) {
         char id[37] = {};
         if (!jsonString(line, "id", id, sizeof(id))) return;
         for (int i = 0; i < remoteCount; ++i) if (!strcmp(remoteTrainers[i].id, id)) remoteTrainers[i] = remoteTrainers[--remoteCount];
+        ++remoteTrainerVersion;
         return;
     }
     if (jsonTypeIs(line, "snapshot")) {
@@ -1986,6 +2139,7 @@ static void parseOnlineLine(char* line) {
         }
         memcpy(remoteTrainers, updated, sizeof(updated));
         remoteCount = updatedCount;
+        ++remoteTrainerVersion;
         return;
     }
     if (jsonTypeIs(line, "npc_snapshot")) {
@@ -2096,6 +2250,8 @@ static void parseOnlineLine(char* line) {
             showToast(localize(LS_TOAST_QUEST_ACCEPTED), title);
         else if (!strcmp(status, "completed") && title[0])
             showToast(localize(LS_TOAST_QUEST_COMPLETED), title);
+        else if (!strcmp(status, "claimed") && title[0])
+            showToast(localize(LS_TOAST_QUEST_CLAIMED), title);
         return;
     }
     if (jsonTypeIs(line, "quest_list")) {
@@ -2458,6 +2614,7 @@ static bool receiveOnlineTraffic(void) {
 }
 
 static void onlineUpdate(void) {
+    drainOutgoingBuffer();
     uint64_t now = osGetTime();
     if (onlineMode == ONLINE_OFFLINE && onlineEnabled && (!nextReconnect || now >= nextReconnect)) onlineConnect();
     if (onlineMode == ONLINE_CONNECTING) {
@@ -2748,6 +2905,96 @@ static void drawConnectionDot(float x, float y) {
     C2D_DrawEllipseSolid(x, y, .1f, 8, 8, color);
 }
 
+static const char* bottomPageTitle(BottomPage page) {
+    return page == PAGE_USERS ? localize(LS_ONLINE_USERS_READ_ONLY) :
+        page == PAGE_CHAT ? localize(LS_CHAT) :
+        page == PAGE_PARTY ? localize(LS_PARTY_LOCAL_ONLY) :
+        page == PAGE_BAG ? localize(LS_BAG_LOCAL_ONLY) :
+        page == PAGE_MAP ? localize(LS_MAP_TRAINER_RADAR) :
+        page == PAGE_STATS ? localize(LS_PLAYER_STATS_AND_CONSENT) :
+        page == PAGE_QUESTS ? localize(LS_QUEST_LOG) :
+        page == PAGE_TITLES ? localize(LS_TITLE_LOG) :
+        page == PAGE_FRIENDS ? localize(LS_FRIENDS_LIST) :
+        page == PAGE_GUILD ? localize(LS_GUILD) :
+        page == PAGE_TELEPORT ? localize(LS_TELEPORT) :
+        page == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) :
+        page == PAGE_SETTINGS ? localize(LS_SETTINGS) : localize(LS_EMERALD_ONLINE);
+}
+
+static const char* launcherPageLabel(BottomPage page) {
+    switch (page) {
+    case PAGE_ONLINE: return "HOME";
+    case PAGE_USERS: return "ONLINE USERS";
+    case PAGE_CHAT: return "CHAT";
+    case PAGE_PARTY: return "PARTY";
+    case PAGE_BAG: return "BAG";
+    case PAGE_MAP: return "MAP & RADAR";
+    case PAGE_STATS: return "STATS & PRIVACY";
+    case PAGE_QUESTS: return "QUESTS";
+    case PAGE_TITLES: return "TITLES";
+    case PAGE_FRIENDS: return "FRIENDS";
+    case PAGE_GUILD: return "GUILD";
+    case PAGE_TELEPORT: return "TELEPORT";
+    case PAGE_UPDATE: return "UPDATE";
+    case PAGE_SETTINGS: return "SETTINGS";
+    default: return "HOME";
+    }
+}
+
+static unsigned launcherGroupForPage(BottomPage page) {
+    for (unsigned group = 0; group < 4; ++group)
+        for (unsigned index = 0; index < launcherPageCounts[group]; ++index)
+            if (launcherPages[group][index] == page) return group;
+    return 0;
+}
+
+static void selectLauncherGroup(unsigned group) {
+    launcherGroup = group % 4;
+    launcherSelection = 0;
+    for (unsigned index = 0; index < launcherPageCounts[launcherGroup]; ++index)
+        if (launcherPages[launcherGroup][index] == bottomPage) launcherSelection = index;
+}
+
+static void openLauncher(void) {
+    launcherOpen = true;
+    selectLauncherGroup(launcherGroupForPage(bottomPage));
+}
+
+static void drawLauncher(void) {
+    static const LocalizedString groupLabels[4] = {LS_MENU_ONLINE, LS_MENU_ADVENTURE, LS_MENU_SOCIAL, LS_MENU_SYSTEM};
+    for (unsigned group = 0; group < 4; ++group) {
+        const float x = group * 80.0f;
+        const bool selected = group == launcherGroup;
+        C2D_DrawRectSolid(x + 1, 41, 0, 78, 25, selected ? C2D_Color32(38, 145, 91, 255) : C2D_Color32(37, 57, 50, 255));
+        drawTextStatic(x + 8, 48, .25f, C2D_Color32(255, 255, 255, 255), localize(groupLabels[group]));
+    }
+    for (unsigned index = 0; index < launcherPageCounts[launcherGroup]; ++index) {
+        const unsigned row = index / 2;
+        const unsigned column = index % 2;
+        const float x = column ? 165.0f : 10.0f;
+        const float y = 73.0f + row * 44.0f;
+        const bool selected = index == launcherSelection;
+        C2D_DrawRectSolid(x, y, 0, 145, 37, selected ? C2D_Color32(42, 126, 83, 255) : C2D_Color32(22, 61, 46, 255));
+        if (selected) C2D_DrawRectSolid(x, y, .05f, 4, 37, C2D_Color32(255, 209, 102, 255));
+        drawTextStatic(x + 14, y + 11, .34f, C2D_Color32(255, 255, 255, 255), launcherPageLabel(launcherPages[launcherGroup][index]));
+    }
+    drawTextStatic(83, 220, .31f, C2D_Color32(190, 220, 210, 255), localize(LS_MENU_CLOSE_GROUPS));
+}
+
+static void drawContextPrompt(void) {
+    if (remoteCount > 0) {
+        drawText(38, 91, .29f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_NEARBY_FORMAT), remoteCount, remoteCount == 1 ? "" : "S");
+    } else if (lastChatText[0]) {
+        drawText(44, 91, .29f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_MESSAGE_FORMAT), lastChatName);
+    } else if (linkConfigured) {
+        drawTextStatic(25, 91, .27f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_LINK_READY));
+    } else if (questLogCount > 0) {
+        drawText(58, 91, .29f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_QUESTS_FORMAT), questLogCount, questLogCount == 1 ? "" : "S");
+    } else {
+        drawTextStatic(80, 91, .30f, C2D_Color32(180, 205, 200, 255), localize(LS_TAP_PROFILE_PAIR_BROWSER));
+    }
+}
+
 static void drawPageIndicators(float y) {
     static const uint32_t colors[] = {
         C2D_Color32(80, 164, 245, 255),  // Online
@@ -2785,23 +3032,14 @@ static void drawBottom(void) {
     C2D_DrawRectSolid(0, 0, 0, 320, 38, C2D_Color32(16, 45, 34, 255));
     C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
     C2D_TextBufClear(textBuffer);
-    const char* title = bottomPage == PAGE_USERS ? localize(LS_ONLINE_USERS_READ_ONLY) :
-        bottomPage == PAGE_CHAT ? localize(LS_CHAT) :
-        bottomPage == PAGE_PARTY ? localize(LS_PARTY_LOCAL_ONLY) :
-        bottomPage == PAGE_BAG ? localize(LS_BAG_LOCAL_ONLY) :
-        bottomPage == PAGE_MAP ? localize(LS_MAP_TRAINER_RADAR) :
-        bottomPage == PAGE_STATS ? localize(LS_PLAYER_STATS_AND_CONSENT) :
-        bottomPage == PAGE_QUESTS ? localize(LS_QUEST_LOG) :
-        bottomPage == PAGE_TITLES ? localize(LS_TITLE_LOG) :
-        bottomPage == PAGE_FRIENDS ? localize(LS_FRIENDS_LIST) :
-        bottomPage == PAGE_GUILD ? localize(LS_GUILD) :
-        bottomPage == PAGE_TELEPORT ? localize(LS_TELEPORT) :
-        bottomPage == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) :
-        bottomPage == PAGE_SETTINGS ? localize(LS_SETTINGS) : localize(LS_EMERALD_ONLINE);
+    const char* title = launcherOpen ? localize(LS_PAGE_MENU) : bottomPageTitle(bottomPage);
     drawTextStatic(16, 11, .55f, C2D_Color32(255,255,255,255), title);
     drawConnectionDot(306, 16);
-    drawTextStatic(224, 14, .30f, C2D_Color32(180,220,205,255), localize(LS_Y_ARROW));
-    drawPageIndicators(31);
+    if (!launcherOpen) {
+        drawTextStatic(248, 14, .30f, C2D_Color32(180,220,205,255), localize(LS_Y_ARROW));
+        drawPageIndicators(31);
+    }
+    if (launcherOpen) { drawLauncher(); return; }
     if (bottomPage == PAGE_SETTINGS) { drawSettingsPage(); return; }
     if (bottomPage == PAGE_UPDATE) { drawUpdatePage(); return; }
     if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
@@ -2855,7 +3093,7 @@ static void drawBottom(void) {
         else if (browserPairingStatus[0] && osGetTime() < browserPairingStatusUntil) drawText(75, 91, .32f, C2D_Color32(255,220,130,255), "%s", browserPairingStatus);
         else if (onlineMode != ONLINE_ACTIVE)
             drawText(18, 91, .27f, C2D_Color32(180,205,200,255), localize(LS_VERSION_HOST_PORT_FORMAT), APP_VERSION, serverHost, serverPort);
-        else drawText(80, 91, .30f, C2D_Color32(180,205,200,255), "%s", localize(LS_TAP_PROFILE_PAIR_BROWSER));
+        else drawContextPrompt();
     if (onlineMode != ONLINE_ACTIVE) {
         static const char* stages[] = {"SOCKET", "TLS INIT", "TLS SETUP", "TLS HANDSHAKE", "CERT VERIFY", "WS REQUEST", "WS RESPONSE", "WS ACCEPT"};
         // These are short protocol-stage tokens used only inside the diagnostic
@@ -2899,7 +3137,20 @@ static unsigned filteredTeleportCount(void) {
 static void handleRepeatInput(void) {
     if (!repeatKeys) return;
     if (repeatKeys & KEY_Y) {
-        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % PAGE_COUNT);
+        if (launcherOpen) launcherOpen = false;
+        else if (!npcDialogue.active) openLauncher();
+        return;
+    }
+    if (launcherOpen) {
+        const unsigned count = launcherPageCounts[launcherGroup];
+        if (repeatKeys & KEY_L) selectLauncherGroup((launcherGroup + 3) % 4);
+        else if (repeatKeys & KEY_R) selectLauncherGroup((launcherGroup + 1) % 4);
+        else if (repeatKeys & (KEY_UP | KEY_CPAD_UP)) launcherSelection = launcherSelection >= 2 ? launcherSelection - 2 : launcherSelection;
+        else if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) { if (launcherSelection + 2 < count) launcherSelection += 2; }
+        else if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) { if (launcherSelection & 1) --launcherSelection; }
+        else if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) { if (!(launcherSelection & 1) && launcherSelection + 1 < count) ++launcherSelection; }
+        else if (repeatKeys & KEY_A) { bottomPage = launcherPages[launcherGroup][launcherSelection]; launcherOpen = false; }
+        else if (repeatKeys & KEY_B) launcherOpen = false;
         return;
     }
     if (repeatKeys & KEY_L) {
@@ -3022,7 +3273,10 @@ static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y, fl
         // Use a faster cadence while the trainer is moving so the walk cycle
         // matches the interpolated motion; idle when standing still.
         const unsigned period = moving ? 90 : 160;
-        unsigned phase = (osGetTime() / period) & 3;
+        // Performance mode uses a 2-frame toggle instead of a 4-frame cycle
+        // to reduce texture lookups and CPU work on Old 3DS.
+        const unsigned cycleMask = overlayQuality == OVERLAY_QUALITY_PERFORMANCE ? 1 : 3;
+        unsigned phase = (osGetTime() / period) & cycleMask;
         if (trainer->facing == 1) {
             static const unsigned downFrames[4] = {0, 3, 0, 4};
             frame = downFrames[phase];
@@ -3083,6 +3337,61 @@ static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y, fl
     C2D_DrawRectSolid(x + 13, y + 27 + bob, z, 6, step ? 5 : 7, pants);
 }
 
+static bool visibleCacheDirty(uint64_t now) {
+    return cachedRemoteTrainerVersion != remoteTrainerVersion ||
+           cachedVisibleMapGroup != presence.mapGroup ||
+           cachedVisibleMapNum != presence.mapNum ||
+           cachedVisibleX != presence.x ||
+           cachedVisibleY != presence.y ||
+           now - cachedVisibleBuiltAt >= VISIBLE_TRAINER_REBUILD_MS;
+}
+
+static void rebuildVisibleTrainers(uint64_t now) {
+    cachedVisibleCount = 0;
+    cachedVisibleMapGroup = presence.mapGroup;
+    cachedVisibleMapNum = presence.mapNum;
+    cachedVisibleX = presence.x;
+    cachedVisibleY = presence.y;
+    cachedVisibleBuiltAt = now;
+    cachedRemoteTrainerVersion = remoteTrainerVersion;
+
+    for (int i = 0; i < remoteCount; ++i) {
+        const RemoteTrainer* t = &remoteTrainers[i];
+        float elapsed = (float)(now - t->updatedAt);
+        float tFactor = smoothstepf(elapsed / (float)REMOTE_INTERPOLATION_MS);
+        float tileX = (float)t->prevX + ((float)t->x - (float)t->prevX) * tFactor;
+        float tileY = (float)t->prevY + ((float)t->y - (float)t->prevY) * tFactor;
+        float dx = tileX - (float)presence.x;
+        float dy = tileY - (float)presence.y;
+        if (dx < -8.0f || dx > 8.0f || dy < -6.0f || dy > 6.0f) continue;
+        float sx = 200.0f + dx * OVERLAY_TILE_W - 12.0f;
+        float sy = 120.0f + dy * OVERLAY_TILE_H - 23.0f;
+        if (sx < -32.0f || sx > 432.0f || sy < -48.0f || sy > 288.0f) continue;
+
+        const bool behind = tileY < (float)presence.y;
+        float alpha = behind ? 0.55f : 1.0f;
+
+        float distance = (dx < 0.0f ? -dx : dx) + (dy < 0.0f ? -dy : dy);
+        float labelAlpha = alpha;
+        if (labelFadeDistance > 0 && distance > (float)labelFadeDistance) {
+            labelAlpha *= clampf(1.0f - (distance - (float)labelFadeDistance) / 4.0f, 0.0f, 1.0f);
+        }
+
+        bool moving = (t->x != t->prevX || t->y != t->prevY) && elapsed < REMOTE_INTERPOLATION_MS;
+        cachedVisible[cachedVisibleCount++] = { t, tileX, tileY, sx, sy, moving, alpha, labelAlpha };
+    }
+
+    for (int i = 0; i < cachedVisibleCount - 1; ++i) {
+        for (int j = i + 1; j < cachedVisibleCount; ++j) {
+            if (cachedVisible[j].screenY > cachedVisible[i].screenY) {
+                CachedVisibleTrainer tmp = cachedVisible[i];
+                cachedVisible[i] = cachedVisible[j];
+                cachedVisible[j] = tmp;
+            }
+        }
+    }
+}
+
 static void drawTop(void) {
     C2D_TargetClear(topTarget, C2D_Color32(0,0,0,255));
     C2D_SceneBegin(topTarget);
@@ -3121,61 +3430,13 @@ static void drawTop(void) {
     if (!isEmeraldOverworld() || !presence.valid) return;
 
     const uint64_t now = osGetTime();
-    // Build a list of visible remote trainers with interpolated positions.
-    struct VisibleTrainer {
-        const RemoteTrainer* trainer;
-        float tileX, tileY;      // interpolated tile position relative to local player
-        float screenX, screenY;  // pixel position on the 400x240 top screen
-        bool moving;
-        float alpha;
-        float labelAlpha;
-    } visible[8];
-    int visibleCount = 0;
-
-    for (int i = 0; i < remoteCount; ++i) {
-        const RemoteTrainer* t = &remoteTrainers[i];
-        float elapsed = (float)(now - t->updatedAt);
-        float tFactor = smoothstepf(elapsed / (float)REMOTE_INTERPOLATION_MS);
-        float tileX = (float)t->prevX + ((float)t->x - (float)t->prevX) * tFactor;
-        float tileY = (float)t->prevY + ((float)t->y - (float)t->prevY) * tFactor;
-        float dx = tileX - (float)presence.x;
-        float dy = tileY - (float)presence.y;
-        if (dx < -8.0f || dx > 8.0f || dy < -6.0f || dy > 6.0f) continue;
-        float sx = 200.0f + dx * OVERLAY_TILE_W - 12.0f;
-        float sy = 120.0f + dy * OVERLAY_TILE_H - 23.0f;
-        if (sx < -32.0f || sx > 432.0f || sy < -48.0f || sy > 288.0f) continue;
-
-        // Depth heuristic: trainers visually above the local player are behind
-        // the player / foreground buildings, so fade them down.
-        const bool behind = tileY < (float)presence.y;
-        float alpha = behind ? 0.55f : 1.0f;
-
-        // Fade name/title labels at the edge of the visible window so distant
-        // trainers do not clutter the screen with text. Distance 0 disables the fade.
-        float distance = (dx < 0.0f ? -dx : dx) + (dy < 0.0f ? -dy : dy);
-        float labelAlpha = alpha;
-        if (labelFadeDistance > 0 && distance > (float)labelFadeDistance) {
-            labelAlpha *= clampf(1.0f - (distance - (float)labelFadeDistance) / 4.0f, 0.0f, 1.0f);
-        }
-
-        bool moving = (t->x != t->prevX || t->y != t->prevY) && elapsed < REMOTE_INTERPOLATION_MS;
-        visible[visibleCount++] = { t, tileX, tileY, sx, sy, moving, alpha, labelAlpha };
-    }
-
-    // Y-sort so lower-on-screen trainers draw last (correct layering).
-    for (int i = 0; i < visibleCount - 1; ++i) {
-        for (int j = i + 1; j < visibleCount; ++j) {
-            if (visible[j].screenY > visible[i].screenY) {
-                VisibleTrainer tmp = visible[i];
-                visible[i] = visible[j];
-                visible[j] = tmp;
-            }
-        }
-    }
-
-    for (int i = 0; i < visibleCount; ++i) {
-        const VisibleTrainer& v = visible[i];
+    if (visibleCacheDirty(now)) rebuildVisibleTrainers(now);
+    // Draw the cached visible trainers (the cache is rebuilt only when remote
+    // state or local presence changes, or every VISIBLE_TRAINER_REBUILD_MS).
+    for (int i = 0; i < cachedVisibleCount; ++i) {
+        const CachedVisibleTrainer& v = cachedVisible[i];
         const RemoteTrainer* t = v.trainer;
+
 
         // Clamp the whole overlay (sprite + name/title/emote) to the top screen
         // so trainers at the edge of the visible window stay fully readable.
@@ -3186,8 +3447,9 @@ static void drawTop(void) {
         float sy = clampf(v.screenY, labelH, 240.0f - spriteH);
 
         // Draw a faint movement trail behind the sprite if the trainer has moved
-        // recently on the same map. trailLength 0 disables trails entirely.
-        if (trailLength > 1 && t->trailCount > 1) {
+        // recently on the same map. trailLength 0 disables trails entirely;
+        // performance mode also disables trails to save Old 3DS GPU/CPU time.
+        if (overlayQuality == OVERLAY_QUALITY_HIGH && trailLength > 1 && t->trailCount > 1) {
             uint32_t trailColor = withAlpha(C2D_Color32(200, 230, 255, 255), v.alpha * 0.25f);
             unsigned renderedCount = t->trailCount < trailLength ? t->trailCount : trailLength;
             for (unsigned n = 1; n < renderedCount; ++n) {
@@ -3214,7 +3476,7 @@ static void drawTop(void) {
         }
         drawText(sx - 9.0f, labelY, .32f, withAlpha(C2D_Color32(255, 255, 255, 255), v.labelAlpha), "%.8s", t->name);
 
-        if (t->emote && now < t->emoteUntil) {
+        if (overlayQuality == OVERLAY_QUALITY_HIGH && t->emote && now < t->emoteUntil) {
             static const char* bubbles[] = {"", localize(LS_HI), localize(LS_EXCLAMATION), localize(LS_ANGLED_BRACKETS), localize(LS_GG)};
             C2D_DrawRectSolid(sx + 17.0f, sy - 28.0f, .4f, 22, 15, withAlpha(C2D_Color32(255,255,240,235), v.alpha));
             drawText(sx + 20.0f, sy - 26.0f, .34f, withAlpha(C2D_Color32(35,45,50,255), v.alpha), "%s", bubbles[t->emote]);
@@ -3235,12 +3497,22 @@ static bool initGraphics(void) {
     topTarget = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
     bottomTarget = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
     debugStage("targets-ready");
-    gameUploadBuffer = (uint16_t*) linearMemAlign(256 * 256 * sizeof(uint16_t), 128);
-    if (!topTarget || !bottomTarget || !gameUploadBuffer || !C3D_TexInitVRAM(&gameTexture, 256, 256, GPU_RGB565)) return false;
-    memset(gameUploadBuffer, 0, 256 * 256 * sizeof(uint16_t));
+    gameUploadBuffer[0] = (uint16_t*) linearMemAlign(256 * 256 * sizeof(uint16_t), 128);
+    gameUploadBuffer[1] = (uint16_t*) linearMemAlign(256 * 256 * sizeof(uint16_t), 128);
+    bool texturesOk = C3D_TexInitVRAM(&gameTexture[0], 256, 256, GPU_RGB565) &&
+                      C3D_TexInitVRAM(&gameTexture[1], 256, 256, GPU_RGB565);
+    if (!topTarget || !bottomTarget || !gameUploadBuffer[0] || !gameUploadBuffer[1] || !texturesOk) return false;
+    memset(gameUploadBuffer[0], 0, 256 * 256 * sizeof(uint16_t));
+    memset(gameUploadBuffer[1], 0, 256 * 256 * sizeof(uint16_t));
+    const u32 clearFlags = GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+                           GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
+    C3D_SyncDisplayTransfer((u32*) gameUploadBuffer[0], GX_BUFFER_DIM(256, 256), (u32*) gameTexture[0].data, GX_BUFFER_DIM(256, 256), clearFlags);
+    C3D_SyncDisplayTransfer((u32*) gameUploadBuffer[1], GX_BUFFER_DIM(256, 256), (u32*) gameTexture[1].data, GX_BUFFER_DIM(256, 256), clearFlags);
     debugStage("texture-ready");
-    C3D_TexSetFilter(&gameTexture, GPU_LINEAR, GPU_LINEAR);
-    C3D_TexSetWrap(&gameTexture, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    C3D_TexSetFilter(&gameTexture[0], GPU_LINEAR, GPU_LINEAR);
+    C3D_TexSetFilter(&gameTexture[1], GPU_LINEAR, GPU_LINEAR);
+    C3D_TexSetWrap(&gameTexture[0], GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    C3D_TexSetWrap(&gameTexture[1], GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     uiFont = C2D_FontLoadSystem(CFG_REGION_USA);
     avatarSheet = C2D_SpriteSheetLoad(AVATAR_PATH);
     debugStage("font-ready");
@@ -3251,7 +3523,13 @@ static bool initGraphics(void) {
 }
 
 static void uploadVideo(void) {
-    if (!videoReady || !videoPixels || !gameUploadBuffer) return;
+    if (!videoReady || !videoPixels || !gameUploadBuffer[0]) return;
+    // Ping-pong async upload: write the next frame into the back buffer and
+    // kick a non-blocking display transfer.  The previous transfer completes
+    // during C3D_FrameBegin(C3D_FRAME_SYNCDRAW), after which we swap indices.
+    int back = gameTextureBack;
+    uint16_t* upload = gameUploadBuffer[back];
+    C3D_Tex* tex = &gameTexture[back];
     // DisplayTransfer scales when its input/output dimensions differ. Pad the
     // 240x160 frame to the texture's exact 256x256 dimensions first so the
     // visible subtexture is neither stretched into the padding nor corrupted.
@@ -3261,11 +3539,13 @@ static void uploadVideo(void) {
     // the rows here because DisplayTransfer's full-texture flip would
     // otherwise leave the visible GBA frame upside down.
     for (unsigned y = 0; y < 160; ++y)
-        memcpy(gameUploadBuffer + (y + 96) * 256,
+        memcpy(upload + (y + 96) * 256,
                (const uint8_t*)videoPixels + (159 - y) * videoPitch,
                240 * sizeof(uint16_t));
-    GSPGPU_FlushDataCache(gameUploadBuffer, 256 * 256 * sizeof(uint16_t));
-    C3D_SyncDisplayTransfer((u32*) gameUploadBuffer, GX_BUFFER_DIM(256, 256), (u32*) gameTexture.data, GX_BUFFER_DIM(256, 256), GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    GSPGPU_FlushDataCache(upload, 256 * 256 * sizeof(uint16_t));
+    GX_DisplayTransfer((u32*) upload, GX_BUFFER_DIM(256, 256), (u32*) tex->data, GX_BUFFER_DIM(256, 256),
+        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+        GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
 }
 
 int main(void) {
@@ -3313,6 +3593,7 @@ int main(void) {
         ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
         audioData = (int16_t*) linearAlloc(AUDIO_BUFFERS * AUDIO_FRAMES * 2 * sizeof(int16_t));
         LightLock_Init(&audioLock);
+        LightLock_Init(&outgoingLock);
         LightEvent_Init(&audioEvent, RESET_ONESHOT);
         audioThreadRun = true;
         audioThread = threadCreate(audioThreadMain, NULL, 4096, 0x18, -2, true);
@@ -3377,8 +3658,8 @@ int main(void) {
         repeatKeys = hidKeysDownRepeat();
         uint32_t down = hidKeysDown();
         uint64_t now = osGetTime();
-        if (down & KEY_X) onlineToggle();
-        if (down & KEY_A) {
+        if (!launcherOpen && (down & KEY_X)) onlineToggle();
+        if (!launcherOpen && (down & KEY_A)) {
             if (npcDialogue.active) {
                 if (npcDialogue.quest_id[0]) {
                     sendQuestAccept(npcDialogue.quest_id);
@@ -3422,7 +3703,19 @@ int main(void) {
             touchDebounceUntil = now + TOUCH_DEBOUNCE_MS;
             touchPosition touch;
             hidTouchRead(&touch);
-            if (npcDialogue.active && touch.py >= 196) {
+            if (launcherOpen) {
+                if (touch.py >= 41 && touch.py < 68) {
+                    selectLauncherGroup(touch.px / 80);
+                } else if (touch.py >= 73 && touch.py < 205) {
+                    const unsigned row = (touch.py - 73) / 44;
+                    const unsigned column = touch.px >= 160 ? 1 : 0;
+                    const unsigned index = row * 2 + column;
+                    if (index < launcherPageCounts[launcherGroup]) {
+                        bottomPage = launcherPages[launcherGroup][index];
+                        launcherOpen = false;
+                    }
+                }
+            } else if (npcDialogue.active && touch.py >= 196) {
                 if (npcDialogue.quest_id[0]) sendQuestAccept(npcDialogue.quest_id);
                 npcDialogue.active = false;
             } else if (bottomPage == PAGE_USERS && touch.py >= 210) {
@@ -3551,12 +3844,26 @@ int main(void) {
             gspWaitForVBlank();
             continue;
         }
-        retro_run();
-        static bool firstFrameLogged;
-        if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
+        frameTimingStart(FS_FRAME_TOTAL);
+        uint64_t realNowUs = frameTimingUs(frameTimingNow());
+        if (lastFrameRealTimeUs == 0) lastFrameRealTimeUs = realNowUs;
+        emulationTimeDebtUs += (int64_t)(realNowUs - lastFrameRealTimeUs);
+        lastFrameRealTimeUs = realNowUs;
+        unsigned runFrames = 0;
+        do {
+            frameTimingStart(FS_EMULATION);
+            retro_run();
+            frameTimingStop(FS_EMULATION);
+            static bool firstFrameLogged;
+            if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
+            emulationTimeDebtUs -= (int64_t)GBA_FRAME_PERIOD_US;
+            ++runFrames;
+        } while (emulationTimeDebtUs >= (int64_t)GBA_FRAME_PERIOD_US && runFrames < MAX_CATCHUP_FRAMES);
+        frameTimingStart(FS_PRESENCE);
         presence = readPresence();
         recordMapTrail(presence);
         updateTrainerNameFromSave();
+        frameTimingStop(FS_PRESENCE);
         now = osGetTime();
         // Save-derived aggregates change slowly. Re-reading the Pokédex flags
         // every emulated frame wastes Old 3DS CPU time without improving UI or
@@ -3564,7 +3871,12 @@ int main(void) {
         if (now >= nextStatsRead) { saveStats = readSaveStats(); nextStatsRead = now + 1000; }
         // RFU response windows are much tighter than ordinary presence sync.
         // While linked, service the nonblocking socket once per emulated frame.
-        if (now >= nextOnlinePoll) { nextOnlinePoll = now + (linkStarted ? 1 : 100); onlineUpdate(); }
+        if (now >= nextOnlinePoll) {
+            nextOnlinePoll = now + (linkStarted ? 1 : 100);
+            frameTimingStart(FS_NETWORK);
+            onlineUpdate();
+            frameTimingStop(FS_NETWORK);
+        }
         if (bottomPage == PAGE_QUESTS && onlineMode == ONLINE_ACTIVE && now >= nextQuestListRequest) {
             requestQuestList();
             nextQuestListRequest = now + 5000;
@@ -3588,13 +3900,31 @@ int main(void) {
             fpsFrames = 0;
             fpsStarted = now;
         }
-        uploadVideo();
+        frameTimingStart(FS_RENDER_SUBMIT);
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        // Swap the ping-pong textures after the GPU sync so the previously
+        // uploaded back buffer becomes the new front buffer for this frame.
+        int newFront = gameTextureBack;
+        gameTextureBack = gameTextureFront;
+        gameTextureFront = newFront;
+        gameImage.tex = &gameTexture[gameTextureFront];
+        frameTimingStop(FS_RENDER_SUBMIT);
+        frameTimingStart(FS_DRAW_TOP);
         drawTop();
+        frameTimingStop(FS_DRAW_TOP);
+        frameTimingStart(FS_DRAW_BOTTOM);
         if (renderedFrames < 2 || renderedFrames % 5 == 0) drawBottom();
         drawNpcDialogueOverlay();
+        frameTimingStop(FS_DRAW_BOTTOM);
+        frameTimingStart(FS_UPLOAD);
+        uploadVideo();
+        frameTimingStop(FS_UPLOAD);
         ++renderedFrames;
+        frameTimingStart(FS_RENDER_SUBMIT);
         C3D_FrameEnd(0);
+        frameTimingStop(FS_RENDER_SUBMIT);
+        frameTimingStop(FS_FRAME_TOTAL);
+        frameTimingLog(now);
     }
 
     writeSave(true);
@@ -3615,8 +3945,10 @@ int main(void) {
     if (textBuffer) C2D_TextBufDelete(textBuffer);
     if (uiFont) C2D_FontFree(uiFont);
     if (avatarSheet) C2D_SpriteSheetFree(avatarSheet);
-    C3D_TexDelete(&gameTexture);
-    linearFree(gameUploadBuffer);
+    C3D_TexDelete(&gameTexture[0]);
+    C3D_TexDelete(&gameTexture[1]);
+    if (gameUploadBuffer[0]) linearFree(gameUploadBuffer[0]);
+    if (gameUploadBuffer[1]) linearFree(gameUploadBuffer[1]);
     C2D_Fini();
     C3D_Fini();
     gfxExit();
