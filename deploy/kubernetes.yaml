@@ -21,7 +21,10 @@ spec:
   # until room state is moved to a shared backend.
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: emerald-online
@@ -39,7 +42,7 @@ spec:
       terminationGracePeriodSeconds: 10
       initContainers:
         - name: migrate
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "server/tools/migrate.mjs"]
           envFrom:
@@ -65,7 +68,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: publish-releases
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "server/tools/publish-releases.mjs"]
           envFrom:
@@ -97,14 +100,12 @@ spec:
               - matchExpressions:
                   - key: kubernetes.io/hostname
                     operator: In
-                    values: [lws-desktop, lws-homelab]
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values: [lws-homelab]
+                    values:
+                      - lws-desktop
+                      - lws-homelab
+                  # Image is now a multi-arch OCI index (linux/amd64 + linux/arm64),
+                  # so scheduling to lws-homelab (arm64) is safe. rpi-cluster nodes
+                  # remain excluded until their Cilium health-probe path is verified.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -113,7 +114,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: presence
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "server/src/server.mjs"]
           ports:
@@ -169,7 +170,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: public-web
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "web/install-server.mjs"]
           ports:
@@ -231,6 +232,20 @@ spec:
         - name: database-ca
           secret:
             secretName: emerald-pg-ca
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: emerald-online
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-online
+    app.kubernetes.io/part-of: emerald-online-3ds
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: emerald-online
 ---
 apiVersion: v1
 kind: Service
@@ -380,28 +395,18 @@ spec:
         - protocol: TCP
           port: 3211
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: allow-node-health-probes
   namespace: pokemonemeraldonline3ds
 spec:
-  podSelector: {}
-  policyTypes: [Ingress]
+  endpointSelector: {}
   ingress:
-    - from:
-        - ipBlock:
-            cidr: 192.168.0.31/32
-        - ipBlock:
-            cidr: 192.168.15.5/32
-        - ipBlock:
-            cidr: 10.42.0.0/32
-        - ipBlock:
-            cidr: 10.42.0.1/32
-        - ipBlock:
-            cidr: 10.42.1.0/32
-        - ipBlock:
-            cidr: 10.42.1.1/32
+    - fromEntities:
+        - host
+        - remote-node
+        - kube-apiserver
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -463,19 +468,20 @@ spec:
         - protocol: TCP
           port: 8000
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: allow-cnpg-kubernetes-api
   namespace: pokemonemeraldonline3ds
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       cnpg.io/cluster: emerald-pg
-  policyTypes: [Egress]
-  # CNPG's instance manager must reach the host-network Kubernetes API. In this
-  # cluster's Cilium/Flannel chaining mode, host traffic cannot be represented
-  # by a portable Kubernetes ipBlock after DNAT. This exception is confined to
-  # CNPG-managed pods; application and maintenance pods retain explicit egress.
+  # CNPG's instance manager must reach the host-network Kubernetes API. In
+  # Cilium/Flannel chaining mode, host traffic is classified by Cilium identity
+  # (host / kube-apiserver) rather than by DNAT'd destination IP, so we allow
+  # those entities explicitly instead of using an unrestricted egress rule.
   egress:
-    - {}
+    - toEntities:
+        - host
+        - kube-apiserver
