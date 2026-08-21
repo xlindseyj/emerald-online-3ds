@@ -42,7 +42,7 @@ spec:
       terminationGracePeriodSeconds: 10
       initContainers:
         - name: migrate
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "server/tools/migrate.mjs"]
           envFrom:
@@ -68,7 +68,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: publish-releases
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "server/tools/publish-releases.mjs"]
           envFrom:
@@ -100,11 +100,12 @@ spec:
               - matchExpressions:
                   - key: kubernetes.io/hostname
                     operator: In
-                    values: [lws-desktop]
-                  # TODO: restore lws-homelab once the container image ships an
-                  # arm64 variant. Current digest is amd64-only, so scheduling to
-                  # lws-homelab (arm64) causes ImagePullBackOff and prevents
-                  # RollingUpdate from completing.
+                    values:
+                      - lws-desktop
+                      - lws-homelab
+                  # Image is now a multi-arch OCI index (linux/amd64 + linux/arm64),
+                  # so scheduling to lws-homelab (arm64) is safe. rpi-cluster nodes
+                  # remain excluded until their Cilium health-probe path is verified.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -113,7 +114,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: presence
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "server/src/server.mjs"]
           ports:
@@ -169,7 +170,7 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
         - name: public-web
-          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:ee6416ca696f4919e017d4efa15a9efbc126484c40dac711a35b672f3f190c94
+          image: 192.168.0.31:30501/pokemon-emerald-online@sha256:b8045525541b6f99ca46200212610b34567af8ec0099c414951e04731f44dfa5
           imagePullPolicy: IfNotPresent
           command: ["node", "web/install-server.mjs"]
           ports:
