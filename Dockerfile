@@ -36,6 +36,17 @@ RUN --mount=type=bind,source=desktop/dist,target=/tmp/desktop-dist \
       cp /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.exe /app/desktop/dist/; \
     fi
 
+# Optional Linux desktop installer. The file is typically built in local Linux release
+# workflows and is used for the /download/desktop-linux endpoint.
+RUN --mount=type=bind,source=desktop/dist,target=/tmp/desktop-dist \
+    if ls /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.AppImage >/dev/null 2>&1; then \
+      mkdir -p /app/desktop/dist && \
+      cp /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.AppImage /app/desktop/dist/; \
+    elif ls /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.appimage >/dev/null 2>&1; then \
+      mkdir -p /app/desktop/dist && \
+      cp /tmp/desktop-dist/EmeraldOnline3DS-Setup-*.appimage /app/desktop/dist/; \
+    fi
+
 USER node
 EXPOSE 3210/tcp 3211/tcp 8080/tcp
 CMD ["node", "server/src/server.mjs"]

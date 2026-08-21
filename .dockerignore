@@ -26,6 +26,8 @@
 !desktop/dist/
 desktop/dist/**
 !desktop/dist/EmeraldOnline3DS-Setup-*.exe
+!desktop/dist/EmeraldOnline3DS-Setup-*.AppImage
+!desktop/dist/EmeraldOnline3DS-Setup-*.appimage
 
 # Defense in depth: private/legal-copy inputs must never enter an image layer.
 *.gba
