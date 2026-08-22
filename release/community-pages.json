@@ -1,0 +1,110 @@
+[
+  {
+    "key": "welcome-start-here",
+    "kind": "welcome",
+    "category": "announcements",
+    "title": "Welcome to Emerald Online 3DS — start here",
+    "pinned": true,
+    "locked": false,
+    "body": "Welcome to the official Emerald Online 3DS community. This is an independent, fan-made homebrew beta for people using their own legally obtained Pokémon Emerald cartridge dump.\n\n## Start here\n\n- [Install on a Nintendo 3DS](/community?guide=install-on-3ds)\n- [Test with Azahar on a computer](/community?guide=test-with-azahar)\n- [Read the privacy and data-control guide](/community?guide=privacy-and-data)\n- [Open the live service dashboard](/status)\n- [Download the current ROM-free CIA](/emerald-online-3ds.cia)\n- [Verify the current files](/SHA256SUMS)\n\n## Community safety\n\nNever upload or post ROMs, saves, screenshots containing private save information, `identity.cfg`, recovery codes, passwords, or console keys. Keep discussion respectful and focused on reproducible results. This project does not sell or provide Nintendo or Pokémon game files.\n\nOfficial posts have an OFFICIAL badge and no player identity. Ordinary forum participation requires pairing a running 3DS so moderation can limit abuse without collecting an email address."
+  },
+  {
+    "key": "install-on-3ds",
+    "kind": "guide",
+    "category": "installation-help",
+    "title": "Install Emerald Online 3DS on a Nintendo 3DS",
+    "pinned": true,
+    "locked": false,
+    "body": "![FBI Remote Install QR for the current ROM-free CIA](/qr.svg)\n\nThis guide installs the original homebrew runtime. It does not include Pokémon Emerald, a save, console keys, or copyrighted game assets. You must use your own legally obtained cartridge dump.\n\n## Supported private input\n\nThe current runtime supports the unmodified Pokémon Emerald US cartridge revision with game code `BPEE`, revision 0, and SHA-256 `a9dec84dfe7f62ab2220bafaef7479da0929d066ece16a6885f6226db19085af`. Validate the file locally. Never upload a ROM or ask another player to send one.\n\n## Before you begin\n\n- Use a homebrew-capable 3DS with either FBI for CIA installation or the Homebrew Launcher for 3DSX use.\n- Back up the entire `sd:/3ds/emerald-online-3ds/` folder and your save.\n- Put the private ROM at `sd:/3ds/emerald-online-3ds/emerald.gba`.\n- Keep `emerald.gba`, save files, `identity.cfg`, `stats.cfg`, `avatars.t3x`, and `link-backups/` private.\n\n## Normal online.cfg\n\n```ini\nserver=live.emeraldonline3ds.com\nport=443\ntransport=wss\npath=/game\nname=Trainer\n```\n\nChange only the display name for a normal public connection. Never put a device credential or recovery code in this file; the runtime creates private `identity.cfg` separately.\n\n## CIA / HOME Menu method\n\n- Prepare the ROM and configuration on the SD card before launching.\n- Open FBI, choose Remote Install, then Scan QR Code.\n- Scan the QR above or download the [current CIA](/emerald-online-3ds.cia) and install it manually.\n- Reinstall through FBI when updating; copying a CIA onto the SD card does not update an already installed title.\n\n## 3DSX / Homebrew Launcher method\n\n- Download the [current 3DSX](/emerald-online-3ds.3dsx).\n- Place it at `sd:/3ds/emerald-online-3ds/emerald-online-3ds.3dsx`.\n- Keep the ROM and configuration beside it in the same application folder.\n\n## Connect to the public service\n\nThe normal production endpoint is `wss://live.emeraldonline3ds.com/game`. Preserve an existing `identity.cfg` during updates so the same anonymous player identity reconnects. Launch the game and wait for ONLINE on the lower screen.\n\nIf it fails, copy all four diagnostic lines or the safe error code into Installation Help. Never post the identity token or recovery code."
+  },
+  {
+    "key": "test-with-azahar",
+    "kind": "guide",
+    "category": "installation-help",
+    "title": "Test Emerald Online 3DS with Azahar on a computer",
+    "pinned": true,
+    "locked": false,
+    "body": "![Read-only global Online Users list in Azahar](/release-media/0.8.4-online-users.png)\n\n![Timestamped current-map chat list in Azahar](/release-media/0.8.4-map-chat.png)\n\nAzahar can test startup, the lower-screen interface, identity persistence, public WSS connectivity, reconnect behavior, chat, and emotes before copying files to a physical console. Emulator results do not replace Old/New 3DS testing for performance, Wi-Fi, touch, SD writes, audio, or HOME lifecycle.\n\n## Setup\n\n- Install the current official Azahar release from the project's official distribution source.\n- Download the [current 3DSX](/emerald-online-3ds.3dsx).\n- Create an isolated Azahar SD profile and place the 3DSX under `sdmc/3ds/emerald-online-3ds/`.\n- Add your own private `emerald.gba` and optional private save inside that isolated application folder. Do not upload them here.\n- Use the normal public endpoint `wss://live.emeraldonline3ds.com/game`.\n\n## What to test\n\n- The title starts, the lower screen reports ONLINE, and restarting preserves the same anonymous identity.\n- The client stays connected while stationary, reconnects after a brief interruption, and republishes its position.\n- Online Users shows every connected trainer with map and tile coordinates, pages with touch controls, and does nothing when a row is tapped.\n- Map Chat shows only the current map's session messages with sender, UTC timestamp, full message, paging, and a working Compose button.\n- Page cycling, pairing, chat, and emotes work without exposing ROM/save data.\n\n## Experimental RFU / Union Room warning\n\nVersion 0.8.7 changes the private Gate 4 test path to gpSP's Emerald RFU backend. Use Emerald's RFU/Union Room route, not the Direct Corner, and only with independent save backups, a fresh private room code, and a progressed save. This is still feasibility testing: do not claim battles or trades work until two-client battle, trade, interruption, save-integrity, FPS, and audio acceptance all pass."
+  },
+  {
+    "key": "union-room-trade-testing",
+    "kind": "guide",
+    "category": "multiplayer-help",
+    "title": "Test a native Union Room trade safely",
+    "pinned": true,
+    "locked": false,
+    "body": "![Native Trading Board offer shared between two Azahar clients](/release-media/0.8.7-trading-board.png)\n\n![Native Union Room trade animation](/release-media/0.8.7-union-room-trade.png)\n\nVersion 0.8.7 completed a two-Azahar native Union Room trade, including Emerald's animation, automatic save, restart, and exchanged-party verification. This is emulator acceptance evidence; physical 3DS trading, battles, interruption recovery, audio, latency, and hardware performance remain open.\n\n## Before testing\n\n- Back up each independent `emerald.sav` and the full `sd:/3ds/emerald-online-3ds/` folder.\n- Use two different progressed trainer saves and a fresh, unpredictable shared `link_room` value.\n- Confirm both lower screens show `ACTIVE - BACKUP OK` before entering the room.\n- Use Emerald's Wireless Club / Union Room upstairs in a Pokémon Center. Do not use the Direct Corner cable attendants for this RFU test.\n\n## Trading Board steps\n\n1. Both trainers enter the same Union Room and confirm the other trainer appears as Emerald's native avatar.\n2. The offering trainer talks to the attendant by the Trading Board, chooses Register, selects a party Pokémon, and chooses the Pokémon type wanted in return.\n3. The other trainer checks the Trading Board, selects the offer, chooses a matching party Pokémon, and sends the trade request.\n4. The offering trainer reads the exact species and level on the incoming request and chooses Yes only if they match the intended exchange.\n5. Do not close the app during the native animation, `Communication standby`, or `SAVING... DON'T TURN OFF THE POWER` screens.\n6. After both trainers return normally, open each party and confirm the exchanged Pokémon. Restart both clients and confirm the new parties load again.\n\n## Evidence to record\n\nRecord release version, Azahar or console version, both offered species and levels, whether the native animation completed, whether each save/restart completed, FPS/audio observations, and any exact safe error text. Never upload ROMs, saves, `identity.cfg`, recovery codes, console keys, or screenshots containing personal information."
+  },
+  {
+    "key": "live-service-status",
+    "kind": "status",
+    "category": "service-status",
+    "title": "Live service status and public URLs",
+    "pinned": true,
+    "locked": false,
+    "body": "The [live service dashboard](/status) checks the website, community/database path, multiplayer presence gateway, and public release files. It shows a green Operational or red Outage indicator for each service and the time of the latest check.\n\n## Public URLs\n\n- Website and installer: [https://emeraldonline3ds.com/](https://emeraldonline3ds.com/)\n- Community forums: [https://emeraldonline3ds.com/community](https://emeraldonline3ds.com/community)\n- Multiplayer gateway: `wss://live.emeraldonline3ds.com/game`\n- CIA: [https://emeraldonline3ds.com/emerald-online-3ds.cia](https://emeraldonline3ds.com/emerald-online-3ds.cia)\n- 3DSX: [https://emeraldonline3ds.com/emerald-online-3ds.3dsx](https://emeraldonline3ds.com/emerald-online-3ds.3dsx)\n- Code-only runtime source: [https://emeraldonline3ds.com/source](https://emeraldonline3ds.com/source)\n- Checksums: [https://emeraldonline3ds.com/SHA256SUMS](https://emeraldonline3ds.com/SHA256SUMS)\n\nA green web check does not prove physical-console compatibility. Report physical results separately with console model, install method, release version, and safe diagnostics."
+  },
+  {
+    "key": "beta-testing-checklist",
+    "kind": "guide",
+    "category": "beta-testing",
+    "title": "Beta testing checklist and useful evidence",
+    "pinned": true,
+    "locked": false,
+    "body": "Use a backup and test one change at a time. Include release version, console model or Azahar version, CIA/3DSX install method, public WSS or LAN transport, result, and the exact safe diagnostic lines.\n\n## Useful acceptance checks\n\n- Clean launch and shutdown; 60 FPS/audio observations on real hardware.\n- ONLINE, stationary keepalive, reconnect, position, chat, emotes, and page navigation.\n- Pairing, privacy controls, forum access, consented statistics, and complete deletion.\n- Save hash before and after any experimental link test.\n\nDo not attach ROMs, saves, identity files, recovery codes, private IP addresses, or screenshots containing personal/save information. Emulator passes are valuable but must be labeled Emulator."
+  },
+  {
+    "key": "development-source-boundaries",
+    "kind": "guide",
+    "category": "development-code",
+    "title": "Development, source, licensing, and privacy boundaries",
+    "pinned": true,
+    "locked": false,
+    "body": "The public [3DS runtime source archive](/source) contains the runtime frontend, modified gpSP source, Makefiles, version marker, and GPL text required for the distributed binary. It intentionally excludes server operations, Kubernetes manifests, Markdown handoffs, screenshots, branding assets, private addresses, and credentials.\n\nContributions must not include ROM bytes, extracted sprites/audio, saves, console keys, identity credentials, or copied proprietary code. Describe clean-room behavior and tests rather than uploading game assets. Verify every download with [SHA256SUMS](/SHA256SUMS)."
+  },
+  {
+    "key": "feature-idea-template",
+    "kind": "guide",
+    "category": "feature-ideas",
+    "title": "How to propose a useful feature",
+    "pinned": true,
+    "locked": false,
+    "body": "A strong feature proposal states the player problem, the exact 3DS interaction, what data would leave the console, abuse/privacy risks, Old 3DS performance cost, and a testable acceptance result.\n\nDo not request ROM distribution, copyrighted assets, hidden tracking, public identity exposure, or battle/trade rankings before Gate 4 integrity acceptance. Prefer additive protocol changes that preserve offline play and older clients."
+  },
+  {
+    "key": "multiplayer-help-safety",
+    "kind": "guide",
+    "category": "multiplayer-help",
+    "title": "Multiplayer troubleshooting and experimental-link safety",
+    "pinned": true,
+    "locked": false,
+    "body": "For normal presence, confirm the lower screen says ONLINE and the [live status dashboard](/status) shows the multiplayer gateway Operational. Record the release, transport, console model, and complete safe diagnostic lines.\n\nPresence, roster, chat, and emotes are public beta features. Version 0.8.7 link testing uses gpSP's Emerald RFU backend and the in-game RFU/Union Room route; the Direct Corner is not the supported experimental path. Use an unpredictable shared room, two authenticated clients, independent save backups, and stop unless both screens show ACTIVE - BACKUP OK. Public invitations and battle/trade rankings remain disabled until two-client battle, trade, interruption, save-integrity, FPS, and audio acceptance passes."
+  },
+  {
+    "key": "privacy-and-data",
+    "kind": "guide",
+    "category": "announcements",
+    "title": "Privacy, visibility, retention, and data controls",
+    "pinned": true,
+    "locked": false,
+    "body": "Emerald Online 3DS is designed around an anonymous installation identity rather than an email address or Nintendo hardware identifier. This page describes the data paths that matter before you connect or pair a browser.\n\n## Sent while Online\n\n- An anonymous server-issued UUID and device credential authenticate the installation. The server stores protected credential verifiers, not the readable token from your private `identity.cfg`.\n- Presence includes display name, avatar choice, map, tile coordinates, and facing. Authenticated connected players can see display name, current map, and tile coordinates in the global Online Users roster. Detailed presence and emotes remain limited to players on the same map.\n- Map Chat is delivered only to authenticated players on the sender's current map. Global Chat is delivered to every authenticated player currently online and includes the sender's current map. Choose the scope before composing.\n- Routine Map and Global Chat are relayed in memory and are not stored in the database. The 3DS keeps only its current runtime-session list.\n- Aggregate Pokédex seen/caught, badges, and Frontier values are not uploaded until you explicitly enable individual fields. Trainer ID, Pokémon, moves, party, inventory, ROM bytes, and save files are never uploaded.\n\n## Community data\n\nPairing uses a five-minute code approved by an online 3DS. A paired browser session expires after 30 idle days and can be revoked immediately with Log out. Forum topics, replies, subscriptions, reports, sanctions, and moderation history are stored so the community can operate. Deleted topics and replies have a 30-day moderator recovery window; report evidence expires after 90 days and moderation audit records after one year. Enrollment and recovery security events expire after seven days.\n\n## Your controls\n\n- Press X to go Offline and stop publishing presence.\n- Use the 3DS Stats page to enable or disable each aggregate field and to delete uploaded statistics. The paired browser profile can also delete all uploaded statistics; disable device uploads first to prevent a later re-upload.\n- Use Log out to revoke the current browser session. Keep `identity.cfg` and the one-time recovery code private because either can control the anonymous identity.\n- Delete your own forum content when needed; it leaves public view immediately and enters the 30-day recovery window.\n\nDo not post ROMs, saves, identity files, recovery codes, private network details, or screenshots containing personal or private save information. Use a paired Bugs and Defects topic for a reproducible privacy problem."
+  },
+  {
+    "key": "map-and-global-chat",
+    "kind": "guide",
+    "category": "installation-help",
+    "title": "Use Map Chat and Global Chat on the 3DS",
+    "pinned": true,
+    "locked": false,
+    "body": "Version 0.8.8 adds two clear scope buttons to the lower-screen Chat page. Tap **Map Chat** for a message visible only to authenticated trainers on your current map, or **Global Chat** for a message visible to every authenticated trainer currently online. The selected green button is the scope used by Compose.\n\nBoth lists are session-only and use server UTC timestamps. Routine chat is relayed in memory and is not stored in the database. Global messages include the sender's current map so recipients have context; they do not include party, inventory, save, ROM, Trainer ID, or other private game data.\n\n## Read and send\n\n1. Press Y until the lower screen shows Chat, or tap the Chat panel on the Online dashboard.\n2. Tap Map Chat or Global Chat at the top.\n3. Use Previous and Next to move through three-message pages.\n4. Tap a message row to open its larger full-message view; tap Back to return.\n5. Tap Compose, type up to 80 characters, and confirm.\n\nUse Map Chat for local coordination and Global Chat only when everyone online should receive the message. Do not post recovery codes, identity files, private addresses, or personal information. Chat is rate-limited to one message per second."
+  },
+  {
+    "key": "general-community-guidelines",
+    "kind": "welcome",
+    "category": "general",
+    "title": "Community guidelines and privacy reminders",
+    "pinned": true,
+    "locked": false,
+    "body": "Be kind, stay on topic, and distinguish confirmed results from guesses. Use the correct board, search before opening a duplicate, and reply with reproducible evidence.\n\nNever share ROMs, saves, console keys, `identity.cfg`, recovery codes, passwords, private network details, or another player's identifying information. Moderators may remove unsafe material and apply warnings, read-only restrictions, or suspensions. Official release, guide, status, and known-issue posts carry an OFFICIAL badge and never impersonate a player."
+  }
+]

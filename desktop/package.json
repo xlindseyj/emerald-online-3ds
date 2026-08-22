@@ -1,0 +1,92 @@
+{
+  "name": "emerald-online-3ds-desktop",
+  "version": "0.8.9",
+  "private": true,
+  "type": "module",
+  "description": "Windows desktop launcher for Emerald Online 3DS",
+  "license": "GPL-2.0-only",
+  "author": "Emerald Online 3DS contributors",
+  "homepage": "https://emeraldonline3ds.com",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "prebuild": "node tools/audit-package.mjs --source",
+    "build:win": "electron-builder --win && node tools/audit-package.mjs dist/win-unpacked",
+    "build:linux": "electron-builder --linux AppImage --x64 && node tools/audit-package.mjs dist/linux-unpacked",
+    "build": "electron-builder --win && node tools/audit-package.mjs dist/win-unpacked",
+    "build:dir": "electron-builder --win --dir && node tools/audit-package.mjs dist/win-unpacked",
+    "build:linux:dir": "electron-builder --linux AppImage --dir --x64 && node tools/audit-package.mjs dist/linux-unpacked",
+    "dist:linux": "npm run build:linux",
+    "dist:win": "npm run build:win",
+    "dist": "npm run build",
+    "test": "node --test test/*.test.mjs",
+    "audit": "npm audit --omit=optional && node tools/audit-package.mjs --source",
+    "smoke:linux": "node tools/desktop-smoke.mjs --platform=linux --duration=12000",
+    "smoke:windows": "node tools/desktop-smoke.mjs --platform=windows --duration=12000"
+  },
+  "devDependencies": {
+    "electron": "43.4.1",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.emeraldonline3ds.desktop",
+    "productName": "Emerald Online 3DS",
+    "copyright": "Copyright © 2026 Emerald Online 3DS contributors",
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "src/**/*.mjs",
+      "src/**/*.cjs",
+      "src/**/*.html",
+      "src/**/*.css",
+      "src/**/*.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../release/emerald-online-3ds.3dsx",
+        "to": "runtime/emerald-online-3ds.3dsx"
+      },
+      {
+        "from": "resources/azahar",
+        "to": "azahar",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "resources/licenses",
+        "to": "licenses",
+        "filter": ["**/*"]
+      }
+    ],
+    "linux": {
+      "target": "AppImage",
+      "artifactName": "EmeraldOnline3DS-Setup-${version}.${ext}"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.png",
+      "executableName": "Emerald Online 3DS",
+      "signAndEditExecutable": true,
+      "signtoolOptions": {
+        "signingHashAlgorithms": ["sha256"]
+      }
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Emerald Online 3DS",
+      "license": "resources/licenses/GPL-2.0.txt",
+      "artifactName": "EmeraldOnline3DS-Setup-${version}.exe",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "asar": true
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

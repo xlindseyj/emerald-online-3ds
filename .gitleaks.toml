@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignored local upstream reference checkouts; none are distributed"
+paths = [
+  '''^third_party/3ds-examples/''',
+  '''^third_party/RetroArch/''',
+  '''^third_party/archipelago-reference/''',
+  '''^third_party/mgba/''',
+  '''^third_party/pokeemerald-reference/'''
+]

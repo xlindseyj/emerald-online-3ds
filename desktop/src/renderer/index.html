@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none';">
+  <title>Emerald Online 3DS</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+  <main class="title-screen">
+    <img id="logo" src="./assets/banner.png" alt="Emerald Online 3DS" class="logo">
+    <p id="version" class="version"></p>
+
+    <div id="status" class="status" role="status" aria-live="polite">Checking installation...</div>
+
+    <div id="requirements" class="requirements hidden" role="alert"></div>
+    <div id="recovery-notice" class="recovery-notice hidden" role="alert">
+      <strong>The previous launcher or emulator session ended unexpectedly.</strong>
+      <span>Your save was not modified by the launcher. Retry Play, or export privacy-safe diagnostics if the problem repeats.</span>
+    </div>
+
+    <div class="main-actions">
+      <button id="continue-btn" class="primary" disabled>Play</button>
+      <button id="change-rom-btn" class="secondary hidden">Change ROM</button>
+    </div>
+    <div class="utility-actions">
+      <button id="settings-btn" class="secondary">Settings</button>
+      <button id="controls-btn" class="secondary">Controls</button>
+      <button id="data-btn" class="secondary">Data &amp; recovery</button>
+      <button id="updates-btn" class="secondary">Updates</button>
+    </div>
+
+    <div id="settings-panel" class="panel hidden">
+      <h2>Settings</h2>
+      <label>Trainer name
+        <input id="name-input" type="text" maxlength="12">
+      </label>
+      <label>Server host
+        <input id="server-input" type="text">
+      </label>
+      <label>Port
+        <input id="port-input" type="number" min="1" max="65535">
+      </label>
+      <label>Transport
+        <select id="transport-select">
+          <option value="wss">wss</option>
+          <option value="tcp">tcp</option>
+        </select>
+      </label>
+      <label>Path
+        <input id="path-input" type="text">
+      </label>
+      <label>Starting page
+        <select id="page-select">
+          <option value="online">Online</option>
+          <option value="users">Online Users</option>
+          <option value="chat">Chat</option>
+          <option value="party">Party</option>
+          <option value="bag">Bag</option>
+          <option value="map">Map/Radar</option>
+          <option value="stats">Player Stats</option>
+          <option value="quest">Quests</option>
+          <option value="titles">Titles</option>
+          <option value="friends">Friends</option>
+          <option value="guild">Guild</option>
+          <option value="teleport">Teleport</option>
+          <option value="update">Updates</option>
+        </select>
+      </label>
+      <label class="inline">
+        <input id="online-checkbox" type="checkbox"> Enable online
+      </label>
+      <div class="actions">
+        <button id="save-settings-btn" class="primary">Save</button>
+        <button id="close-settings-btn" class="secondary">Close</button>
+      </div>
+    </div>
+
+    <div id="controls-panel" class="panel hidden">
+      <h2>Keyboard Controls</h2>
+      <dl>
+        <dt>Arrow keys</dt><dd>Move / Circle Pad</dd>
+        <dt>A</dt><dd>Confirm / GBA A</dd>
+        <dt>S</dt><dd>Back / GBA B</dd>
+        <dt>M</dt><dd>Start</dd>
+        <dt>N</dt><dd>Select</dd>
+        <dt>Z</dt><dd>Toggle online / 3DS X</dd>
+        <dt>X</dt><dd>Cycle dashboard / 3DS Y</dd>
+        <dt>Q / W</dt><dd>L / R</dd>
+        <dt>F10 / F11</dt><dd>Screen layout / Fullscreen</dd>
+      </dl>
+      <p>Click the emulated lower screen for touch controls. Gamepads can be configured in Azahar.</p>
+      <button id="close-controls-btn" class="secondary">Close</button>
+    </div>
+
+    <div id="data-panel" class="panel hidden">
+      <h2>Data &amp; recovery</h2>
+      <p>Backups stay on this computer and never include <code>emerald.gba</code>. They can include your save and private online identity, so never upload or share them.</p>
+      <div class="stacked-actions">
+        <button id="backup-btn" class="primary">Create local backup</button>
+        <button id="restore-btn" class="secondary">Restore backup</button>
+        <button id="data-folder-panel-btn" class="secondary">Open local data</button>
+        <button id="diagnostics-btn" class="secondary">Export safe diagnostics</button>
+        <button id="delete-data-btn" class="danger">Delete all local data</button>
+      </div>
+      <p class="fine-print">Deletion removes this launcher's ROM, save, identity, settings, logs, and downloaded updates. It does not delete backup files saved elsewhere and cannot guarantee forensic erasure on SSDs.</p>
+      <button id="close-data-btn" class="secondary">Close</button>
+    </div>
+
+    <div id="updates-panel" class="panel hidden">
+      <h2>Launcher updates</h2>
+      <p id="update-status">Updates are checked only when you ask. Downloads must match the published SHA-256 checksum and have a valid Windows Authenticode signature.</p>
+      <div class="stacked-actions">
+        <button id="check-update-btn" class="primary">Check for updates</button>
+        <button id="download-update-btn" class="secondary hidden">Download verified update</button>
+      </div>
+      <button id="close-updates-btn" class="secondary">Close</button>
+    </div>
+
+    <nav class="footer-actions" aria-label="Support links">
+      <button class="text-button" data-url="https://emeraldonline3ds.com/">Website</button>
+      <button class="text-button" data-url="https://emeraldonline3ds.com/community">Community</button>
+      <button class="text-button" data-url="https://emeraldonline3ds.com/status">Status</button>
+      <button id="data-folder-btn" class="text-button">Local data</button>
+    </nav>
+
+    <div id="log" class="log" aria-live="polite"></div>
+  </main>
+
+  <script src="index.mjs" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "name": "emerald-online-3ds",
+  "version": "0.8.9",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/src/server.mjs",
+    "install-page": "node web/install-server.mjs",
+    "db:migrate": "node server/tools/migrate.mjs",
+    "release:validate": "node server/tools/publish-releases.mjs --validate-only",
+    "release:sync": "node server/tools/sync-release-catalog.mjs",
+    "release:publish": "node server/tools/publish-releases.mjs",
+    "build:public": "bash scripts/build-public.sh",
+    "build:private": "bash scripts/build-runtime.sh",
+    "audit:release": "bash scripts/audit-release.sh",
+    "smoke:emulator": "node tools/emulator-online-smoke.mjs",
+    "smoke:emulator:link": "node tools/emulator-link-spike.mjs",
+    "smoke:live:gate3": "node tools/live-gate3-smoke.mjs",
+    "smoke:live:link": "node tools/live-link-spike.mjs",
+    "smoke:web:visual": "node tools/web-visual-smoke.mjs",
+    "live:peer": "node tools/live-peer.mjs",
+    "load:test": "node tools/load-test.mjs",
+    "prepare:link-test": "node tools/prepare-link-test.mjs",
+    "test": "node --test server/test/*.test.mjs web/*.test.mjs desktop/test/*.test.mjs",
+    "test:desktop": "cd desktop && npm test",
+    "start:desktop": "cd desktop && npm start",
+    "build:desktop": "cd desktop && npm ci && npm run dist:win",
+    "build:desktop:linux": "cd desktop && npm ci && npm run dist:linux",
+    "smoke:desktop:linux": "cd desktop && npm run smoke:linux -- --duration=8000",
+    "smoke:desktop:windows": "cd desktop && npm run smoke:windows"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "pngjs": "^7.0.0",
+    "qrcode": "1.5.4",
+    "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

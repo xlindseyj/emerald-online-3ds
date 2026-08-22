@@ -1,0 +1,353 @@
+:root {
+  --emerald: #00a86b;
+  --emerald-dark: #006b44;
+  --emerald-light: #4ddba0;
+  --bg-dark: #0a1f17;
+  --bg-light: #143828;
+  --text: #e8f5ee;
+  --muted: #9dbbad;
+  --panel-bg: rgba(10, 31, 23, 0.92);
+  --border: rgba(77, 219, 160, 0.3);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text);
+  background: var(--bg-dark);
+}
+
+#bg-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.title-screen {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  max-width: min(520px, 80vw);
+  max-height: min(220px, 30vh);
+  object-fit: contain;
+  filter: drop-shadow(0 0 20px rgba(0, 168, 107, 0.4));
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+.version {
+  margin: 0.5rem 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+}
+
+.status {
+  margin-bottom: 1.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.95rem;
+  min-width: 260px;
+}
+
+.status.ready {
+  color: var(--emerald-light);
+  border-color: var(--emerald-light);
+}
+
+.status.error {
+  color: #ff7a7a;
+  border-color: #ff7a7a;
+}
+
+.requirements {
+  width: min(560px, 90vw);
+  margin: -0.8rem 0 1rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid rgba(255, 122, 122, 0.55);
+  border-radius: 8px;
+  background: rgba(82, 18, 25, 0.72);
+  color: #ffd4d4;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.requirements p {
+  margin: 0.3rem 0;
+}
+
+.recovery-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: min(560px, 90vw);
+  margin: -0.8rem 0 1rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid rgba(243, 201, 105, 0.6);
+  border-radius: 8px;
+  background: rgba(75, 57, 16, 0.82);
+  color: #ffe9b3;
+  text-align: left;
+  font-size: 0.88rem;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.main-actions,
+.utility-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 0.85rem 2rem;
+  margin: 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: transform 0.1s, box-shadow 0.2s, opacity 0.2s;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: linear-gradient(180deg, var(--emerald-light), var(--emerald));
+  color: #052115;
+  box-shadow: 0 4px 14px rgba(0, 168, 107, 0.35);
+}
+
+button.primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 168, 107, 0.5);
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+button.secondary:hover:not(:disabled) {
+  background: rgba(77, 219, 160, 0.1);
+  border-color: var(--emerald-light);
+}
+
+button.danger {
+  background: #7d2430;
+  color: #fff2f2;
+  border: 1px solid #d96774;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #9c2c3b;
+}
+
+.panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  text-align: left;
+  backdrop-filter: blur(6px);
+}
+
+.panel h2 {
+  margin-top: 0;
+  color: var(--emerald-light);
+}
+
+.panel label {
+  display: block;
+  margin-bottom: 0.8rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.panel label.inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+.panel input,
+.panel select {
+  display: block;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0d281d;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.panel input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.panel .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.panel .actions button {
+  padding: 0.6rem 1.2rem;
+  margin: 0;
+}
+
+.panel dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.4rem 1rem;
+  font-size: 0.9rem;
+}
+
+.panel dt {
+  color: var(--emerald-light);
+  font-weight: 600;
+}
+
+.panel dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.panel p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.panel code {
+  color: var(--emerald-light);
+}
+
+.stacked-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin: 1rem 0;
+}
+
+.stacked-actions button {
+  width: 100%;
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+}
+
+.fine-print {
+  font-size: 0.78rem;
+}
+
+.log {
+  position: absolute;
+  bottom: 3.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  padding: 0.5rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.log.visible {
+  opacity: 1;
+}
+
+.footer-actions {
+  position: absolute;
+  bottom: 0.85rem;
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+button.text-button {
+  margin: 0;
+  padding: 0.15rem;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.text-button:hover {
+  color: var(--emerald-light);
+}
+
+@media (max-height: 640px) {
+  .title-screen {
+    justify-content: flex-start;
+    padding-top: 1rem;
+  }
+
+  .logo {
+    max-height: 22vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo {
+    animation: none;
+  }
+
+  button,
+  .log {
+    transition: none;
+  }
+}

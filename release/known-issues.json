@@ -1,0 +1,70 @@
+[
+  {
+    "key": "fluctuating-fps-after-scenes",
+    "title": "FPS can fluctuate by device and scene",
+    "severity": "medium",
+    "runtimeVersion": "0.8.3",
+    "artifactHash": "5dd5253ba52dd88968693096387af84a546aaf93ca15790879f324af6448cb47",
+    "consoleModel": "old-3ds-xl",
+    "installMethod": "cia",
+    "transport": "wss",
+    "summary": "Frame rate can fluctuate during or after some scenes and cutscenes. The amount of slowdown appears to vary by console model, device condition, and the specific scene, so we are tracking this as a confirmed performance defect rather than assuming one universal cause.",
+    "observations": [
+      "FPS may be stable in normal play and then drop or fluctuate during or after a cutscene or scene transition.",
+      "The severity and duration vary between devices and scenes.",
+      "Online activity appears to be one contributing factor, but the root cause has not yet been isolated.",
+      "A current v0.8.3 Old 3DS Gate 4 run remained consistently between 48 and 52 FPS; the 60 FPS acceptance target is not yet met."
+    ],
+    "workaround": [
+      "Wait until the scene or cutscene has finished.",
+      "Press X once to turn Online mode off and wait for the lower screen to show OFFLINE.",
+      "Press X again to re-enable Online mode. This usually improves or restores FPS after the scene.",
+      "If FPS does not recover, save normally when safe and restart the application."
+    ],
+    "requestedEvidence": [
+      "Console model and whether you launched the CIA or 3DSX.",
+      "Scene, map, battle, or cutscene where fluctuation began.",
+      "Displayed FPS before, during, and after the event.",
+      "Whether toggling Online off and back on restored FPS, and how long recovery took.",
+      "Whether audio also stuttered and whether the issue returned in the same scene."
+    ],
+    "expectedBehavior": "The runtime should maintain stable frame pacing through normal gameplay, scene transitions, and cutscenes while Online mode remains enabled.",
+    "actualBehavior": "FPS sometimes drops or fluctuates during or after particular scenes or cutscenes, with different severity across devices. Toggling Online mode off and back on after the scene usually improves FPS.",
+    "diagnosticText": "Confirmed community known issue. Root cause under investigation; collect device, scene, FPS, audio, install-method, and Online-toggle recovery observations."
+  },
+  {
+    "key": "rfu-union-room-battle-communication-error",
+    "title": "Native Union Room battle can fail after party exchange",
+    "severity": "high",
+    "runtimeVersion": "0.8.7",
+    "artifactHash": "66db704f409dae82078662ddb9bd189ef363bd8eff7bebc5111af2abedd82641",
+    "consoleModel": "emulator",
+    "installMethod": "3dsx",
+    "transport": "wss",
+    "summary": "A two-Azahar native Union Room battle can fail after both trainers choose valid two-Pokémon teams. One peer reached Emerald's native VS screen while the other received the game's communication error, so RFU battle acceptance remains blocked.",
+    "observations": [
+      "Two isolated Azahar 2126.0 clients authenticated, joined the same private RFU room, discovered Emerald's native avatars, and entered the Union Room battle flow.",
+      "Both trainers selected two Pokémon and confirmed their teams successfully.",
+      "LINZ reached Emerald's native LINZ-versus-CODEX VS screen with two party indicators on each side.",
+      "CODEX received Emerald's communication error immediately after team exchange and could not continue the battle.",
+      "The relay kept both authenticated link peers connected, relayed packets, and recorded zero link packet rate-limit rejections during the failure.",
+      "The vendored RFU implementation matches current upstream gpSP apart from the project's explicit stale-room cleanup, and upstream still tracks Emerald RFU communication errors as an open limitation."
+    ],
+    "workaround": [
+      "Do not use native RFU battles with an important save while this issue remains open.",
+      "Use ordinary online presence, Map Chat, Global Chat, and emotes; those features do not enter Emerald's experimental RFU session.",
+      "If testing is necessary, use independent progressed saves, a fresh private link room, and verify both automatic link backups before entering the Union Room.",
+      "After any communication error, exit or restart safely and compare the save against its pre-link backup before continuing."
+    ],
+    "requestedEvidence": [
+      "Release version, exact CIA or 3DSX SHA-256, console model or Azahar version, and WSS or LAN transport.",
+      "Which trainer was Emerald's RFU host, both selected team sizes, and the last safe screen shown on each peer.",
+      "Whether the lower-screen link counters continued changing and whether either peer disconnected from the public service.",
+      "Save hashes before the session, after restart, and after restoring a backup if restoration was needed.",
+      "FPS, audio, latency observations, and the exact safe communication-error text without ROM, save, identity, or private-network data."
+    ],
+    "expectedBehavior": "Both peers should complete party exchange, enter the native battle, exit cleanly, preserve valid saves, and restart with consistent state.",
+    "actualBehavior": "One peer reached the native VS screen while the other received Emerald's communication error immediately after party exchange, preventing the battle from starting on both clients.",
+    "diagnosticText": "Confirmed in a two-Azahar 2126.0 public-WSS run with release 0.8.7. Native trade remains separately verified in two Azahar clients, but battle acceptance fails and Gate 4 remains open."
+  }
+]

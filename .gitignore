@@ -1,0 +1,44 @@
+# Private/user-supplied copyrighted inputs and generated content
+*.gba
+*.zip
+*.7z
+generated/
+*.sav
+identity.cfg
+online.cfg
+stats.cfg
+
+# Build/runtime output
+client/build/
+client/*.3dsx
+client/*.elf
+client/*.map
+gpsp-runtime/build/
+gpsp-runtime/*.3dsx
+gpsp-runtime/*.elf
+gpsp-runtime/*.smdh
+gpsp-runtime/*.cia
+gpsp-runtime/*.bnr
+gpsp-runtime/*.3ds
+gpsp-runtime/*-smoke.png
+third_party/gpsp/build/
+third_party/gpsp/*.a
+third_party/gpsp/**/*.a
+third_party/gpsp/*.o
+third_party/gpsp/**/*.o
+third_party/gpsp/*.d
+third_party/gpsp/**/*.d
+node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/build/
+desktop/out/
+desktop/resources/azahar/
+.tools/
+third_party/*/build*/
+
+# The exact modified gpSP corresponding source is vendored. Other large
+# development references are fetched locally only when explicitly needed.
+third_party/*
+!third_party/gpsp/
+!third_party/gpsp/**

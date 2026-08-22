@@ -1,0 +1,109 @@
+{
+  "uid": "emerald-online-3ds",
+  "title": "Emerald Online 3DS",
+  "tags": ["emerald-online-3ds", "homebrew", "presence"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "title": "Authenticated Players", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "targets": [{"expr": "emerald_online_authenticated_players", "legendFormat": "players"}],
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 2, "title": "Positioned Players", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "targets": [{"expr": "emerald_online_positioned_players", "legendFormat": "positioned"}],
+      "fieldConfig": {"defaults": {"min": 0}}
+    },
+    {
+      "id": 3, "title": "Map Rooms", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "targets": [{"expr": "emerald_online_map_rooms", "legendFormat": "rooms"}],
+      "fieldConfig": {"defaults": {"min": 0}}
+    },
+    {
+      "id": 4, "title": "Connection Capacity", "type": "gauge",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "targets": [{"expr": "100 * emerald_online_connections / clamp_min(emerald_online_connection_capacity, 1)", "legendFormat": "used"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]}}}
+    },
+    {
+      "id": 5, "title": "Database Ready", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "targets": [{"expr": "emerald_online_database_ready", "legendFormat": "ready"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "NO", "color": "red"}, "1": {"text": "YES", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 6, "title": "Uptime", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "targets": [{"expr": "emerald_online_uptime_seconds", "legendFormat": "uptime"}],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0}}
+    },
+    {
+      "id": 7, "title": "Player Sessions", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {"expr": "emerald_online_connections", "legendFormat": "connections"},
+        {"expr": "emerald_online_authenticated_players", "legendFormat": "authenticated"},
+        {"expr": "emerald_online_positioned_players", "legendFormat": "positioned"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0}}
+    },
+    {
+      "id": 8, "title": "Protocol Activity", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {"expr": "rate(emerald_online_state_updates_total[5m])", "legendFormat": "states/s"},
+        {"expr": "rate(emerald_online_chat_messages_total[5m])", "legendFormat": "chats/s"},
+        {"expr": "rate(emerald_online_emotes_total[5m])", "legendFormat": "emotes/s"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}}
+    },
+    {
+      "id": 9, "title": "Connection and Authentication Problems", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "increase(emerald_online_connections_rejected_total[15m])", "legendFormat": "server full"},
+        {"expr": "increase(emerald_online_ip_connections_rejected_total[15m])", "legendFormat": "IP limited"},
+        {"expr": "increase(emerald_online_hello_timeouts_total[15m])", "legendFormat": "hello timeout"},
+        {"expr": "increase(emerald_online_authentication_failures_total[15m])", "legendFormat": "auth failure"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0}}
+    },
+    {
+      "id": 10, "title": "Experimental Link Transport", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [
+        {"expr": "emerald_online_link_players", "legendFormat": "players"},
+        {"expr": "emerald_online_link_rooms", "legendFormat": "rooms"},
+        {"expr": "rate(emerald_online_link_packets_total[5m])", "legendFormat": "packets/s"},
+        {"expr": "increase(emerald_online_link_rate_limited_total[15m])", "legendFormat": "rate limited"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0}}
+    },
+    {
+      "id": 11, "title": "Presence Process Memory", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "targets": [
+        {"expr": "emerald_online_process_resident_memory_bytes", "legendFormat": "resident"},
+        {"expr": "emerald_online_process_heap_used_bytes", "legendFormat": "heap"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0, "unit": "bytes"}}
+    },
+    {
+      "id": 12, "title": "Session Starts and Disconnects", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+      "targets": [
+        {"expr": "rate(emerald_online_connections_total[5m])", "legendFormat": "connections/s"},
+        {"expr": "rate(emerald_online_authenticated_sessions_total[5m])", "legendFormat": "sessions/s"},
+        {"expr": "rate(emerald_online_disconnects_total[5m])", "legendFormat": "disconnects/s"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}}
+    }
+  ]
+}

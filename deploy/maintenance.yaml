@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: emerald-retention
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-retention
+    app.kubernetes.io/part-of: emerald-online-3ds
+spec:
+  schedule: "23 5 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: emerald-retention
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: retention
+              image: <your-registry>/pokemon-emerald-online@sha256:ee0994d1387d79c79ab7cd2054d205b4d322fd14b510584908e53dfb228dae6f
+              imagePullPolicy: IfNotPresent
+              command: ["node", "server/tools/retention.mjs"]
+              envFrom:
+                - secretRef:
+                    name: emerald-runtime
+              env:
+                - name: DATABASE_CA_PATH
+                  value: /etc/emerald-db/ca.crt
+              volumeMounts:
+                - name: database-ca
+                  mountPath: /etc/emerald-db
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 250m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+          volumes:
+            - name: database-ca
+              secret:
+                secretName: emerald-pg-ca

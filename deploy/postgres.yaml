@@ -1,0 +1,84 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: emerald-pg
+  namespace: pokemonemeraldonline3ds
+  labels:
+    app.kubernetes.io/name: emerald-postgres
+    app.kubernetes.io/part-of: emerald-online-3ds
+spec:
+  description: Durable Emerald Online identity and community database
+  instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.6@sha256:30b304a2e300ed80b6d1b740e4369e9b0f25599fb518de78c01fd9f25531791b
+  primaryUpdateStrategy: unsupervised
+  enableSuperuserAccess: false
+  minSyncReplicas: 0
+  maxSyncReplicas: 1
+  bootstrap:
+    initdb:
+      database: emerald
+      owner: emerald
+      encoding: UTF8
+      localeCType: C
+      localeCollate: C
+      secret:
+        name: emerald-pg-app
+  storage:
+    size: 5Gi
+    storageClass: longhorn
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: preferred
+    topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values: [<node-1>, <node-2>]
+  postgresql:
+    parameters:
+      log_connections: "on"
+      log_disconnections: "on"
+      log_statement: ddl
+      password_encryption: scram-sha-256
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://cnpg-backups/emerald-online-3ds
+      endpointURL: http://minio.<backup-namespace>.svc.cluster.local:9000
+      s3Credentials:
+        accessKeyId:
+          name: emerald-backup
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: emerald-backup
+          key: ACCESS_SECRET_KEY
+      data:
+        compression: gzip
+      wal:
+        compression: gzip
+        maxParallel: 2
+    retentionPolicy: 30d
+    target: prefer-standby
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: emerald-pg-daily
+  namespace: pokemonemeraldonline3ds
+spec:
+  schedule: "0 17 4 * * *"
+  immediate: true
+  backupOwnerReference: cluster
+  method: barmanObjectStore
+  target: prefer-standby
+  cluster:
+    name: emerald-pg

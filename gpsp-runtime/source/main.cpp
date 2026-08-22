@@ -1,0 +1,3961 @@
+#include <3ds.h>
+#include <3ds/services/am.h>
+#include <3ds/applets/swkbd.h>
+#include <citro2d.h>
+#include <citro3d.h>
+
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <malloc.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <mbedtls/base64.h>
+#include <mbedtls/sha1.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/ssl.h>
+
+#include "ui/pages.h"
+#include "ui/localization.h"
+#include "network/http_client.h"
+#include "runtime/log.h"
+
+extern "C" {
+#include <libretro.h>
+
+// Use RetroArch's proven 3DS bootstrap to enable the process-memory SVCs
+// before gpSP maps its writable/executable translation caches.
+extern unsigned int __ctr_svchax;
+Result svchax_init(bool patch_srv);
+extern uint8_t gpspEwram[] __asm__("ewram");
+extern uint8_t gpspIwram[] __asm__("iwram");
+}
+
+#define ROM_PATH "sdmc:/3ds/emerald-online-3ds/emerald.gba"
+#define SAVE_PATH "sdmc:/3ds/emerald-online-3ds/emerald.sav"
+#define CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/online.cfg"
+#define IDENTITY_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg"
+#define IDENTITY_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/identity.cfg.tmp"
+#define STATS_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg"
+#define STATS_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/stats.cfg.tmp"
+#define DISPLAY_CONFIG_PATH "sdmc:/3ds/emerald-online-3ds/display.cfg"
+#define DISPLAY_CONFIG_TEMP_PATH "sdmc:/3ds/emerald-online-3ds/display.cfg.tmp"
+#define LINK_BACKUP_DIRECTORY "sdmc:/3ds/emerald-online-3ds/link-backups"
+#define LINK_BACKUP_RETENTION 5
+#define DEFAULT_HOST "live.emeraldonline3ds.com"
+#define DEFAULT_PORT 443
+#define DEFAULT_WEBSOCKET_PATH "/game"
+#define SOC_BUFFER_SIZE 0x100000
+#define AUDIO_BUFFERS 4
+#define AUDIO_FRAMES 1024
+#define DEBUG_LOG_PATH "sdmc:/3ds/emerald-online-3ds/gpsp-debug.log"
+#define AVATAR_PATH "sdmc:/3ds/emerald-online-3ds/avatars.t3x"
+
+// Remote trainer overlay tuning.
+static constexpr float OVERLAY_TILE_W = 400.0f / 15.0f; // ~26.67 px per overworld tile on the top screen
+static constexpr float OVERLAY_TILE_H = 240.0f / 10.0f; // 24 px per overworld tile
+static constexpr uint64_t REMOTE_INTERPOLATION_MS = 1000; // match server snapshot cadence
+static constexpr float REMOTE_SPRITE_SCALE = 1.5f;
+static constexpr uint64_t VISIBLE_TRAINER_REBUILD_MS = 250; // recompute interpolated positions a few times per second
+
+enum OverlayQuality { OVERLAY_QUALITY_HIGH, OVERLAY_QUALITY_PERFORMANCE };
+static OverlayQuality overlayQuality = OVERLAY_QUALITY_PERFORMANCE;
+
+struct CachedVisibleTrainer {
+    const RemoteTrainer* trainer;
+    float tileX, tileY;
+    float screenX, screenY;
+    bool moving;
+    float alpha;
+    float labelAlpha;
+};
+
+static CachedVisibleTrainer cachedVisible[8];
+static int cachedVisibleCount = 0;
+static uint8_t cachedVisibleMapGroup = 0;
+static uint8_t cachedVisibleMapNum = 0;
+static int16_t cachedVisibleX = 0;
+static int16_t cachedVisibleY = 0;
+static uint64_t cachedVisibleBuiltAt = 0;
+static unsigned remoteTrainerVersion = 0;
+static unsigned cachedRemoteTrainerVersion = 0;
+#define UPDATE_DIRECTORY "sdmc:/3ds/emerald-online-3ds/update"
+#define UPDATE_CIA_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.cia"
+#define UPDATE_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/update/emerald-online-3ds.3dsx"
+#define INSTALLED_3DSX_PATH "sdmc:/3ds/emerald-online-3ds/emerald-online-3ds.3dsx"
+#define TOUCH_DEBOUNCE_MS 150
+
+static C3D_RenderTarget* topTarget;
+static C3D_RenderTarget* bottomTarget;
+static C3D_Tex gameTexture[2];
+static uint16_t* gameUploadBuffer[2];
+static Tex3DS_SubTexture gameSubTex = {240, 160, 0.0f, 1.0f, 240.0f / 256.0f, 1.0f - 160.0f / 256.0f};
+static C2D_Image gameImage = {&gameTexture[0], &gameSubTex};
+static int gameTextureBack = 1;
+static int gameTextureFront = 0;
+C2D_Font uiFont;
+static C2D_SpriteSheet avatarSheet;
+C2D_TextBuf textBuffer;
+static const uint16_t* videoPixels;
+static size_t videoPitch;
+static bool videoReady;
+static uint32_t heldKeys;
+static uint32_t repeatKeys;
+static uint64_t touchDebounceUntil;
+static bool quitRequested;
+uint8_t* gbaEwram;
+uint8_t* gbaIwram;
+static uint8_t* saveRam;
+static size_t saveRamSize;
+static uint32_t saveHash;
+static uint64_t nextSaveCheck;
+unsigned measuredFps;
+static unsigned fpsFrames;
+static unsigned renderedFrames;
+static uint64_t fpsStarted;
+static BottomPage bottomPage = PAGE_ONLINE;
+static bool launcherOpen = false;
+static unsigned launcherGroup = 0;
+static unsigned launcherSelection = 0;
+
+static const BottomPage launcherPages[4][5] = {
+    {PAGE_ONLINE, PAGE_USERS, PAGE_CHAT, PAGE_ONLINE, PAGE_ONLINE},
+    {PAGE_PARTY, PAGE_BAG, PAGE_MAP, PAGE_QUESTS, PAGE_TELEPORT},
+    {PAGE_FRIENDS, PAGE_GUILD, PAGE_TITLES, PAGE_STATS, PAGE_ONLINE},
+    {PAGE_UPDATE, PAGE_SETTINGS, PAGE_ONLINE, PAGE_ONLINE, PAGE_ONLINE}
+};
+static const unsigned launcherPageCounts[4] = {3, 5, 4, 2};
+
+// Frame-timing instrumentation.  svcGetSystemTick runs at the CPU clock and
+// gives microsecond-resolution measurements on Old/New 3DS.  Timers are logged
+// once per second so we can see exactly where the 16.7 ms budget is spent.
+#define FRAME_TIMING_ENABLED 1
+#define FRAME_TIMER_SAMPLES 60
+#define TICKS_PER_US 268u
+
+struct FrameSection {
+    const char* name;
+    uint64_t samples[FRAME_TIMER_SAMPLES];
+    unsigned index;
+    unsigned count;
+    uint64_t startTick;
+};
+
+enum FrameSectionId {
+    FS_EMULATION,
+    FS_PRESENCE,
+    FS_NETWORK,
+    FS_UPLOAD,
+    FS_DRAW_TOP,
+    FS_DRAW_BOTTOM,
+    FS_RENDER_SUBMIT,
+    FS_FRAME_TOTAL,
+    FS_COUNT
+};
+
+static FrameSection frameSections[FS_COUNT] = {
+    {"emu", {}, 0, 0, 0},
+    {"presence", {}, 0, 0, 0},
+    {"network", {}, 0, 0, 0},
+    {"upload", {}, 0, 0, 0},
+    {"draw_top", {}, 0, 0, 0},
+    {"draw_bottom", {}, 0, 0, 0},
+    {"render_submit", {}, 0, 0, 0},
+    {"frame_total", {}, 0, 0, 0}
+};
+static uint64_t frameTimingLogStarted = 0;
+
+// Emulation/rendering decoupling.  GBA titles run at ~59.7275 Hz.  We track
+// how much real time has elapsed and run enough emulated frames to keep pace,
+// up to a small cap so a single slow render frame does not trigger an avalanche.
+static constexpr uint64_t GBA_FRAME_PERIOD_US = 16742; // 1000000 / 59.7275
+static constexpr unsigned MAX_CATCHUP_FRAMES = 3;
+static int64_t emulationTimeDebtUs = 0;
+static uint64_t lastFrameRealTimeUs = 0;
+
+static inline uint64_t frameTimingNow(void) { return svcGetSystemTick(); }
+
+static inline uint64_t frameTimingUs(uint64_t ticks) { return ticks / TICKS_PER_US; }
+
+static void frameTimingStart(FrameSectionId id) {
+#if FRAME_TIMING_ENABLED
+    frameSections[id].startTick = frameTimingNow();
+#endif
+}
+
+static void frameTimingStop(FrameSectionId id) {
+#if FRAME_TIMING_ENABLED
+    FrameSection& s = frameSections[id];
+    uint64_t elapsed = frameTimingNow() - s.startTick;
+    s.samples[s.index] = elapsed;
+    s.index = (s.index + 1) % FRAME_TIMER_SAMPLES;
+    if (s.count < FRAME_TIMER_SAMPLES) ++s.count;
+#endif
+}
+
+static void frameTimingLog(uint64_t now) {
+#if FRAME_TIMING_ENABLED
+    if (now - frameTimingLogStarted < 1000) return;
+    frameTimingLogStarted = now;
+    uint64_t totalAvg = 0;
+    for (unsigned i = 0; i < FS_COUNT; ++i) {
+        const FrameSection& s = frameSections[i];
+        if (s.count == 0) continue;
+        uint64_t minUs = (uint64_t)-1, maxUs = 0, sumUs = 0;
+        for (unsigned n = 0; n < s.count; ++n) {
+            uint64_t us = frameTimingUs(s.samples[n]);
+            if (us < minUs) minUs = us;
+            if (us > maxUs) maxUs = us;
+            sumUs += us;
+        }
+        uint64_t avgUs = sumUs / s.count;
+        if (i == FS_FRAME_TOTAL) totalAvg = avgUs;
+        runtimeLogPrintf("timing %s avg=%llu min=%llu max=%llu",
+            s.name, (unsigned long long) avgUs,
+            (unsigned long long) minUs, (unsigned long long) maxUs);
+    }
+    runtimeLogPrintf("timing fps=%u frame_budget_us=%llu", measuredFps,
+        (unsigned long long) totalAvg);
+#endif
+}
+
+// Display settings persisted in display.cfg.
+bool hudVisible = true;
+bool fpsVisible = true;
+unsigned trailLength = 8;
+unsigned labelFadeDistance = 4;
+unsigned settingsSelected = 0;
+
+unsigned bagPocket;
+unsigned bagPage;
+unsigned onlineUserPage;
+unsigned chatPage;
+unsigned questLogPage;
+bool globalChat;
+int chatDetailIndex = -1;
+char itemNames[377][15];
+bool itemNamesLoaded;
+OnlineNpc onlineNpcs[8];
+unsigned onlineNpcCount = 0;
+ResourceNode resourceNodes[8];
+unsigned resourceNodeCount = 0;
+QuestLogEntry questLog[8];
+unsigned questLogCount = 0;
+int questLogSelected = -1;
+bool questDetailOpen = false;
+TitleEntry playerTitles[16];
+unsigned playerTitleCount = 0;
+unsigned playerTitlePage = 0;
+unsigned playerTitleSelected = 0;
+FriendEntry playerFriends[32];
+unsigned playerFriendCount = 0;
+unsigned playerFriendPage = 0;
+unsigned playerFriendSelected = 0;
+GuildInfo guildInfo = {};
+GuildMember guildMembers[50];
+unsigned guildMemberCount = 0;
+unsigned guildMemberPage = 0;
+NpcDialogue npcDialogue = {};
+
+static void requestTitleList(void);
+static void requestFriendList(void);
+static void requestGuildInfo(void);
+static bool dynarecEnabled = true;
+static char linkRoom[10];
+bool linkConfigured;
+static bool linkJoined;
+static bool linkStarted;
+static unsigned linkClientId;
+static unsigned linkPeerId;
+unsigned linkPacketsSent;
+unsigned linkPacketsReceived;
+char linkStatus[48];
+static const retro_netpacket_callback* coreNetpacketInterface;
+
+bool onlineSend(const char* message);
+static bool receiveOnlineTraffic(void);
+static const char* findJsonValue(const char* json, const char* end, const char* key);
+static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size);
+static void checkForUpdate(void);
+static void startUpdateDownload(void);
+static void installUpdate(void);
+
+static bool inputText(const char* hint, char* output, size_t size, unsigned maxLength) {
+    SwkbdState keyboard;
+    swkbdInit(&keyboard, SWKBD_TYPE_NORMAL, 2, maxLength);
+    if (hint) swkbdSetHintText(&keyboard, hint);
+    return swkbdInputText(&keyboard, output, size) == SWKBD_BUTTON_CONFIRM;
+}
+
+static void frontendNetpacketSend(int, const void* data, size_t size, uint16_t clientId) {
+    if (!linkStarted || !data || !size || size > 512) return;
+    static const char hex[] = "0123456789abcdef";
+    char encoded[1025];
+    const uint8_t* bytes = (const uint8_t*) data;
+    for (size_t index = 0; index < size; ++index) {
+        encoded[index * 2] = hex[bytes[index] >> 4];
+        encoded[index * 2 + 1] = hex[bytes[index] & 15];
+    }
+    encoded[size * 2] = 0;
+    char packet[1152];
+    snprintf(packet, sizeof(packet), "{\"type\":\"link_packet\",\"to\":%u,\"data\":\"%s\"}\n", clientId, encoded);
+    if (onlineSend(packet)) ++linkPacketsSent;
+}
+
+static void frontendNetpacketPollReceive(void) {
+    // gpSP calls this while its RFU is waiting for a response. The socket is
+    // nonblocking, so drain immediately instead of deferring replies to the
+    // 100 ms presence poll and allowing Emerald's RFU handshake to time out.
+    if (linkStarted) receiveOnlineTraffic();
+}
+
+static void debugStage(const char* stage) {
+    runtimeLogPrintf("%s", stage);
+    FILE* file = fopen(DEBUG_LOG_PATH, "a");
+    if (!file) return;
+    fprintf(file, "%llu %s\n", (unsigned long long) osGetTime(), stage);
+    fclose(file);
+}
+
+static ndspWaveBuf audioWaves[AUDIO_BUFFERS];
+static int16_t* audioData;
+static unsigned audioCursor;
+static double audioRate = 32768.0;
+
+// Audio is decoupled onto a dedicated thread so network stalls on the main
+// thread cannot starve the DSP buffer queue.
+#define AUDIO_RING_SLOTS 8
+static int16_t audioRing[AUDIO_RING_SLOTS][AUDIO_FRAMES * 2];
+static unsigned audioRingFrames[AUDIO_RING_SLOTS];
+static volatile unsigned audioRingWriteCount = 0;
+static volatile unsigned audioRingReadCount = 0;
+static LightEvent audioEvent;
+static LightLock audioLock;
+static Thread audioThread = NULL;
+static volatile bool audioThreadRun = false;
+static volatile bool audioPaused = false;
+
+static volatile bool systemAsleep = false;
+static aptHookCookie aptCookie;
+
+OnlineMode onlineMode = ONLINE_OFFLINE;
+static int onlineSocket = -1;
+static uint32_t* socBuffer;
+static bool onlineEnabled = true;
+static int onlineLastError;
+static uint64_t connectStarted;
+static uint64_t nextReconnect;
+static uint64_t lastPing;
+static uint64_t nextOnlinePoll;
+static unsigned onlineSequence;
+char serverHost[254] = DEFAULT_HOST;
+static in_addr serverAddress = {};
+static uint64_t serverAddressResolvedAt;
+unsigned serverPort = DEFAULT_PORT;
+static bool secureWebSocket = true;
+static char webSocketPath[128] = DEFAULT_WEBSOCKET_PATH;
+char trainerName[13] = "Trainer";
+static bool trainerNameFromSave;
+static bool trainerIsGirl;
+static char identityId[37];
+static char identityToken[65];
+static char credentialId[37];
+char identityFingerprint[11];
+char trainerRole[10] = "player";
+char recoveryCode[25];
+static char receiveBuffer[4097];
+static size_t receiveLength;
+static unsigned char webSocketBuffer[8192];
+static size_t webSocketLength;
+#define OUTGOING_BUFFER_SIZE 16384
+static unsigned char outgoingBuffer[OUTGOING_BUFFER_SIZE];
+static size_t outgoingLength = 0;
+static LightLock outgoingLock;
+static mbedtls_ssl_context tlsContext;
+static bool tlsActive;
+static int onlineProtocolStage;
+static int onlineTlsResult;
+static uint32_t onlineTlsVerify;
+int onlineTlsFutureSkew;
+char lastChatName[13];
+char lastChatText[81];
+char browserPairingStatus[40];
+uint64_t browserPairingStatusUntil;
+bool statsEnabled;
+bool statsSeenEnabled;
+bool statsCaughtEnabled;
+bool statsBadgesEnabled;
+bool statsFrontierEnabled;
+static bool onlineAuthenticated;
+static uint64_t nextStatsUpload;
+static uint64_t nextStatsRead;
+static uint64_t nextQuestListRequest;
+static uint64_t nextTitleListRequest;
+static uint64_t nextFriendListRequest;
+static uint64_t nextGuildInfoRequest;
+char statsStatus[48];
+uint64_t statsStatusUntil;
+
+SaveStats saveStats;
+
+static void debugNetworkFailure(void) {
+    runtimeLogPrintf("wss-failed stage=%d tls=%d verify=%08lx skew=%d",
+        onlineProtocolStage, onlineTlsResult, (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+    FILE* file = fopen(DEBUG_LOG_PATH, "a");
+    if (!file) return;
+    fprintf(file, "%llu wss-failed stage=%d tls=%d verify=%08lx skew=%d\n",
+        (unsigned long long) osGetTime(), onlineProtocolStage, onlineTlsResult,
+        (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+    fclose(file);
+}
+
+GamePresence presence;
+GamePresence lastSentPresence;
+
+MapTrailPoint mapTrail[16];
+unsigned mapTrailCount;
+unsigned mapTrailNext;
+
+RemoteTrainer remoteTrainers[8];
+int remoteCount;
+
+OnlineUser onlineUsers[64];
+unsigned onlineUserCount;
+static unsigned onlineUserExpectedPage;
+static unsigned onlineUserExpectedPages;
+
+ChatMessage chatHistory[24];
+unsigned chatHistoryCount;
+
+TeleportDestination teleportDestinations[64];
+unsigned teleportDestinationCount;
+bool teleportCustomVisible;
+unsigned teleportCategory;
+unsigned teleportScroll;
+int teleportSelectedIndex = -1;
+uint64_t teleportStatusUntil;
+char teleportStatus[48] = "";
+static bool teleportLocationsRequested;
+
+UpdateState updateState = UPDATE_IDLE;
+char updateLatestVersion[16] = "";
+static char updateCiaUrl[192] = "";
+static char update3dsxUrl[192] = "";
+static char updateCiaSha256[65] = "";
+static char update3dsxSha256[65] = "";
+char updateStatus[64] = "";
+uint64_t updateStatusUntil = 0;
+uint64_t updateProgress = 0;
+uint64_t updateTotal = 0;
+static bool updateIsCia = false;
+
+static void logPrintf(enum retro_log_level level, const char* fmt, ...) {
+    (void) level;
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+static const char* optionValue(const char* key) {
+    if (!strcmp(key, "gpsp_drc")) return dynarecEnabled ? "enabled" : "disabled";
+    if (!strcmp(key, "gpsp_bios")) return "builtin";
+    if (!strcmp(key, "gpsp_boot_mode")) return "game";
+    if (!strcmp(key, "gpsp_rtc")) return "auto";
+    // Emerald's Direct Corner is not reliable with gpSP's experimental
+    // Serial-Poke backend: the client can time out when the actual terminal
+    // exchange begins. The RFU backend is gpSP's native Emerald choice and
+    // supports the in-game Union Room trade/battle flow.
+    if (!strcmp(key, "gpsp_serial")) return linkConfigured ? "rfu" : "disabled";
+    if (!strcmp(key, "gpsp_rumble")) return "disabled";
+    if (!strcmp(key, "gpsp_sprlim")) return "disabled";
+    if (!strcmp(key, "gpsp_sound_rate")) return "32768";
+    if (!strcmp(key, "gpsp_frameskip")) return "disabled";
+    if (!strcmp(key, "gpsp_frameskip_threshold")) return "33";
+    if (!strcmp(key, "gpsp_frameskip_interval")) return "0";
+    if (!strcmp(key, "gpsp_color_correction")) return "disabled";
+    if (!strcmp(key, "gpsp_frame_mixing")) return "disabled";
+    if (!strcmp(key, "gpsp_turbo_period")) return "4";
+    return NULL;
+}
+
+static bool environmentCallback(unsigned command, void* data) {
+    switch (command) {
+    case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
+        return *(enum retro_pixel_format*) data == RETRO_PIXEL_FORMAT_RGB565;
+    case RETRO_ENVIRONMENT_GET_CAN_DUPE:
+        if (data) *(bool*) data = true;
+        return true;
+    case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
+        // The libretro API uses the return value as the capability signal;
+        // gpSP intentionally probes this command with a null data pointer.
+        return true;
+    case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
+    case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
+        *(const char**) data = "sdmc:/3ds/emerald-online-3ds";
+        return true;
+    case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
+        ((retro_log_callback*) data)->log = logPrintf;
+        return true;
+    case RETRO_ENVIRONMENT_GET_VARIABLE: {
+        retro_variable* variable = (retro_variable*) data;
+        variable->value = optionValue(variable->key);
+        return variable->value != NULL;
+    }
+    case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
+        *(bool*) data = false;
+        return true;
+    case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: {
+        retro_memory_map* map = (retro_memory_map*) data;
+        for (unsigned i = 0; i < map->num_descriptors; ++i) {
+            const retro_memory_descriptor* desc = &map->descriptors[i];
+            if (desc->start == 0x02000000) gbaEwram = (uint8_t*) desc->ptr + desc->offset;
+            if (desc->start == 0x03000000) gbaIwram = (uint8_t*) desc->ptr + desc->offset;
+        }
+        return true;
+    }
+    case RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE: {
+        const retro_netpacket_callback* interface = (const retro_netpacket_callback*) data;
+        if (!interface || !interface->start || !interface->receive) return false;
+        coreNetpacketInterface = interface;
+        return true;
+    }
+    case RETRO_ENVIRONMENT_SET_MESSAGE:
+    case RETRO_ENVIRONMENT_SET_MESSAGE_EXT:
+    case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
+    case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL:
+    case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:
+    case RETRO_ENVIRONMENT_SET_MINIMUM_AUDIO_LATENCY:
+    case RETRO_ENVIRONMENT_SET_CORE_OPTIONS:
+    case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_INTL:
+    case RETRO_ENVIRONMENT_SET_VARIABLES:
+        return true;
+    case RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION:
+        *(unsigned*) data = 1;
+        return true;
+    case RETRO_ENVIRONMENT_SHUTDOWN:
+        quitRequested = true;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void videoCallback(const void* data, unsigned width, unsigned height, size_t pitch) {
+    if (data && width == 240 && height == 160) {
+        videoPixels = (const uint16_t*) data;
+        videoPitch = pitch;
+        videoReady = true;
+    }
+}
+
+static void audioSampleCallback(int16_t left, int16_t right) {
+    int16_t pair[2] = {left, right};
+    (void) pair;
+}
+
+static void audioThreadMain(void* arg) {
+    (void) arg;
+    while (audioThreadRun) {
+        LightEvent_Wait(&audioEvent);
+        if (!audioThreadRun) break;
+        LightLock_Lock(&audioLock);
+        while (audioRingReadCount != audioRingWriteCount) {
+            unsigned index = audioRingReadCount % AUDIO_RING_SLOTS;
+            size_t count = audioRingFrames[index];
+            if (!audioPaused) {
+                for (unsigned attempt = 0; attempt < AUDIO_BUFFERS; ++attempt) {
+                    unsigned waveIndex = (audioCursor + attempt) % AUDIO_BUFFERS;
+                    if (audioWaves[waveIndex].status == NDSP_WBUF_FREE || audioWaves[waveIndex].status == NDSP_WBUF_DONE) {
+                        memcpy(&audioData[waveIndex * AUDIO_FRAMES * 2], audioRing[index], count * 2 * sizeof(int16_t));
+                        memset(&audioWaves[waveIndex], 0, sizeof(audioWaves[waveIndex]));
+                        audioWaves[waveIndex].data_pcm16 = &audioData[waveIndex * AUDIO_FRAMES * 2];
+                        audioWaves[waveIndex].nsamples = count;
+                        DSP_FlushDataCache(audioWaves[waveIndex].data_pcm16, count * 2 * sizeof(int16_t));
+                        ndspChnWaveBufAdd(0, &audioWaves[waveIndex]);
+                        audioCursor = (waveIndex + 1) % AUDIO_BUFFERS;
+                        break;
+                    }
+                }
+            }
+            audioRingReadCount++;
+        }
+        LightLock_Unlock(&audioLock);
+    }
+}
+
+static size_t audioBatchCallback(const int16_t* data, size_t frames) {
+    if (!audioThreadRun || !audioData) return frames;
+    LightLock_Lock(&audioLock);
+    bool full = audioRingWriteCount - audioRingReadCount >= AUDIO_RING_SLOTS;
+    if (!full) {
+        unsigned index = audioRingWriteCount % AUDIO_RING_SLOTS;
+        size_t count = frames > AUDIO_FRAMES ? AUDIO_FRAMES : frames;
+        memcpy(audioRing[index], data, count * 2 * sizeof(int16_t));
+        audioRingFrames[index] = count;
+        audioRingWriteCount++;
+    }
+    LightLock_Unlock(&audioLock);
+    if (!full) LightEvent_Signal(&audioEvent);
+    return frames;
+}
+
+static void aptHookCallback(APT_HookType hook, void* param) {
+    (void) param;
+    switch (hook) {
+    case APTHOOK_ONSLEEP:
+        audioPaused = true;
+        ndspSetMasterVol(0.0f);
+        systemAsleep = true;
+        runtimeLogUploadRecent();
+        break;
+    case APTHOOK_ONWAKEUP:
+        systemAsleep = false;
+        ndspSetMasterVol(1.0f);
+        audioPaused = false;
+        runtimeLogUploadRecent();
+        break;
+    case APTHOOK_ONEXIT:
+        quitRequested = true;
+        break;
+    default:
+        break;
+    }
+}
+
+static void inputPollCallback(void) {}
+
+static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index, unsigned id) {
+    if (port || index || device != RETRO_DEVICE_JOYPAD) return 0;
+    if (id == RETRO_DEVICE_ID_JOYPAD_MASK) {
+        uint16_t result = 0;
+        for (unsigned button = 0; button < 16; ++button) if (inputStateCallback(0, device, 0, button)) result |= 1u << button;
+        return result;
+    }
+    uint32_t key = 0;
+    switch (id) {
+    case RETRO_DEVICE_ID_JOYPAD_A: key = KEY_A; break;
+    case RETRO_DEVICE_ID_JOYPAD_B: key = KEY_B; break;
+    case RETRO_DEVICE_ID_JOYPAD_START: key = KEY_START; break;
+    case RETRO_DEVICE_ID_JOYPAD_SELECT: key = KEY_SELECT; break;
+    case RETRO_DEVICE_ID_JOYPAD_UP: key = KEY_UP | KEY_CPAD_UP; break;
+    case RETRO_DEVICE_ID_JOYPAD_DOWN: key = KEY_DOWN | KEY_CPAD_DOWN; break;
+    case RETRO_DEVICE_ID_JOYPAD_LEFT: key = KEY_LEFT | KEY_CPAD_LEFT; break;
+    case RETRO_DEVICE_ID_JOYPAD_RIGHT: key = KEY_RIGHT | KEY_CPAD_RIGHT; break;
+    case RETRO_DEVICE_ID_JOYPAD_L: key = KEY_L; break;
+    case RETRO_DEVICE_ID_JOYPAD_R: key = KEY_R; break;
+    default: return 0;
+    }
+    return (heldKeys & key) != 0;
+}
+
+static uint32_t hashBytes(const uint8_t* data, size_t size) {
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < size; ++i) hash = (hash ^ data[i]) * 16777619u;
+    return hash;
+}
+
+static void loadSave(void) {
+    saveRam = (uint8_t*) retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    saveRamSize = retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    FILE* file = fopen(SAVE_PATH, "rb");
+    if (file && saveRam) {
+        size_t count = fread(saveRam, 1, saveRamSize, file);
+        if (count < saveRamSize) memset(saveRam + count, 0xFF, saveRamSize - count);
+        fclose(file);
+    }
+    if (saveRam) saveHash = hashBytes(saveRam, saveRamSize);
+}
+
+static bool writeSave(bool force) {
+    if (!saveRam || !saveRamSize) return false;
+    uint32_t hash = hashBytes(saveRam, saveRamSize);
+    if (!force && hash == saveHash) return true;
+    FILE* file = fopen(SAVE_PATH ".tmp", "wb");
+    if (!file) return false;
+    bool good = fwrite(saveRam, 1, saveRamSize, file) == saveRamSize;
+    if (good && (fflush(file) || fsync(fileno(file)))) good = false;
+    if (fclose(file)) good = false;
+    if (good) {
+        remove(SAVE_PATH);
+        good = rename(SAVE_PATH ".tmp", SAVE_PATH) == 0;
+        if (good) saveHash = hash;
+    }
+    if (!good) remove(SAVE_PATH ".tmp");
+    return good;
+}
+
+struct LinkBackupEntry { char name[128]; };
+
+static int compareLinkBackups(const void* left, const void* right) {
+    return strcmp(((const LinkBackupEntry*) left)->name, ((const LinkBackupEntry*) right)->name);
+}
+
+static bool verifyEmeraldSaveFile(const char* path);
+
+static bool backupSaveForLink(void) {
+    if (!writeSave(true) || !verifyEmeraldSaveFile(SAVE_PATH) || (mkdir(LINK_BACKUP_DIRECTORY, 0700) && errno != EEXIST)) return false;
+    FILE* source = fopen(SAVE_PATH, "rb");
+    if (!source) return false;
+    char path[256];
+    snprintf(path, sizeof(path), LINK_BACKUP_DIRECTORY "/emerald-link-%lld-%llu.sav",
+        (long long) time(NULL), (unsigned long long) osGetTime());
+    FILE* destination = fopen(path, "wb");
+    bool good = destination != NULL;
+    uint8_t buffer[4096];
+    while (good) {
+        size_t count = fread(buffer, 1, sizeof(buffer), source);
+        if (count && fwrite(buffer, 1, count, destination) != count) good = false;
+        if (count < sizeof(buffer)) { if (ferror(source)) good = false; break; }
+    }
+    if (fclose(source)) good = false;
+    if (destination) {
+        if (good && (fflush(destination) || fsync(fileno(destination)))) good = false;
+        if (fclose(destination)) good = false;
+    }
+    if (!good || !verifyEmeraldSaveFile(path)) {
+        remove(path);
+        return false;
+    }
+
+    DIR* directory = opendir(LINK_BACKUP_DIRECTORY);
+    if (!directory) return false;
+    LinkBackupEntry entries[64] = {};
+    size_t count = 0;
+    dirent* item;
+    while ((item = readdir(directory)) && count < 64) {
+        const size_t length = strlen(item->d_name);
+        if (length < 18 || strncmp(item->d_name, "emerald-link-", 13) || strcmp(item->d_name + length - 4, ".sav")) continue;
+        strncpy(entries[count++].name, item->d_name, sizeof(entries[0].name) - 1);
+    }
+    closedir(directory);
+    qsort(entries, count, sizeof(entries[0]), compareLinkBackups);
+    for (size_t index = 0; index + LINK_BACKUP_RETENTION < count; ++index) {
+        const size_t prefixLength = strlen(LINK_BACKUP_DIRECTORY);
+        memcpy(path, LINK_BACKUP_DIRECTORY, prefixLength);
+        path[prefixLength] = '/';
+        strncpy(path + prefixLength + 1, entries[index].name, sizeof(path) - prefixLength - 2);
+        path[sizeof(path) - 1] = 0;
+        remove(path);
+    }
+    return true;
+}
+
+static bool restoreSaveFromBackup(const char* backupPath) {
+    if (!backupPath || !verifyEmeraldSaveFile(backupPath)) return false;
+    FILE* source = fopen(backupPath, "rb");
+    if (!source) return false;
+    FILE* destination = fopen(SAVE_PATH ".tmp", "wb");
+    if (!destination) { fclose(source); return false; }
+    bool good = true;
+    uint8_t buffer[4096];
+    size_t count;
+    while (good && (count = fread(buffer, 1, sizeof(buffer), source)) > 0)
+        if (fwrite(buffer, 1, count, destination) != count) good = false;
+    if (ferror(source)) good = false;
+    if (fflush(destination) || fsync(fileno(destination))) good = false;
+    fclose(source); fclose(destination);
+    if (!good || rename(SAVE_PATH ".tmp", SAVE_PATH) != 0) {
+        remove(SAVE_PATH ".tmp");
+        return false;
+    }
+    if (!verifyEmeraldSaveFile(SAVE_PATH)) {
+        // The active save is now corrupt; we cannot roll back automatically
+        // because backupPath was already verified. Caller must handle this.
+        return false;
+    }
+    loadSave();
+    return true;
+}
+
+static uint16_t read16(const uint8_t* memory, size_t offset) {
+    uint16_t value;
+    memcpy(&value, memory + offset, sizeof(value));
+    return value;
+}
+
+static uint32_t read32(const uint8_t* memory, size_t offset) {
+    uint32_t value;
+    memcpy(&value, memory + offset, sizeof(value));
+    return value;
+}
+
+static constexpr size_t EMERALD_SAVE_BYTES = 128 * 1024;
+static constexpr size_t EMERALD_EMULATOR_FOOTER_BYTES = 512;
+static constexpr size_t EMERALD_SECTOR_BYTES = 0x1000;
+static constexpr size_t EMERALD_SECTOR_DATA_BYTES = 0xF80;
+static constexpr unsigned EMERALD_SECTORS_PER_SLOT = 14;
+static constexpr uint32_t EMERALD_SECTOR_SIGNATURE = 0x08012025;
+static constexpr uint16_t EMERALD_SECTION_SIZES[EMERALD_SECTORS_PER_SLOT] = {
+    0xF2C, 0xF80, 0xF80, 0xF80, 0xF08,
+    0xF80, 0xF80, 0xF80, 0xF80, 0xF80,
+    0xF80, 0xF80, 0xF80, 0x7D0
+};
+
+static uint16_t emeraldSectorChecksum(const uint8_t* sector) {
+    uint32_t sum = 0;
+    for (size_t offset = 0; offset + 4 <= EMERALD_SECTION_SIZES[read16(sector, 0xFF4)]; offset += 4)
+        sum += read32(sector, offset);
+    return (uint16_t)(((sum >> 16) + (sum & 0xFFFF)) & 0xFFFF);
+}
+
+static bool emeraldSectorValid(const uint8_t* sector) {
+    uint16_t id = read16(sector, 0xFF4);
+    if (id >= EMERALD_SECTORS_PER_SLOT) return false;
+    uint16_t stored = read16(sector, 0xFF6);
+    uint32_t signature = read32(sector, 0xFF8);
+    return signature == EMERALD_SECTOR_SIGNATURE && stored == emeraldSectorChecksum(sector);
+}
+
+static bool verifyEmeraldSaveFile(const char* path) {
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    if (fseek(file, 0, SEEK_END)) { fclose(file); return false; }
+    long size = ftell(file);
+    if (size != (long)EMERALD_SAVE_BYTES && size != (long)(EMERALD_SAVE_BYTES + EMERALD_EMULATOR_FOOTER_BYTES)) {
+        fclose(file);
+        return false;
+    }
+    if (fseek(file, 0, SEEK_SET)) { fclose(file); return false; }
+    uint8_t* buffer = (uint8_t*) malloc(EMERALD_SAVE_BYTES);
+    if (!buffer) { fclose(file); return false; }
+    bool ok = fread(buffer, 1, EMERALD_SAVE_BYTES, file) == EMERALD_SAVE_BYTES;
+    fclose(file);
+    if (ok) {
+        ok = false;
+        for (unsigned slot = 0; slot < 2 && !ok; ++slot) {
+            bool slotValid = true;
+            for (unsigned index = 0; index < EMERALD_SECTORS_PER_SLOT && slotValid; ++index) {
+                const size_t offset = (slot * EMERALD_SECTORS_PER_SLOT + index) * EMERALD_SECTOR_BYTES;
+                if (!emeraldSectorValid(buffer + offset)) slotValid = false;
+            }
+            if (slotValid) ok = true;
+        }
+    }
+    free(buffer);
+    return ok;
+}
+
+// Supported Pokemon Emerald (US) runtime symbols. The private-ROM validator
+// accepts only the exact BPEE revision these addresses describe. Function
+// pointers are Thumb addresses, so callback2 stores CB2_Overworld + 1.
+static constexpr size_t EMERALD_GMAIN_OFFSET = 0x22C0;
+static constexpr size_t EMERALD_GMAIN_CALLBACK2_OFFSET = EMERALD_GMAIN_OFFSET + 0x4;
+static constexpr size_t EMERALD_GMAIN_SAVED_CALLBACK_OFFSET = EMERALD_GMAIN_OFFSET + 0x8;
+static constexpr size_t EMERALD_GMAIN_STATE_OFFSET = EMERALD_GMAIN_OFFSET + 0x438;
+static constexpr size_t EMERALD_GMAIN_FLAGS_OFFSET = EMERALD_GMAIN_OFFSET + 0x439;
+static constexpr uint32_t EMERALD_CB2_OVERWORLD_THUMB = 0x08085E5D;
+static constexpr uint32_t EMERALD_CB2_DO_CHANGE_MAP_THUMB = 0x08134B45;
+static constexpr uint32_t EMERALD_CB2_LOAD_MAP2_THUMB = 0x080860C9;
+
+static bool isEmeraldNativeMultiplayerMap(void) {
+    if (!gbaEwram || !gbaIwram) return false;
+    const uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
+    if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return false;
+    const size_t offset = saveBlock - 0x02000000;
+    const uint8_t mapGroup = gbaEwram[offset + 4];
+    const uint8_t mapNum = gbaEwram[offset + 5];
+    // Emerald's IndoorDynamic native multiplayer maps: 2P Colosseum,
+    // Trade Center, Record Corner, 4P Colosseum, and Union Room.
+    // The game owns every avatar in these scenes; drawing presence sprites
+    // here would duplicate or obscure Emerald's RFU/link participants.
+    return mapGroup == 25 && ((mapNum >= 24 && mapNum <= 27) || mapNum == 60);
+}
+
+static bool isEmeraldOverworld(void) {
+    if (!gbaIwram) return false;
+    const uint32_t callback2 = read32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET);
+    const bool inBattle = (gbaIwram[EMERALD_GMAIN_FLAGS_OFFSET] & 0x02) != 0;
+    return callback2 == EMERALD_CB2_OVERWORLD_THUMB && !inBattle && !isEmeraldNativeMultiplayerMap();
+}
+
+static void onlineDisconnect(void);
+
+static GamePresence readPresence(void) {
+    static GamePresence previous = {false, 0, 0, 0, 0, 1};
+    GamePresence current = {false, 0, 0, 0, 0, (uint8_t) (previous.facing ? previous.facing : 1)};
+    if (!gbaEwram || !gbaIwram) return current;
+    const uint32_t callback2 = read32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET);
+    const bool inBattle = (gbaIwram[EMERALD_GMAIN_FLAGS_OFFSET] & 0x02) != 0;
+    if (callback2 != EMERALD_CB2_OVERWORLD_THUMB || inBattle) return current;
+    uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
+    if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return current;
+    size_t offset = saveBlock - 0x02000000;
+    current.x = (int16_t) read16(gbaEwram, offset);
+    current.y = (int16_t) read16(gbaEwram, offset + 2);
+    current.mapGroup = gbaEwram[offset + 4];
+    current.mapNum = gbaEwram[offset + 5];
+    current.valid = current.x >= 0 && current.x < 4096 && current.y >= 0 && current.y < 4096;
+    if (current.valid && previous.valid && current.mapGroup == previous.mapGroup && current.mapNum == previous.mapNum) {
+        int dx = current.x - previous.x, dy = current.y - previous.y;
+        if (dx == 1 && !dy) current.facing = 4;
+        else if (dx == -1 && !dy) current.facing = 3;
+        else if (dy == 1 && !dx) current.facing = 1;
+        else if (dy == -1 && !dx) current.facing = 2;
+    }
+    if (current.valid) previous = current;
+    return current;
+}
+
+static void write32(uint8_t* memory, size_t offset, uint32_t value) {
+    memcpy(memory + offset, &value, sizeof(value));
+}
+
+static void applyTeleport(uint8_t mapGroup, uint8_t mapNum, int16_t x, int16_t y, uint8_t facing) {
+    if (!gbaEwram || !gbaIwram) return;
+    // Only initiate a warp while the player is free in the overworld.
+    // Changing callbacks during a battle or menu would corrupt game state.
+    if (!isEmeraldOverworld()) return;
+    uint32_t saveBlock = read32(gbaIwram, 0x5D8C);
+    if (saveBlock < 0x02000000 || saveBlock > 0x0203FFF7) return;
+    size_t offset = saveBlock - 0x02000000;
+    // gSaveBlock1Ptr->pos
+    gbaEwram[offset + 0x00] = (uint8_t)(x & 0xFF);
+    gbaEwram[offset + 0x01] = (uint8_t)((x >> 8) & 0xFF);
+    gbaEwram[offset + 0x02] = (uint8_t)(y & 0xFF);
+    gbaEwram[offset + 0x03] = (uint8_t)((y >> 8) & 0xFF);
+    // gSaveBlock1Ptr->location (WarpData: mapGroup, mapNum, warpId, padding, x, y)
+    gbaEwram[offset + 4] = mapGroup;
+    gbaEwram[offset + 5] = mapNum;
+    gbaEwram[offset + 0x06] = 0xFF; // WARP_ID_NONE: use coordinates, not a warp event
+    gbaEwram[offset + 0x07] = 0;
+    gbaEwram[offset + 0x08] = (uint8_t)(x & 0xFF);
+    gbaEwram[offset + 0x09] = (uint8_t)((x >> 8) & 0xFF);
+    gbaEwram[offset + 0x0A] = (uint8_t)(y & 0xFF);
+    gbaEwram[offset + 0x0B] = (uint8_t)((y >> 8) & 0xFF);
+    // Trigger Emerald's map-reload sequence. CB2_DoChangeMap validates the
+    // warp, runs the transition effect, and then falls through to
+    // gMain.savedCallback (CB2_LoadMap2) to finish loading the new map.
+    gbaIwram[EMERALD_GMAIN_STATE_OFFSET] = 0;
+    write32(gbaIwram, EMERALD_GMAIN_SAVED_CALLBACK_OFFSET, EMERALD_CB2_LOAD_MAP2_THUMB);
+    write32(gbaIwram, EMERALD_GMAIN_CALLBACK2_OFFSET, EMERALD_CB2_DO_CHANGE_MAP_THUMB);
+    (void) facing;
+}
+
+static bool parseVersion(const char* text, unsigned* major, unsigned* minor, unsigned* micro) {
+    if (!text || !major || !minor || !micro) return false;
+    char* end = nullptr;
+    unsigned long a = strtoul(text, &end, 10);
+    if (end == text || *end != '.') return false;
+    unsigned long b = strtoul(end + 1, &end, 10);
+    if (*end != '.') return false;
+    unsigned long c = strtoul(end + 1, &end, 10);
+    if (*end && *end != '-' && *end != '+') return false;
+    *major = (unsigned) a; *minor = (unsigned) b; *micro = (unsigned) c;
+    return true;
+}
+
+static int compareVersion(const char* left, const char* right) {
+    unsigned lm, ln, lo, rm, rn, ro;
+    if (!parseVersion(left, &lm, &ln, &lo)) return 0;
+    if (!parseVersion(right, &rm, &rn, &ro)) return 0;
+    if (lm != rm) return lm < rm ? -1 : 1;
+    if (ln != rn) return ln < rn ? -1 : 1;
+    if (lo != ro) return lo < ro ? -1 : 1;
+    return 0;
+}
+
+static bool sha256File(const char* path, char hex[65]) {
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts_ret(&ctx, 0);
+    uint8_t buffer[4096];
+    size_t count;
+    while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
+        mbedtls_sha256_update_ret(&ctx, buffer, count);
+    bool readOk = !ferror(file);
+    fclose(file);
+    uint8_t digest[32];
+    if (mbedtls_sha256_finish_ret(&ctx, digest)) readOk = false;
+    mbedtls_sha256_free(&ctx);
+    if (!readOk) return false;
+    static const char hexChars[] = "0123456789abcdef";
+    for (unsigned i = 0; i < 32; ++i) {
+        hex[i * 2] = hexChars[digest[i] >> 4];
+        hex[i * 2 + 1] = hexChars[digest[i] & 15];
+    }
+    hex[64] = 0;
+    return true;
+}
+
+static bool hexEqualCaseInsensitive(const char* left, const char* right) {
+    if (!left || !right) return false;
+    if (strlen(left) != strlen(right)) return false;
+    for (size_t i = 0; left[i] && right[i]; ++i) {
+        char lc = tolower((unsigned char) left[i]);
+        char rc = tolower((unsigned char) right[i]);
+        if (lc != rc) return false;
+    }
+    return true;
+}
+
+static void updateSetStatus(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(updateStatus, sizeof(updateStatus), fmt, args);
+    va_end(args);
+    updateStatusUntil = osGetTime() + 5000;
+}
+
+static bool installCia(const char* ciaPath) {
+    if (R_FAILED(amInit())) return false;
+    Handle handle;
+    if (R_FAILED(AM_StartCiaInstall(MEDIATYPE_SD, &handle))) { amExit(); return false; }
+    FILE* file = fopen(ciaPath, "rb");
+    if (!file) { AM_CancelCIAInstall(handle); amExit(); return false; }
+    bool ok = true;
+    uint8_t buffer[4096];
+    size_t count;
+    u64 offset = 0;
+    while (ok && (count = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        u32 written = 0;
+        if (R_FAILED(FSFILE_Write(handle, &written, offset, buffer, (u32) count, FS_WRITE_FLUSH)) || written != count) ok = false;
+        offset += written;
+    }
+    if (ferror(file)) ok = false;
+    fclose(file);
+    bool finishOk = ok && R_SUCCEEDED(AM_FinishCiaInstall(handle));
+    if (!ok) AM_CancelCIAInstall(handle);
+    amExit();
+    return finishOk;
+}
+
+static bool replace3dsx(const char* sourcePath) {
+    // Keep the current 3DSX as a backup until the next successful launch.
+    char backupPath[128];
+    snprintf(backupPath, sizeof(backupPath), "%s.bak", INSTALLED_3DSX_PATH);
+    remove(backupPath);
+    rename(INSTALLED_3DSX_PATH, backupPath);
+    FILE* src = fopen(sourcePath, "rb");
+    if (!src) { rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    FILE* dst = fopen(INSTALLED_3DSX_PATH ".tmp", "wb");
+    if (!dst) { fclose(src); rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    bool ok = true;
+    uint8_t buffer[4096];
+    size_t count;
+    while (ok && (count = fread(buffer, 1, sizeof(buffer), src)) > 0)
+        if (fwrite(buffer, 1, count, dst) != count) ok = false;
+    if (ferror(src)) ok = false;
+    if (fflush(dst) || fsync(fileno(dst))) ok = false;
+    fclose(src); fclose(dst);
+    if (!ok) { remove(INSTALLED_3DSX_PATH ".tmp"); rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    if (rename(INSTALLED_3DSX_PATH ".tmp", INSTALLED_3DSX_PATH) != 0) { remove(INSTALLED_3DSX_PATH ".tmp"); rename(backupPath, INSTALLED_3DSX_PATH); return false; }
+    return true;
+}
+
+static bool parseReleaseJson(const char* json, size_t length) {
+    const char* end = json + length;
+    if (!findJsonValue(json, end, "version")) return false;
+    jsonStringBounded(json, end, "version", updateLatestVersion, sizeof(updateLatestVersion));
+    jsonStringBounded(json, end, "cia_url", updateCiaUrl, sizeof(updateCiaUrl));
+    jsonStringBounded(json, end, "threedsx_url", update3dsxUrl, sizeof(update3dsxUrl));
+    jsonStringBounded(json, end, "sha256_cia", updateCiaSha256, sizeof(updateCiaSha256));
+    jsonStringBounded(json, end, "sha256_threedsx", update3dsxSha256, sizeof(update3dsxSha256));
+    return updateLatestVersion[0] != 0;
+}
+
+static void buildReleaseUrl(char* out, size_t size) {
+    if (strncmp(serverHost, "https://", 8) == 0)
+        snprintf(out, size, "%s/api/release", serverHost);
+    else
+        snprintf(out, size, "https://%s/api/release", serverHost);
+}
+
+static void checkForUpdate(void) {
+    updateState = UPDATE_CHECKING;
+    updateSetStatus(localize(LS_CHECKING_FOR_UPDATE));
+
+    char url[256];
+    buildReleaseUrl(url, sizeof(url));
+    char tmpPath[128];
+    snprintf(tmpPath, sizeof(tmpPath), "%s/release.json", UPDATE_DIRECTORY);
+    uint64_t downloaded = 0, total = 0;
+    if (!httpDownloadFile(url, tmpPath, &downloaded, &total)) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus(localize(LS_UPDATE_CHECK_FAILED));
+        return;
+    }
+    FILE* file = fopen(tmpPath, "rb");
+    if (!file) { updateState = UPDATE_ERROR; updateSetStatus(localize(LS_UPDATE_CHECK_FAILED)); return; }
+    char json[2048];
+    size_t len = fread(json, 1, sizeof(json) - 1, file);
+    fclose(file);
+    remove(tmpPath);
+    if (len == 0 || !parseReleaseJson(json, len)) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus(localize(LS_UPDATE_RESPONSE_INVALID));
+        return;
+    }
+    if (compareVersion(updateLatestVersion, APP_VERSION) <= 0) {
+        updateState = UPDATE_IDLE;
+        updateSetStatus(localize(LS_UP_TO_DATE_FORMAT), APP_VERSION);
+        return;
+    }
+    updateState = UPDATE_AVAILABLE;
+    updateSetStatus(localize(LS_UPDATE_AVAILABLE_FORMAT), updateLatestVersion);
+}
+
+static void startUpdateDownload(void) {
+    updateState = UPDATE_DOWNLOADING;
+    updateProgress = 0;
+    updateTotal = 0;
+    updateSetStatus(localize(LS_DOWNLOADING));
+
+    // Prefer CIA install when AM is available; otherwise stage 3DSX replacement.
+    updateIsCia = true;
+    const char* url = updateCiaUrl;
+    const char* expectedHash = updateCiaSha256;
+    const char* outputPath = UPDATE_CIA_PATH;
+    if (!url[0] || !expectedHash[0]) {
+        updateIsCia = false;
+        url = update3dsxUrl;
+        expectedHash = update3dsxSha256;
+        outputPath = UPDATE_3DSX_PATH;
+    }
+
+    if (!httpDownloadFile(url, outputPath, &updateProgress, &updateTotal)) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus(localize(LS_DOWNLOAD_FAILED));
+        return;
+    }
+
+    updateState = UPDATE_VERIFYING;
+    updateSetStatus(localize(LS_VERIFYING));
+    char hash[65];
+    if (!sha256File(outputPath, hash) || !hexEqualCaseInsensitive(hash, expectedHash)) {
+        remove(outputPath);
+        updateState = UPDATE_ERROR;
+        updateSetStatus(localize(LS_HASH_MISMATCH));
+        return;
+    }
+
+    updateState = UPDATE_READY;
+    updateSetStatus(localize(LS_READY_TAP_INSTALL));
+}
+
+static void installUpdate(void) {
+    runtimeLogUploadRecent();
+    updateState = UPDATE_INSTALLING;
+    updateSetStatus(localize(LS_INSTALLING));
+    bool ok = updateIsCia ? installCia(UPDATE_CIA_PATH) : replace3dsx(UPDATE_3DSX_PATH);
+    if (!ok) {
+        updateState = UPDATE_ERROR;
+        updateSetStatus(localize(LS_INSTALL_FAILED));
+        return;
+    }
+    updateState = UPDATE_DONE;
+    updateSetStatus(localize(LS_DONE_EXIT_RELAUNCH));
+}
+
+static unsigned countDexFlags(const uint8_t* flags) {
+    unsigned count = 0;
+    for (unsigned index = 0; index < 386; ++index) if (flags[index >> 3] & (1u << (index & 7))) ++count;
+    return count;
+}
+
+static SaveStats readSaveStats(void) {
+    SaveStats result = {};
+    if (!gbaEwram || !gbaIwram) return result;
+    uint32_t block1Address = read32(gbaIwram, 0x5D8C);
+    uint32_t block2Address = read32(gbaIwram, 0x5D90);
+    if (block1Address < 0x02000000 || block1Address + 0x3D88 > 0x02040000 ||
+        block2Address < 0x02000000 || block2Address + 0xF2C > 0x02040000) return result;
+    const uint8_t* block1 = gbaEwram + block1Address - 0x02000000;
+    const uint8_t* block2 = gbaEwram + block2Address - 0x02000000;
+    result.caught = countDexFlags(block2 + 0x28);
+    result.seen = countDexFlags(block2 + 0x5C);
+    if (result.caught > result.seen || result.seen > 386) return SaveStats{};
+    for (unsigned flag = 0x867; flag <= 0x86E; ++flag)
+        if (block1[0x1270 + (flag >> 3)] & (1u << (flag & 7))) ++result.badges;
+    // SaveBlock2 Battle Frontier streaks. Only single/double modes are
+    // included; Multi and Link Multi are deliberately not uploaded.
+    static const size_t pairedOffsets[] = {0xCE0, 0xD0C, 0xDC8, 0xDE2};
+    unsigned output = 0;
+    for (size_t offset : pairedOffsets) for (unsigned mode = 0; mode < 2; ++mode) for (unsigned level = 0; level < 2; ++level)
+        result.frontier[output++] = read16(block2, offset + (mode * 2 + level) * 2);
+    static const size_t singleOffsets[] = {0xDDA, 0xE04, 0xE1A};
+    for (size_t offset : singleOffsets) for (unsigned level = 0; level < 2; ++level)
+        result.frontier[output++] = read16(block2, offset + level * 2);
+    for (unsigned index = 0; index < output; ++index) if (result.frontier[index] > 9999) return SaveStats{};
+    result.valid = true;
+    return result;
+}
+
+static void updateTrainerNameFromSave(void) {
+    if (trainerNameFromSave || !gbaEwram || !gbaIwram) return;
+    // Pokemon Emerald (US): gSaveBlock2Ptr at IWRAM 0x03005D90;
+    // SaveBlock2 begins with the eight-byte, EOS-terminated player name.
+    uint32_t saveBlock2 = read32(gbaIwram, 0x5D90);
+    if (saveBlock2 < 0x02000000 || saveBlock2 + 8 > 0x02040000) return;
+    size_t offset = saveBlock2 - 0x02000000;
+    char decoded[13] = {};
+    unsigned count = 0;
+    for (; count < 8; ++count) {
+        uint8_t value = gbaEwram[offset + count];
+        if (value == 0xFF) break;
+        char character = decodeEmerald(value);
+        if (character == '?' || character == ' ') return;
+        decoded[count] = character;
+    }
+    if (!count || count == 8) return;
+    decoded[count] = 0;
+    if (strcmp(decoded, trainerName)) {
+        strcpy(trainerName, decoded);
+        if (onlineMode != ONLINE_OFFLINE) {
+            onlineDisconnect();
+            nextReconnect = 0;
+        }
+    }
+    trainerIsGirl = gbaEwram[offset + 8] == 1;
+    trainerNameFromSave = true;
+    debugStage("trainer-name-from-save");
+}
+
+static int onlineWriteBytes(const unsigned char* data, size_t size) {
+    if (onlineSocket < 0 && !tlsActive) return -1;
+    int count = tlsActive
+        ? mbedtls_ssl_write(&tlsContext, data, size)
+        : (int) send(onlineSocket, data, size, MSG_NOSIGNAL);
+    if (count >= 0) return count;
+    if ((tlsActive && (count == MBEDTLS_ERR_SSL_WANT_READ || count == MBEDTLS_ERR_SSL_WANT_WRITE)) ||
+        (!tlsActive && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) {
+        return 0;
+    }
+    return -1;
+}
+
+static bool queueOutgoingBytes(const unsigned char* data, size_t size) {
+    if (size > OUTGOING_BUFFER_SIZE) return false;
+    LightLock_Lock(&outgoingLock);
+    bool ok = outgoingLength + size <= OUTGOING_BUFFER_SIZE;
+    if (ok) {
+        memcpy(outgoingBuffer + outgoingLength, data, size);
+        outgoingLength += size;
+    }
+    LightLock_Unlock(&outgoingLock);
+    return ok;
+}
+
+static void drainOutgoingBuffer(void) {
+    LightLock_Lock(&outgoingLock);
+    while (outgoingLength > 0) {
+        int count = onlineWriteBytes(outgoingBuffer, outgoingLength);
+        if (count <= 0) break;
+        if ((size_t)count < outgoingLength)
+            memmove(outgoingBuffer, outgoingBuffer + count, outgoingLength - count);
+        outgoingLength -= (size_t)count;
+    }
+    LightLock_Unlock(&outgoingLock);
+}
+
+static bool webSocketWriteFrame(uint8_t opcode, const unsigned char* payload, size_t size) {
+    if (size > 65535) return false;
+    unsigned char frame[6 + 4096];
+    if (size > sizeof(frame) - 6) return false;
+    size_t header = 0;
+    frame[header++] = 0x80 | opcode;
+    if (size < 126) frame[header++] = 0x80 | (unsigned char) size;
+    else {
+        frame[header++] = 0x80 | 126;
+        frame[header++] = (unsigned char) (size >> 8);
+        frame[header++] = (unsigned char) size;
+    }
+    unsigned char mask[4];
+    if (mbedtls_ctr_drbg_random(&tlsRandom, mask, sizeof(mask))) return false;
+    memcpy(frame + header, mask, sizeof(mask));
+    header += sizeof(mask);
+    for (size_t i = 0; i < size; ++i) frame[header + i] = payload[i] ^ mask[i & 3];
+    return queueOutgoingBytes(frame, header + size);
+}
+
+static bool asciiCaseEqual(const char* left, size_t leftSize, const char* right) {
+    size_t rightSize = strlen(right);
+    if (leftSize != rightSize) return false;
+    for (size_t index = 0; index < leftSize; ++index)
+        if (tolower((unsigned char) left[index]) != tolower((unsigned char) right[index])) return false;
+    return true;
+}
+
+// HTTP field names are case-insensitive. Some edge proxies emit
+// "Sec-Websocket-Accept", while other servers may emit
+// "Sec-WebSocket-Accept". Compare the name case-insensitively but preserve the
+// case-sensitive base64 accept value.
+static bool webSocketHeaderEquals(const char* response, const char* name, const char* expected) {
+    const char* line = strstr(response, "\r\n");
+    if (!line) return false;
+    line += 2;
+    while (*line) {
+        const char* end = strstr(line, "\r\n");
+        if (!end || end == line) break;
+        const char* colon = (const char*) memchr(line, ':', (size_t) (end - line));
+        if (colon && asciiCaseEqual(line, (size_t) (colon - line), name)) {
+            const char* value = colon + 1;
+            while (value < end && (*value == ' ' || *value == '\t')) ++value;
+            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) --end;
+            return (size_t) (end - value) == strlen(expected) && !memcmp(value, expected, strlen(expected));
+        }
+        line = end + 2;
+    }
+    return false;
+}
+
+static bool startSecureWebSocket(void) {
+    onlineProtocolStage = 1;
+    onlineTlsResult = 0;
+    onlineTlsVerify = 0;
+    onlineTlsFutureSkew = 0;
+    if (!httpClientInit()) return false;
+    onlineProtocolStage = 2;
+    if ((onlineTlsResult = mbedtls_ssl_session_reset(&tlsContext)) ||
+        (onlineTlsResult = mbedtls_ssl_set_hostname(&tlsContext, serverHost))) return false;
+    mbedtls_ssl_set_bio(&tlsContext, &onlineSocket, httpTlsSocketSend, httpTlsSocketReceive, NULL);
+
+    onlineProtocolStage = 3;
+    uint64_t deadline = osGetTime() + 8000;
+    int result;
+    while ((result = mbedtls_ssl_handshake(&tlsContext)) != 0) {
+        onlineTlsResult = result;
+        if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            onlineTlsVerify = mbedtls_ssl_get_verify_result(&tlsContext);
+            return false;
+        }
+        if (osGetTime() >= deadline) {
+            onlineTlsResult = MBEDTLS_ERR_SSL_TIMEOUT;
+            onlineTlsVerify = mbedtls_ssl_get_verify_result(&tlsContext);
+            return false;
+        }
+        svcSleepThread(1000000);
+    }
+    onlineTlsResult = 0;
+    onlineProtocolStage = 4;
+    onlineTlsVerify = mbedtls_ssl_get_verify_result(&tlsContext);
+    if (onlineTlsVerify != 0) return false;
+    tlsActive = true;
+
+    onlineProtocolStage = 5;
+    unsigned char nonce[16];
+    unsigned char key[32] = {};
+    size_t keyLength = 0;
+    if (mbedtls_ctr_drbg_random(&tlsRandom, nonce, sizeof(nonce)) ||
+        mbedtls_base64_encode(key, sizeof(key) - 1, &keyLength, nonce, sizeof(nonce))) return false;
+    key[keyLength] = 0;
+    char request[640];
+    int requestLength = snprintf(request, sizeof(request),
+        "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nUser-Agent: Emerald-Online-3DS/" APP_VERSION "\r\n\r\n",
+        webSocketPath, serverHost, key);
+    if (requestLength < 1 || requestLength >= (int) sizeof(request) ||
+        onlineWriteBytes((const unsigned char*) request, requestLength) != requestLength) return false;
+
+    char acceptSource[96];
+    snprintf(acceptSource, sizeof(acceptSource), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key);
+    unsigned char digest[20];
+    unsigned char accept[40] = {};
+    size_t acceptLength = 0;
+    if (mbedtls_sha1_ret((const unsigned char*) acceptSource, strlen(acceptSource), digest) ||
+        mbedtls_base64_encode(accept, sizeof(accept) - 1, &acceptLength, digest, sizeof(digest))) return false;
+    accept[acceptLength] = 0;
+    onlineProtocolStage = 6;
+    char response[2048] = {};
+    size_t responseLength = 0;
+    deadline = osGetTime() + 8000;
+    while (!strstr(response, "\r\n\r\n") && responseLength < sizeof(response) - 1) {
+        result = mbedtls_ssl_read(&tlsContext, (unsigned char*) response + responseLength, sizeof(response) - 1 - responseLength);
+        if (result == MBEDTLS_ERR_SSL_WANT_READ || result == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            if (osGetTime() >= deadline) return false;
+            svcSleepThread(1000000);
+            continue;
+        }
+        if (result <= 0) return false;
+        responseLength += (size_t) result;
+        response[responseLength] = 0;
+    }
+    if (strncmp(response, "HTTP/1.1 101", 12)) return false;
+    onlineProtocolStage = 7;
+    if (!webSocketHeaderEquals(response, "Sec-WebSocket-Accept", (const char*) accept)) return false;
+    onlineProtocolStage = 0;
+    // debugStage("wss-handshake-complete");
+    return true;
+}
+
+static bool validLinkRoom(const char* value) {
+    if (!value || strlen(value) != 9 || value[4] != '-') return false;
+    for (unsigned index = 0; index < 9; ++index) {
+        if (index == 4) continue;
+        const char character = value[index];
+        if (!((character >= 'A' && character <= 'Z' && character != 'I' && character != 'O') ||
+              (character >= '2' && character <= '9'))) return false;
+    }
+    return true;
+}
+
+static void loadConfig(void) {
+    FILE* file = fopen(CONFIG_PATH, "r");
+    if (!file) return;
+    bool transportConfigured = false;
+    char line[320];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '=');
+        if (!equals) continue;
+        *equals++ = 0;
+        if (!strcmp(line, "server") && strlen(equals) < sizeof(serverHost)) strcpy(serverHost, equals);
+        else if (!strcmp(line, "port")) serverPort = strtoul(equals, NULL, 10);
+        else if (!strcmp(line, "transport")) {
+            secureWebSocket = strcmp(equals, "tcp") != 0;
+            transportConfigured = true;
+        }
+        else if (!strcmp(line, "path") && equals[0] == '/' && strlen(equals) < sizeof(webSocketPath)) strcpy(webSocketPath, equals);
+        else if (!strcmp(line, "name") && strlen(equals) < sizeof(trainerName)) strcpy(trainerName, equals);
+        else if (!strcmp(line, "page")) bottomPage = !strcmp(equals, "users") ? PAGE_USERS : !strcmp(equals, "chat") ? PAGE_CHAT : !strcmp(equals, "party") ? PAGE_PARTY : !strcmp(equals, "bag") ? PAGE_BAG : !strcmp(equals, "map") ? PAGE_MAP : !strcmp(equals, "stats") ? PAGE_STATS : !strcmp(equals, "quest") ? PAGE_QUESTS : !strcmp(equals, "titles") ? PAGE_TITLES : !strcmp(equals, "friends") ? PAGE_FRIENDS : !strcmp(equals, "guild") ? PAGE_GUILD : !strcmp(equals, "teleport") ? PAGE_TELEPORT : !strcmp(equals, "update") ? PAGE_UPDATE : PAGE_ONLINE;
+        else if (!strcmp(line, "online")) onlineEnabled = strcmp(equals, "disabled") != 0;
+        else if (!strcmp(line, "dynarec")) dynarecEnabled = strcmp(equals, "disabled") != 0;
+        else if (!strcmp(line, "link_room") && validLinkRoom(equals)) {
+            strcpy(linkRoom, equals);
+            linkConfigured = true;
+            snprintf(linkStatus, sizeof(linkStatus), "LINK %s CONFIGURED", linkRoom);
+        }
+    }
+    fclose(file);
+    // Old/custom files without an explicit transport use TLS only on 443.
+    // Release packages always overwrite online.cfg with the public WSS route.
+    if (!transportConfigured) secureWebSocket = serverPort == 443;
+}
+
+static bool isHexString(const char* value, size_t length) {
+    if (strlen(value) != length) return false;
+    for (size_t i = 0; i < length; ++i)
+        if (!((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f') || (value[i] >= 'A' && value[i] <= 'F'))) return false;
+    return true;
+}
+
+static void loadIdentity(void) {
+    FILE* file = fopen(IDENTITY_PATH, "r");
+    if (!file) return;
+    char line[160];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '=');
+        if (!equals) continue;
+        *equals++ = 0;
+        if (!strcmp(line, "id") && strlen(equals) == 36) strcpy(identityId, equals);
+        else if (!strcmp(line, "token") && isHexString(equals, 64)) strcpy(identityToken, equals);
+        else if (!strcmp(line, "credential") && strlen(equals) == 36) strcpy(credentialId, equals);
+        else if (!strcmp(line, "fingerprint") && strlen(equals) == 10) strcpy(identityFingerprint, equals);
+    }
+    fclose(file);
+    if (!identityId[0] || !identityToken[0] || !credentialId[0]) {
+        identityId[0] = identityToken[0] = credentialId[0] = identityFingerprint[0] = 0;
+    }
+}
+
+static bool saveIdentity(void) {
+    if (!identityId[0] || !identityToken[0] || !credentialId[0]) return false;
+    FILE* file = fopen(IDENTITY_TEMP_PATH, "w");
+    if (!file) return false;
+    bool ok = fprintf(file, "id=%s\ntoken=%s\ncredential=%s\nfingerprint=%s\n", identityId, identityToken, credentialId, identityFingerprint) > 0;
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    if (fclose(file)) ok = false;
+    if (!ok || rename(IDENTITY_TEMP_PATH, IDENTITY_PATH)) { remove(IDENTITY_TEMP_PATH); return false; }
+    return true;
+}
+
+static void loadStatsConfig(void) {
+    FILE* file = fopen(STATS_CONFIG_PATH, "r");
+    if (!file) return;
+    char line[80];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '='); if (!equals) continue; *equals++ = 0;
+        bool value = !strcmp(equals, "1");
+        if (!strcmp(line, "enabled")) statsEnabled = value;
+        else if (!strcmp(line, "pokedex_seen")) statsSeenEnabled = value;
+        else if (!strcmp(line, "pokedex_caught")) statsCaughtEnabled = value;
+        else if (!strcmp(line, "badges")) statsBadgesEnabled = value;
+        else if (!strcmp(line, "frontier_streaks")) statsFrontierEnabled = value;
+    }
+    fclose(file);
+    if (!statsEnabled) statsSeenEnabled = statsCaughtEnabled = statsBadgesEnabled = statsFrontierEnabled = false;
+}
+
+static bool saveStatsConfig(void) {
+    FILE* file = fopen(STATS_CONFIG_TEMP_PATH, "w"); if (!file) return false;
+    bool ok = fprintf(file, "enabled=%d\npokedex_seen=%d\npokedex_caught=%d\nbadges=%d\nfrontier_streaks=%d\n",
+        statsEnabled, statsSeenEnabled, statsCaughtEnabled, statsBadgesEnabled, statsFrontierEnabled) > 0;
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    if (fclose(file)) ok = false;
+    if (!ok || rename(STATS_CONFIG_TEMP_PATH, STATS_CONFIG_PATH)) { remove(STATS_CONFIG_TEMP_PATH); return false; }
+    return true;
+}
+
+static void loadDisplayConfig(void) {
+    FILE* file = fopen(DISPLAY_CONFIG_PATH, "r");
+    if (!file) return;
+    char line[80];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char* equals = strchr(line, '='); if (!equals) continue; *equals++ = 0;
+        if (!strcmp(line, "hud_visible")) hudVisible = !strcmp(equals, "1");
+        else if (!strcmp(line, "fps_visible")) fpsVisible = !strcmp(equals, "1");
+        else if (!strcmp(line, "trail_length")) {
+            unsigned value = strtoul(equals, NULL, 10);
+            trailLength = value > 8 ? 8 : value;
+        }
+        else if (!strcmp(line, "label_fade_distance")) {
+            unsigned value = strtoul(equals, NULL, 10);
+            labelFadeDistance = value > 8 ? 8 : value;
+        }
+        else if (!strcmp(line, "accessibility_mode")) {
+            accessibilityMode = !strcmp(equals, "1");
+        }
+        else if (!strcmp(line, "overlay_quality")) {
+            overlayQuality = !strcmp(equals, "1") ? OVERLAY_QUALITY_PERFORMANCE : OVERLAY_QUALITY_HIGH;
+        }
+    }
+    fclose(file);
+}
+
+static bool saveDisplayConfig(void) {
+    FILE* file = fopen(DISPLAY_CONFIG_TEMP_PATH, "w"); if (!file) return false;
+    bool ok = fprintf(file, "hud_visible=%d\nfps_visible=%d\ntrail_length=%u\nlabel_fade_distance=%u\naccessibility_mode=%d\noverlay_quality=%d\n",
+        hudVisible, fpsVisible, trailLength, labelFadeDistance, accessibilityMode, overlayQuality == OVERLAY_QUALITY_PERFORMANCE ? 1 : 0) > 0;
+    if (fflush(file) || fsync(fileno(file))) ok = false;
+    if (fclose(file)) ok = false;
+    if (!ok || rename(DISPLAY_CONFIG_TEMP_PATH, DISPLAY_CONFIG_PATH)) { remove(DISPLAY_CONFIG_TEMP_PATH); return false; }
+    return true;
+}
+
+static void onlineDisconnect(void) {
+    if (linkStarted && coreNetpacketInterface && coreNetpacketInterface->stop) coreNetpacketInterface->stop();
+    linkStarted = false;
+    linkJoined = false;
+    if (linkConfigured) strcpy(linkStatus, localize(LS_LINK_RECONNECTING));
+    if (tlsActive) mbedtls_ssl_close_notify(&tlsContext);
+    tlsActive = false;
+    if (onlineSocket >= 0) close(onlineSocket);
+    onlineSocket = -1;
+    onlineMode = ONLINE_OFFLINE;
+    remoteCount = 0;
+    ++remoteTrainerVersion;
+    onlineUserCount = 0;
+    onlineUserPage = 0;
+    onlineUserExpectedPage = onlineUserExpectedPages = 0;
+    receiveLength = 0;
+    webSocketLength = 0;
+    outgoingLength = 0;
+    onlineAuthenticated = false;
+    teleportLocationsRequested = false;
+    memset(&lastSentPresence, 0, sizeof(lastSentPresence));
+    if (onlineEnabled) nextReconnect = osGetTime() + 3000;
+}
+
+static void onlineFail(int error) {
+    onlineLastError = error ? error : EIO;
+    // Debug reconnect loops: log onlineLastError and onlineProtocolStage here.
+    runtimeLogUploadRecent();
+    onlineDisconnect();
+}
+
+bool onlineSend(const char* message) {
+    size_t size = strlen(message);
+    bool sent = secureWebSocket
+        ? webSocketWriteFrame(0x1, (const unsigned char*) message, size)
+        : queueOutgoingBytes((const unsigned char*) message, size);
+    if (sent) return true;
+    onlineFail(EIO);
+    return false;
+}
+
+static bool sendStatsConsent(bool deleteHistory) {
+    if (!onlineAuthenticated || !identityId[0]) return false;
+    char packet[320];
+    snprintf(packet, sizeof(packet),
+        "{\"type\":\"stats_consent\",\"enabled\":%s,\"deleteHistory\":%s,\"fields\":{\"pokedex_seen\":%s,\"pokedex_caught\":%s,\"badges\":%s,\"frontier_streaks\":%s}}\n",
+        statsEnabled ? "true" : "false", deleteHistory ? "true" : "false",
+        statsSeenEnabled ? "true" : "false", statsCaughtEnabled ? "true" : "false",
+        statsBadgesEnabled ? "true" : "false", statsFrontierEnabled ? "true" : "false");
+    return onlineSend(packet);
+}
+
+static bool appendPacket(char* packet, size_t capacity, size_t* length, const char* format, ...) {
+    if (*length >= capacity) return false;
+    va_list args; va_start(args, format);
+    int written = vsnprintf(packet + *length, capacity - *length, format, args);
+    va_end(args);
+    if (written < 0 || (size_t) written >= capacity - *length) return false;
+    *length += (size_t) written;
+    return true;
+}
+
+static bool sendStatsSnapshot(void) {
+    if (!onlineAuthenticated || !statsEnabled || !saveStats.valid) return false;
+    char packet[3072]; size_t length = 0; bool comma = false;
+    if (!appendPacket(packet, sizeof(packet), &length, "{\"type\":\"stats_snapshot\",\"release\":\"" APP_VERSION "\",\"values\":{")) return false;
+    if (statsSeenEnabled) { if (!appendPacket(packet,sizeof(packet),&length,"\"pokedex_seen\":%u",saveStats.seen)) return false; comma=true; }
+    if (statsCaughtEnabled) { if (!appendPacket(packet,sizeof(packet),&length,"%s\"pokedex_caught\":%u",comma?",":"",saveStats.caught)) return false; comma=true; }
+    if (statsBadgesEnabled) { if (!appendPacket(packet,sizeof(packet),&length,"%s\"badges\":%u",comma?",":"",saveStats.badges)) return false; comma=true; }
+    if (statsFrontierEnabled) {
+        if (!appendPacket(packet,sizeof(packet),&length,"%s\"frontier_streaks\":[",comma?",":"")) return false;
+        static const char* facilities[22] = {"tower","tower","tower","tower","dome","dome","dome","dome","palace","palace","palace","palace","factory","factory","factory","factory","arena","arena","pike","pike","pyramid","pyramid"};
+        static const char* modes[22] = {"singles","singles","doubles","doubles","singles","singles","doubles","doubles","singles","singles","doubles","doubles","singles","singles","doubles","doubles","singles","singles","singles","singles","singles","singles"};
+        for (unsigned index=0;index<22;++index) if (!appendPacket(packet,sizeof(packet),&length,"%s{\"facility\":\"%s\",\"mode\":\"%s\",\"level\":\"%s\",\"streak\":%u}",index?",":"",facilities[index],modes[index],(index&1)?"open":"50",saveStats.frontier[index])) return false;
+        if (!appendPacket(packet,sizeof(packet),&length,"]")) return false;
+        comma=true;
+    }
+    if (!comma || !appendPacket(packet,sizeof(packet),&length,"}}\n")) return false;
+    return onlineSend(packet);
+}
+
+static void syncStatsAfterAuthentication(void) {
+    onlineAuthenticated = true;
+    if (!teleportLocationsRequested) {
+        onlineSend("{\"type\":\"teleport_locations\"}\n");
+        teleportLocationsRequested = true;
+    }
+    requestTitleList();
+    requestFriendList();
+    requestGuildInfo();
+    if (linkConfigured && !linkJoined) {
+        char packet[160];
+        snprintf(packet, sizeof(packet), "{\"type\":\"link_spike_join\",\"room\":\"%s\",\"core\":\"gpSP v1.0\"}\n", linkRoom);
+        if (onlineSend(packet)) {
+            linkJoined = true;
+            strcpy(linkStatus, localize(LS_JOIN_SENT));
+        }
+    }
+    if (!statsEnabled) return;
+    if (sendStatsConsent(false) && sendStatsSnapshot()) {
+        strcpy(statsStatus, localize(LS_SYNC_SENT_COMMUNITY_SUBMITTED));
+        statsStatusUntil = osGetTime() + 5000;
+    }
+    nextStatsUpload = osGetTime() + 60000;
+}
+
+static void onlineConnected(void) {
+    if (secureWebSocket && !startSecureWebSocket()) { debugNetworkFailure(); return onlineFail(EPROTO); }
+    // debugStage("wss-handshake-complete");
+    onlineMode = ONLINE_ACTIVE;
+    onlineAuthenticated = false;
+    onlineLastError = 0;
+    lastPing = osGetTime();
+    char hello[320];
+    if (identityId[0] && identityToken[0])
+        snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"version\":2,\"name\":\"%s\",\"identity\":\"%s\",\"token\":\"%s\",\"avatar\":\"%s\"}\n", trainerName, identityId, identityToken, trainerIsGirl ? "girl" : "boy");
+    else
+        snprintf(hello, sizeof(hello), "{\"type\":\"enroll\",\"version\":2,\"name\":\"%s\",\"avatar\":\"%s\",\"recovery\":true}\n", trainerName, trainerIsGirl ? "girl" : "boy");
+    // Debug hello issues: log trainerName, identityId, and strlen(identityToken) here.
+    onlineSend(hello);
+}
+
+static void onlineConnect(void) {
+    if (!onlineEnabled || onlineMode != ONLINE_OFFLINE) return;
+    debugStage("connect-begin");
+    nextReconnect = 0;
+    onlineSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (onlineSocket < 0) return onlineFail(errno);
+    debugStage("connect-socket-ready");
+    fcntl(onlineSocket, F_SETFL, fcntl(onlineSocket, F_GETFL, 0) | O_NONBLOCK);
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(serverPort);
+    uint64_t now = osGetTime();
+    if (!serverAddressResolvedAt || now - serverAddressResolvedAt >= 60000) {
+        if (inet_pton(AF_INET, serverHost, &serverAddress) != 1) {
+            addrinfo hints = {};
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            addrinfo* resolved = NULL;
+            if (getaddrinfo(serverHost, NULL, &hints, &resolved) || !resolved) return onlineFail(EHOSTUNREACH);
+            serverAddress = ((sockaddr_in*) resolved->ai_addr)->sin_addr;
+            freeaddrinfo(resolved);
+        }
+        serverAddressResolvedAt = now;
+        debugStage("connect-address-resolved");
+    }
+    address.sin_addr = serverAddress;
+    debugStage("connect-call");
+    int result = connect(onlineSocket, (sockaddr*) &address, sizeof(address));
+    if (!result) { debugStage("connect-immediate"); onlineConnected(); }
+    else if (errno == EINPROGRESS || errno == EWOULDBLOCK) {
+        debugStage("connect-in-progress");
+        onlineMode = ONLINE_CONNECTING;
+        connectStarted = osGetTime();
+    } else { debugStage("connect-failed"); onlineFail(errno); }
+}
+
+static const char* skipJsonSpace(const char* at, const char* end) {
+    while (at < end && (*at == ' ' || *at == '\t' || *at == '\r' || *at == '\n')) ++at;
+    return at;
+}
+
+// Decode a bounded JSON string, including escapes, without reading past the
+// current protocol line/object. Server fields are ASCII, so non-ASCII \u
+// escapes are represented as '?' rather than being copied as ambiguous bytes.
+static bool parseJsonString(const char** cursor, const char* end, char* output, size_t size) {
+    const char* at = *cursor;
+    if (at >= end || *at++ != '"' || !size) return false;
+    size_t written = 0;
+    while (at < end) {
+        unsigned char value = (unsigned char) *at++;
+        if (value == '"') { output[written] = 0; *cursor = at; return true; }
+        if (value < 0x20) return false;
+        if (value == '\\') {
+            if (at >= end) return false;
+            char escape = *at++;
+            if (escape == '"' || escape == '\\' || escape == '/') value = (unsigned char) escape;
+            else if (escape == 'b') value = '\b';
+            else if (escape == 'f') value = '\f';
+            else if (escape == 'n') value = '\n';
+            else if (escape == 'r') value = '\r';
+            else if (escape == 't') value = '\t';
+            else if (escape == 'u') {
+                if (end - at < 4) return false;
+                unsigned codepoint = 0;
+                for (int i = 0; i < 4; ++i) {
+                    char digit = *at++;
+                    codepoint <<= 4;
+                    if (digit >= '0' && digit <= '9') codepoint |= digit - '0';
+                    else if (digit >= 'a' && digit <= 'f') codepoint |= digit - 'a' + 10;
+                    else if (digit >= 'A' && digit <= 'F') codepoint |= digit - 'A' + 10;
+                    else return false;
+                }
+                value = codepoint >= 0x20 && codepoint <= 0x7e ? (unsigned char) codepoint : '?';
+            } else return false;
+        }
+        if (written + 1 >= size) return false;
+        output[written++] = (char) value;
+    }
+    return false;
+}
+
+static const char* findJsonValue(const char* json, const char* end, const char* key) {
+    const char* at = json;
+    while (at < end) {
+        if (*at != '"') { ++at; continue; }
+        // This scratch value is used while walking both keys and preceding
+        // string values. It must hold the protocol's longest allowed string
+        // (80-byte chat plus terminator) even when that value is not our key.
+        char candidate[96];
+        const char* after = at;
+        if (!parseJsonString(&after, end, candidate, sizeof(candidate))) return NULL;
+        const char* colon = skipJsonSpace(after, end);
+        if (colon < end && *colon == ':' && !strcmp(candidate, key)) return skipJsonSpace(colon + 1, end);
+        at = after;
+    }
+    return NULL;
+}
+
+static int jsonIntBounded(const char* json, const char* end, const char* key, int fallback) {
+    const char* value = findJsonValue(json, end, key);
+    if (!value || value >= end) return fallback;
+    char* parsedEnd = NULL;
+    long parsed = strtol(value, &parsedEnd, 10);
+    if (parsedEnd == value || parsedEnd > end) return fallback;
+    const char* delimiter = skipJsonSpace(parsedEnd, end);
+    if (delimiter < end && *delimiter != ',' && *delimiter != '}' && *delimiter != ']') return fallback;
+    return (int) parsed;
+}
+
+static int jsonInt(const char* line, const char* key, int fallback) {
+    return jsonIntBounded(line, line + strlen(line), key, fallback);
+}
+
+static bool jsonBoolBounded(const char* json, const char* end, const char* key, bool fallback) {
+    const char* value = findJsonValue(json, end, key);
+    if (!value || value >= end) return fallback;
+    if (!strncmp(value, "true", 4)) return true;
+    if (!strncmp(value, "false", 5)) return false;
+    return fallback;
+}
+
+static bool jsonStringBounded(const char* json, const char* end, const char* key, char* output, size_t size) {
+    const char* value = findJsonValue(json, end, key);
+    return value && parseJsonString(&value, end, output, size);
+}
+
+static bool jsonString(const char* line, const char* key, char* output, size_t size) {
+    return jsonStringBounded(line, line + strlen(line), key, output, size);
+}
+
+static bool jsonTypeIs(const char* line, const char* expected) {
+    char type[32] = {};
+    return jsonString(line, "type", type, sizeof(type)) && !strcmp(type, expected);
+}
+
+static const char* findJsonObjectEnd(const char* at, const char* end) {
+    if (at >= end || *at != '{') return NULL;
+    int depth = 0;
+    bool inString = false, escaped = false;
+    for (; at < end; ++at) {
+        char value = *at;
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (value == '\\') escaped = true;
+            else if (value == '"') inString = false;
+        } else if (value == '"') inString = true;
+        else if (value == '{') ++depth;
+        else if (value == '}' && --depth == 0) return at + 1;
+    }
+    return NULL;
+}
+
+static const char* findJsonArrayEnd(const char* at, const char* end) {
+    if (at >= end || *at != '[') return NULL;
+    int depth = 0;
+    bool inString = false, escaped = false;
+    for (; at < end; ++at) {
+        char value = *at;
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (value == '\\') escaped = true;
+            else if (value == '"') inString = false;
+        } else if (value == '"') inString = true;
+        else if (value == '[') ++depth;
+        else if (value == ']' && --depth == 0) return at + 1;
+    }
+    return NULL;
+}
+
+static int hexNibble(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+static size_t decodeLinkPacket(const char* encoded, uint8_t* output, size_t capacity) {
+    const size_t length = strlen(encoded);
+    if (!length || (length & 1) || length / 2 > capacity) return 0;
+    for (size_t index = 0; index < length / 2; ++index) {
+        int high = hexNibble(encoded[index * 2]), low = hexNibble(encoded[index * 2 + 1]);
+        if (high < 0 || low < 0) return 0;
+        output[index] = (uint8_t) ((high << 4) | low);
+    }
+    return length / 2;
+}
+
+static void stopLink(const char* status) {
+    if (linkStarted && coreNetpacketInterface && coreNetpacketInterface->stop) coreNetpacketInterface->stop();
+    linkStarted = false;
+    if (status) snprintf(linkStatus, sizeof(linkStatus), "%s", status);
+}
+
+static void parseOnlineLine(char* line) {
+    if (jsonTypeIs(line, "enrolled") || jsonTypeIs(line, "identity_recovered")) {
+        char id[37] = {}, token[65] = {}, credential[37] = {}, fingerprint[11] = {}, recovery[25] = {}, role[10] = {};
+        if (!jsonString(line, "id", id, sizeof(id)) || !jsonString(line, "token", token, sizeof(token)) ||
+            !jsonString(line, "credentialId", credential, sizeof(credential)) || !isHexString(token, 64)) return;
+        strcpy(identityId, id);
+        strcpy(identityToken, token);
+        strcpy(credentialId, credential);
+        if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
+        if (jsonString(line, "recoveryCode", recovery, sizeof(recovery))) strcpy(recoveryCode, recovery);
+        if (jsonString(line, "role", role, sizeof(role))) snprintf(trainerRole, sizeof(trainerRole), "%s", role);
+        else strcpy(trainerRole, "player");
+        if (!saveIdentity()) onlineLastError = EIO;
+        syncStatsAfterAuthentication();
+        return;
+    }
+    if (jsonTypeIs(line, "welcome")) {
+        // debugStage("welcome-received");
+        char fingerprint[11] = {}, role[10] = {};
+        if (jsonString(line, "fingerprint", fingerprint, sizeof(fingerprint))) strcpy(identityFingerprint, fingerprint);
+        if (jsonString(line, "role", role, sizeof(role))) snprintf(trainerRole, sizeof(trainerRole), "%s", role);
+        else strcpy(trainerRole, "player");
+        syncStatsAfterAuthentication();
+        return;
+    }
+    if (jsonTypeIs(line, "teleport_locations")) {
+        teleportDestinationCount = 0;
+        teleportCustomVisible = false;
+        teleportSelectedIndex = -1;
+        const char* lineEnd = line + strlen(line);
+        const char* dests = findJsonValue(line, lineEnd, "destinations");
+        if (dests && dests < lineEnd && *dests == '[') ++dests;
+        while (dests && teleportDestinationCount < 64) {
+            dests = skipJsonSpace(dests, lineEnd);
+            if (dests >= lineEnd || *dests == ']') break;
+            if (*dests != '{') return;
+            const char* objectEnd = findJsonObjectEnd(dests, lineEnd);
+            if (!objectEnd) return;
+            TeleportDestination* dest = &teleportDestinations[teleportDestinationCount];
+            if (!jsonStringBounded(dests, objectEnd, "id", dest->id, sizeof(dest->id)) ||
+                !jsonStringBounded(dests, objectEnd, "name", dest->name, sizeof(dest->name))) break;
+            jsonStringBounded(dests, objectEnd, "kind", dest->kind, sizeof(dest->kind));
+            ++teleportDestinationCount;
+            dests = skipJsonSpace(objectEnd, lineEnd);
+            if (dests < lineEnd && *dests == ',') ++dests;
+        }
+        char visible[8] = {};
+        if (jsonString(line, "customVisible", visible, sizeof(visible)) || jsonString(line, "custom_visible", visible, sizeof(visible)))
+            teleportCustomVisible = !strcmp(visible, "true");
+        return;
+    }
+    if (jsonTypeIs(line, "teleport_result")) {
+        if (!jsonBoolBounded(line, line + strlen(line), "ok", false)) {
+            char code[32] = {};
+            jsonString(line, "code", code, sizeof(code));
+            snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARP_FAILED_FORMAT), code);
+            teleportStatusUntil = osGetTime() + 5000;
+            return;
+        }
+        int mapGroup = jsonInt(line, "map_group", -1);
+        int mapNum = jsonInt(line, "map_num", -1);
+        int x = jsonInt(line, "x", -1);
+        int y = jsonInt(line, "y", -1);
+        char facing[8] = {};
+        jsonString(line, "facing", facing, sizeof(facing));
+        uint8_t facingValue = !strcmp(facing, "up") ? 2 : !strcmp(facing, "left") ? 3 : !strcmp(facing, "right") ? 4 : 1;
+        if (mapGroup < 0 || mapGroup > 255 || mapNum < 0 || mapNum > 255 || x < 0 || x > 4095 || y < 0 || y > 4095) {
+            snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARP_FAILED_BAD_COORDS));
+            teleportStatusUntil = osGetTime() + 5000;
+            return;
+        }
+        applyTeleport((uint8_t)mapGroup, (uint8_t)mapNum, (int16_t)x, (int16_t)y, facingValue);
+        snprintf(teleportStatus, sizeof(teleportStatus), localize(LS_WARPED_TO_FORMAT), x, y);
+        teleportStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    if (jsonTypeIs(line, "stats_consent_saved")) {
+        strcpy(statsStatus, localize(LS_CONSENT_SAVED_ON_SERVER)); statsStatusUntil = osGetTime() + 5000; return;
+    }
+    if (jsonTypeIs(line, "stats_snapshot_saved")) {
+        int review = jsonInt(line, "underReview", 0);
+        strcpy(statsStatus, review ? localize(LS_SENT_VALUES_UNDER_REVIEW) : localize(LS_SCORES_SYNCED));
+        statsStatusUntil = osGetTime() + 5000; return;
+    }
+    if (jsonTypeIs(line, "browser_pairing_approved")) {
+        strcpy(browserPairingStatus, localize(LS_BROWSER_PAIRED));
+        browserPairingStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    if (jsonTypeIs(line, "link_waiting")) {
+        stopLink(NULL);
+        snprintf(linkStatus, sizeof(linkStatus), localize(LS_LINK_WAITING_FORMAT), linkRoom);
+        return;
+    }
+    if (jsonTypeIs(line, "link_started")) {
+        int clientId = jsonInt(line, "clientId", -1), peerId = jsonInt(line, "peerId", -1);
+        if (clientId < 0 || clientId > 1 || peerId < 0 || peerId > 1 || !coreNetpacketInterface ||
+            !coreNetpacketInterface->start || !backupSaveForLink()) {
+            strcpy(linkStatus, localize(LS_LINK_BLOCKED_SAVE_BACKUP_FAILED));
+            onlineSend("{\"type\":\"link_leave\"}\n");
+            linkJoined = false;
+            return;
+        }
+        linkClientId = (unsigned) clientId;
+        linkPeerId = (unsigned) peerId;
+        linkPacketsSent = linkPacketsReceived = 0;
+        coreNetpacketInterface->start((uint16_t) linkClientId, frontendNetpacketSend, frontendNetpacketPollReceive);
+        if (linkClientId == 0 && coreNetpacketInterface->connected && !coreNetpacketInterface->connected((uint16_t) linkPeerId)) {
+            if (coreNetpacketInterface->stop) coreNetpacketInterface->stop();
+            onlineSend("{\"type\":\"link_leave\"}\n");
+            linkJoined = false;
+            strcpy(linkStatus, localize(LS_LINK_BLOCKED_BY_CORE));
+            return;
+        }
+        linkStarted = true;
+        runtimeLogUploadRecent();
+        snprintf(linkStatus, sizeof(linkStatus), localize(LS_LINK_ACTIVE_BACKUP_OK_FORMAT), linkRoom);
+        debugStage("link-started-backup-complete");
+        return;
+    }
+    if (jsonTypeIs(line, "link_packet")) {
+        char encoded[1025] = {};
+        uint8_t packet[512];
+        int from = jsonInt(line, "from", -1);
+        if (!linkStarted || from < 0 || from > 3 || !jsonString(line, "data", encoded, sizeof(encoded))) return;
+        size_t size = decodeLinkPacket(encoded, packet, sizeof(packet));
+        if (!size) return;
+        coreNetpacketInterface->receive(packet, size, (uint16_t) from);
+        ++linkPacketsReceived;
+        return;
+    }
+    if (jsonTypeIs(line, "link_peer_disconnected")) {
+        int clientId = jsonInt(line, "clientId", -1);
+        if (linkStarted && linkClientId == 0 && clientId >= 0 && coreNetpacketInterface->disconnected)
+            coreNetpacketInterface->disconnected((uint16_t) clientId);
+        stopLink(localize(LS_LINK_PEER_DISCONNECTED));
+        return;
+    }
+    if (jsonTypeIs(line, "link_ended") || jsonTypeIs(line, "link_left")) {
+        stopLink(localize(LS_LINK_SESSION_ENDED));
+        linkJoined = false;
+        return;
+    }
+    if (jsonTypeIs(line, "error")) {
+        char code[40] = {};
+        jsonString(line, "code", code, sizeof(code));
+        // Debug server rejections: log the error code here.
+        if (strstr(code, "pairing")) {
+            strcpy(browserPairingStatus, localize(LS_PAIRING_CODE_EXPIRED));
+            browserPairingStatusUntil = osGetTime() + 5000;
+        }
+        if (strstr(code, "stats")) {
+            snprintf(statsStatus, sizeof(statsStatus), localize(LS_SERVER_FORMAT), code);
+            statsStatusUntil = osGetTime() + 6000;
+        }
+        if (strstr(code, "link")) {
+            snprintf(linkStatus, sizeof(linkStatus), localize(LS_SERVER_FORMAT), code);
+            if (strcmp(code, "link_rate_limited")) { stopLink(NULL); linkJoined = false; }
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "online_users")) {
+        const int page = jsonInt(line, "page", -1), pages = jsonInt(line, "pages", -1);
+        if (page < 0 || pages < 1 || pages > 4 || page >= pages) return;
+        if (page == 0) {
+            onlineUserCount = 0;
+            onlineUserExpectedPage = 0;
+            onlineUserExpectedPages = (unsigned) pages;
+        }
+        if ((unsigned) page != onlineUserExpectedPage || (unsigned) pages != onlineUserExpectedPages) return;
+        const char* lineEnd = line + strlen(line);
+        const char* user = findJsonValue(line, lineEnd, "users");
+        if (user && user < lineEnd && *user == '[') ++user;
+        while (user && onlineUserCount < 64) {
+            user = skipJsonSpace(user, lineEnd);
+            if (user >= lineEnd || *user == ']') break;
+            if (*user != '{') return;
+            const char* objectEnd = findJsonObjectEnd(user, lineEnd);
+            if (!objectEnd) return;
+            OnlineUser candidate = {};
+            if (!jsonStringBounded(user, objectEnd, "id", candidate.id, sizeof(candidate.id)) ||
+                !jsonStringBounded(user, objectEnd, "name", candidate.name, sizeof(candidate.name))) return;
+            jsonStringBounded(user, objectEnd, "map", candidate.map, sizeof(candidate.map));
+            candidate.x = jsonIntBounded(user, objectEnd, "x", -1);
+            candidate.y = jsonIntBounded(user, objectEnd, "y", -1);
+            if (!jsonStringBounded(user, objectEnd, "role", candidate.role, sizeof(candidate.role))) strcpy(candidate.role, "player");
+            candidate.positioned = candidate.map[0] && candidate.x >= 0 && candidate.y >= 0;
+            onlineUsers[onlineUserCount++] = candidate;
+            user = skipJsonSpace(objectEnd, lineEnd);
+            if (user < lineEnd && *user == ',') ++user;
+        }
+        ++onlineUserExpectedPage;
+        const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+        if (onlineUserPage >= pageCount) onlineUserPage = pageCount - 1;
+        return;
+    }
+    if (jsonTypeIs(line, "chat")) {
+        char name[13] = {}, text[81] = {}, map[33] = {}, sentAt[32] = {}, scope[8] = {};
+        if (!jsonString(line, "name", name, sizeof(name)) || !jsonString(line, "text", text, sizeof(text))) return;
+        jsonString(line, "map", map, sizeof(map));
+        jsonString(line, "sentAt", sentAt, sizeof(sentAt));
+        jsonString(line, "scope", scope, sizeof(scope));
+        strcpy(lastChatName, name);
+        strcpy(lastChatText, text);
+        if (chatHistoryCount == 24) {
+            memmove(chatHistory, chatHistory + 1, sizeof(chatHistory) - sizeof(chatHistory[0]));
+            --chatHistoryCount;
+        }
+        ChatMessage* message = &chatHistory[chatHistoryCount++];
+        strcpy(message->name, name);
+        strcpy(message->map, map);
+        strcpy(message->text, text);
+        message->global = !strcmp(scope, "global");
+        if (strlen(sentAt) >= 16 && sentAt[10] == 'T' && sentAt[13] == ':')
+            snprintf(message->time, sizeof(message->time), "%c%c:%c%cZ", sentAt[11], sentAt[12], sentAt[14], sentAt[15]);
+        else strcpy(message->time, "NOW");
+        chatPage = ~0u;
+        showToast(localize(LS_TOAST_NEW_MESSAGE), name);
+        return;
+    }
+    if (jsonTypeIs(line, "leave")) {
+        char id[37] = {};
+        if (!jsonString(line, "id", id, sizeof(id))) return;
+        for (int i = 0; i < remoteCount; ++i) if (!strcmp(remoteTrainers[i].id, id)) remoteTrainers[i] = remoteTrainers[--remoteCount];
+        ++remoteTrainerVersion;
+        return;
+    }
+    if (jsonTypeIs(line, "snapshot")) {
+        RemoteTrainer updated[8] = {};
+        int updatedCount = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* player = findJsonValue(line, lineEnd, "players");
+        if (player && player < lineEnd && *player == '[') ++player;
+        const uint64_t now = osGetTime();
+        while (player && updatedCount < 8) {
+            player = skipJsonSpace(player, lineEnd);
+            if (player >= lineEnd || *player == ']') break;
+            if (*player != '{') { player = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(player, lineEnd);
+            if (!objectEnd) break;
+            RemoteTrainer* trainer = &updated[updatedCount];
+            if (!jsonStringBounded(player, objectEnd, "id", trainer->id, sizeof(trainer->id)) ||
+                !jsonStringBounded(player, objectEnd, "name", trainer->name, sizeof(trainer->name))) break;
+            trainer->x = jsonIntBounded(player, objectEnd, "x", 0);
+            trainer->y = jsonIntBounded(player, objectEnd, "y", 0);
+            jsonStringBounded(player, objectEnd, "title", trainer->title, sizeof(trainer->title));
+            char direction[8] = {};
+            jsonStringBounded(player, objectEnd, "facing", direction, sizeof(direction));
+            trainer->facing = !strcmp(direction, "up") ? 2 : !strcmp(direction, "left") ? 3 : !strcmp(direction, "right") ? 4 : 1;
+            char avatar[8] = {};
+            if (jsonStringBounded(player, objectEnd, "avatar", avatar, sizeof(avatar))) trainer->isGirl = !strcmp(avatar, "girl");
+            bool found = false;
+            for (int old = 0; old < remoteCount; ++old) {
+                if (!strcmp(remoteTrainers[old].id, trainer->id)) {
+                    trainer->emote = remoteTrainers[old].emote;
+                    trainer->emoteUntil = remoteTrainers[old].emoteUntil;
+                    trainer->prevX = remoteTrainers[old].x;
+                    trainer->prevY = remoteTrainers[old].y;
+                    memcpy(trainer->trail, remoteTrainers[old].trail, sizeof(trainer->trail));
+                    trainer->trailCount = remoteTrainers[old].trailCount;
+                    trainer->trailNext = remoteTrainers[old].trailNext;
+                    // Append a new trail point when the trainer moves to a different tile.
+                    if (trainer->x != remoteTrainers[old].x || trainer->y != remoteTrainers[old].y) {
+                        trainer->trail[trainer->trailNext] = { presence.mapGroup, presence.mapNum, trainer->x, trainer->y };
+                        trainer->trailNext = (trainer->trailNext + 1) % 8;
+                        if (trainer->trailCount < 8) ++trainer->trailCount;
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                trainer->prevX = trainer->x;
+                trainer->prevY = trainer->y;
+                trainer->trailCount = 0;
+                trainer->trailNext = 0;
+                trainer->trail[0] = { presence.mapGroup, presence.mapNum, trainer->x, trainer->y };
+                trainer->trailCount = 1;
+            }
+            trainer->updatedAt = now;
+            ++updatedCount;
+            player = objectEnd;
+            player = skipJsonSpace(player, lineEnd);
+            if (player < lineEnd && *player == ',') ++player;
+        }
+        memcpy(remoteTrainers, updated, sizeof(updated));
+        remoteCount = updatedCount;
+        ++remoteTrainerVersion;
+        return;
+    }
+    if (jsonTypeIs(line, "npc_snapshot")) {
+        onlineNpcCount = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* npc = findJsonValue(line, lineEnd, "npcs");
+        if (npc && npc < lineEnd && *npc == '[') ++npc;
+        while (npc && onlineNpcCount < 8) {
+            npc = skipJsonSpace(npc, lineEnd);
+            if (npc >= lineEnd || *npc == ']') break;
+            if (*npc != '{') { npc = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(npc, lineEnd);
+            if (!objectEnd) break;
+            OnlineNpc* entry = &onlineNpcs[onlineNpcCount];
+            if (!jsonStringBounded(npc, objectEnd, "npc_id", entry->npc_id, sizeof(entry->npc_id)) ||
+                !jsonStringBounded(npc, objectEnd, "name", entry->name, sizeof(entry->name))) break;
+            entry->x = jsonIntBounded(npc, objectEnd, "x", 0);
+            entry->y = jsonIntBounded(npc, objectEnd, "y", 0);
+            char direction[8] = {};
+            jsonStringBounded(npc, objectEnd, "facing", direction, sizeof(direction));
+            entry->facing = !strcmp(direction, "up") ? 2 : !strcmp(direction, "left") ? 3 : !strcmp(direction, "right") ? 4 : 1;
+            jsonStringBounded(npc, objectEnd, "sprite", entry->sprite, sizeof(entry->sprite));
+            jsonStringBounded(npc, objectEnd, "quest_id", entry->quest_id, sizeof(entry->quest_id));
+            ++onlineNpcCount;
+            npc = skipJsonSpace(objectEnd, lineEnd);
+            if (npc < lineEnd && *npc == ',') ++npc;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "resource_snapshot")) {
+        resourceNodeCount = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* nodes = findJsonValue(line, lineEnd, "nodes");
+        if (nodes && nodes < lineEnd && *nodes == '[') ++nodes;
+        while (nodes && resourceNodeCount < 8) {
+            nodes = skipJsonSpace(nodes, lineEnd);
+            if (nodes >= lineEnd || *nodes == ']') break;
+            if (*nodes != '{') { nodes = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(nodes, lineEnd);
+            if (!objectEnd) break;
+            ResourceNode* entry = &resourceNodes[resourceNodeCount];
+            if (!jsonStringBounded(nodes, objectEnd, "node_id", entry->node_id, sizeof(entry->node_id)) ||
+                !jsonStringBounded(nodes, objectEnd, "kind", entry->kind, sizeof(entry->kind))) break;
+            entry->x = jsonIntBounded(nodes, objectEnd, "x", 0);
+            entry->y = jsonIntBounded(nodes, objectEnd, "y", 0);
+            entry->level = (uint8_t)jsonIntBounded(nodes, objectEnd, "level", 1);
+            entry->available = jsonBoolBounded(nodes, objectEnd, "available", true);
+            entry->respawn_in_ms = (uint32_t)jsonIntBounded(nodes, objectEnd, "respawn_in_ms", 0);
+            ++resourceNodeCount;
+            nodes = skipJsonSpace(objectEnd, lineEnd);
+            if (nodes < lineEnd && *nodes == ',') ++nodes;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "npc_dialogue")) {
+        const char* lineEnd = line + strlen(line);
+        npcDialogue.active = true;
+        npcDialogue.lineCount = 0;
+        npcDialogue.quest_id[0] = 0;
+        npcDialogue.quest_title[0] = 0;
+        jsonString(line, "npc_id", npcDialogue.npc_id, sizeof(npcDialogue.npc_id));
+        const char* lines = findJsonValue(line, lineEnd, "lines");
+        if (lines && lines < lineEnd && *lines == '[') ++lines;
+        while (lines && npcDialogue.lineCount < 4) {
+            lines = skipJsonSpace(lines, lineEnd);
+            if (lines >= lineEnd || *lines == ']') break;
+            if (*lines != '"') break;
+            parseJsonString(&lines, lineEnd, npcDialogue.lines[npcDialogue.lineCount++], sizeof(npcDialogue.lines[0]));
+            lines = skipJsonSpace(lines, lineEnd);
+            if (lines < lineEnd && *lines == ',') ++lines;
+        }
+        const char* offered = findJsonValue(line, lineEnd, "quest_offered");
+        if (offered && offered < lineEnd && *offered == '{') {
+            const char* objectEnd = findJsonObjectEnd(offered, lineEnd);
+            if (objectEnd) {
+                jsonStringBounded(offered, objectEnd, "quest_id", npcDialogue.quest_id, sizeof(npcDialogue.quest_id));
+                jsonStringBounded(offered, objectEnd, "title", npcDialogue.quest_title, sizeof(npcDialogue.quest_title));
+            }
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "resource_interact_result")) {
+        char nodeId[65] = {};
+        jsonString(line, "node_id", nodeId, sizeof(nodeId));
+        for (unsigned i = 0; i < resourceNodeCount; ++i) {
+            if (!strcmp(resourceNodes[i].node_id, nodeId)) {
+                resourceNodes[i].available = strstr(line, "\"ok\":true") == nullptr;
+                break;
+            }
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "quest_update")) {
+        char questId[37] = {}, status[16] = {}, title[121] = {};
+        jsonString(line, "quest_id", questId, sizeof(questId));
+        jsonString(line, "status", status, sizeof(status));
+        jsonString(line, "title", title, sizeof(title));
+        for (unsigned i = 0; i < questLogCount; ++i) {
+            if (!strcmp(questLog[i].quest_id, questId)) {
+                snprintf(questLog[i].status, sizeof(questLog[i].status), "%s", status);
+                break;
+            }
+        }
+        if (npcDialogue.active && !strcmp(npcDialogue.quest_id, questId)) {
+            npcDialogue.active = false;
+        }
+        if (!strcmp(status, "accepted") && title[0])
+            showToast(localize(LS_TOAST_QUEST_ACCEPTED), title);
+        else if (!strcmp(status, "completed") && title[0])
+            showToast(localize(LS_TOAST_QUEST_COMPLETED), title);
+        else if (!strcmp(status, "claimed") && title[0])
+            showToast(localize(LS_TOAST_QUEST_CLAIMED), title);
+        return;
+    }
+    if (jsonTypeIs(line, "quest_list")) {
+        questLogCount = 0;
+        questLogPage = 0;
+        questLogSelected = -1;
+        questDetailOpen = false;
+        const char* lineEnd = line + strlen(line);
+        const char* quests = findJsonValue(line, lineEnd, "quests");
+        if (quests && quests < lineEnd && *quests == '[') ++quests;
+        while (quests && questLogCount < 8) {
+            quests = skipJsonSpace(quests, lineEnd);
+            if (quests >= lineEnd || *quests == ']') break;
+            if (*quests != '{') { quests = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(quests, lineEnd);
+            if (!objectEnd) break;
+            QuestLogEntry* entry = &questLog[questLogCount];
+            memset(entry, 0, sizeof(QuestLogEntry));
+            if (!jsonStringBounded(quests, objectEnd, "id", entry->quest_id, sizeof(entry->quest_id)) ||
+                !jsonStringBounded(quests, objectEnd, "title", entry->title, sizeof(entry->title))) break;
+            jsonStringBounded(quests, objectEnd, "slug", entry->slug, sizeof(entry->slug));
+            jsonStringBounded(quests, objectEnd, "description", entry->description, sizeof(entry->description));
+            jsonStringBounded(quests, objectEnd, "status", entry->status, sizeof(entry->status));
+            jsonStringBounded(quests, objectEnd, "reward_kind", entry->reward_kind, sizeof(entry->reward_kind));
+            jsonStringBounded(quests, objectEnd, "reward_data", entry->reward_data, sizeof(entry->reward_data));
+
+            // Parse progress: we only need the npcs and resources arrays to check off stages locally.
+            char progressNpcs[8][37] = {};
+            int progressNpcCount = 0;
+            char progressResources[8][37] = {};
+            int progressResourceCount = 0;
+            const char* progress = findJsonValue(quests, objectEnd, "progress");
+            if (progress && progress < objectEnd && *progress == '{') {
+                const char* progressEnd = findJsonObjectEnd(progress, objectEnd);
+                if (progressEnd) {
+                    const char* npcs = findJsonValue(progress, progressEnd, "npcs");
+                    if (npcs && npcs < progressEnd && *npcs == '[') {
+                        ++npcs;
+                        while (progressNpcCount < 8) {
+                            npcs = skipJsonSpace(npcs, progressEnd);
+                            if (npcs >= progressEnd || *npcs == ']') break;
+                            if (*npcs != '"') break;
+                            char id[37] = {};
+                            if (parseJsonString(&npcs, progressEnd, id, sizeof(id)))
+                                strcpy(progressNpcs[progressNpcCount++], id);
+                            npcs = skipJsonSpace(npcs, progressEnd);
+                            if (npcs < progressEnd && *npcs == ',') ++npcs;
+                        }
+                    }
+                    const char* resources = findJsonValue(progress, progressEnd, "resources");
+                    if (resources && resources < progressEnd && *resources == '[') {
+                        ++resources;
+                        while (progressResourceCount < 8) {
+                            resources = skipJsonSpace(resources, progressEnd);
+                            if (resources >= progressEnd || *resources == ']') break;
+                            if (*resources != '"') break;
+                            char id[37] = {};
+                            if (parseJsonString(&resources, progressEnd, id, sizeof(id)))
+                                strcpy(progressResources[progressResourceCount++], id);
+                            resources = skipJsonSpace(resources, progressEnd);
+                            if (resources < progressEnd && *resources == ',') ++resources;
+                        }
+                    }
+                }
+            }
+
+            // Parse requirements into human-readable stage rows with local completion checks.
+            const char* requirements = findJsonValue(quests, objectEnd, "requirements");
+            if (requirements && requirements < objectEnd && *requirements == '[') {
+                ++requirements;
+                while (entry->requirementCount < 8) {
+                    requirements = skipJsonSpace(requirements, objectEnd);
+                    if (requirements >= objectEnd || *requirements == ']') break;
+                    if (*requirements != '{') break;
+                    const char* reqEnd = findJsonObjectEnd(requirements, objectEnd);
+                    if (!reqEnd) break;
+                    QuestRequirement* req = &entry->requirements[entry->requirementCount];
+                    char kind[16] = {};
+                    jsonStringBounded(requirements, reqEnd, "kind", kind, sizeof(kind));
+                    strcpy(req->kind, kind);
+
+                    char npcId[65] = {}, nodeId[65] = {}, stat[33] = {}, questId[37] = {};
+                    int statValue = jsonIntBounded(requirements, reqEnd, "value", 0);
+                    jsonStringBounded(requirements, reqEnd, "npc_id", npcId, sizeof(npcId));
+                    jsonStringBounded(requirements, reqEnd, "node_id", nodeId, sizeof(nodeId));
+                    jsonStringBounded(requirements, reqEnd, "stat", stat, sizeof(stat));
+                    jsonStringBounded(requirements, reqEnd, "quest_id", questId, sizeof(questId));
+
+                    if (!strcmp(kind, "talk_to_npc")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_TALK_TO), npcId);
+                        for (int i = 0; i < progressNpcCount; ++i)
+                            if (!strcmp(progressNpcs[i], npcId)) req->completed = true;
+                    } else if (!strcmp(kind, "interact_resource")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_HARVEST_NODE), nodeId);
+                        for (int i = 0; i < progressResourceCount; ++i)
+                            if (!strcmp(progressResources[i], nodeId)) req->completed = true;
+                    } else if (!strcmp(kind, "stat_at_least")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_STAT_AT_LEAST), stat, statValue);
+                    } else if (!strcmp(kind, "quest_completed")) {
+                        snprintf(req->label, sizeof(req->label), localize(LS_COMPLETE_QUEST), questId);
+                    } else {
+                        snprintf(req->label, sizeof(req->label), "%.50s", kind);
+                    }
+
+                    ++entry->requirementCount;
+                    requirements = reqEnd;
+                    requirements = skipJsonSpace(requirements, objectEnd);
+                    if (requirements < objectEnd && *requirements == ',') ++requirements;
+                }
+            }
+
+            ++questLogCount;
+            quests = objectEnd;
+            quests = skipJsonSpace(quests, lineEnd);
+            if (quests < lineEnd && *quests == ',') ++quests;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "title_list")) {
+        playerTitleCount = 0;
+        playerTitlePage = 0;
+        playerTitleSelected = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* titles = findJsonValue(line, lineEnd, "titles");
+        if (titles && titles < lineEnd && *titles == '[') ++titles;
+        while (titles && playerTitleCount < 16) {
+            titles = skipJsonSpace(titles, lineEnd);
+            if (titles >= lineEnd || *titles == ']') break;
+            if (*titles != '{') { titles = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(titles, lineEnd);
+            if (!objectEnd) break;
+            TitleEntry* entry = &playerTitles[playerTitleCount];
+            if (!jsonStringBounded(titles, objectEnd, "title", entry->title, sizeof(entry->title))) break;
+            entry->equipped = jsonBoolBounded(titles, objectEnd, "equipped", false);
+            ++playerTitleCount;
+            titles = skipJsonSpace(objectEnd, lineEnd);
+            if (titles < lineEnd && *titles == ',') ++titles;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "title_equipped")) {
+        char title[41] = {};
+        jsonString(line, "title", title, sizeof(title));
+        for (unsigned i = 0; i < playerTitleCount; ++i) {
+            playerTitles[i].equipped = !strcmp(playerTitles[i].title, title);
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "friend_list")) {
+        // Snapshot previous online state so we can toast offline -> online transitions.
+        FriendEntry previousFriends[32];
+        unsigned previousFriendCount = playerFriendCount;
+        memcpy(previousFriends, playerFriends, sizeof(previousFriends));
+        playerFriendCount = 0;
+        playerFriendPage = 0;
+        playerFriendSelected = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* friends = findJsonValue(line, lineEnd, "friends");
+        if (friends && friends < lineEnd && *friends == '[') ++friends;
+        while (friends && playerFriendCount < 32) {
+            friends = skipJsonSpace(friends, lineEnd);
+            if (friends >= lineEnd || *friends == ']') break;
+            if (*friends != '{') { friends = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(friends, lineEnd);
+            if (!objectEnd) break;
+            FriendEntry* entry = &playerFriends[playerFriendCount];
+            jsonStringBounded(friends, objectEnd, "fingerprint", entry->fingerprint, sizeof(entry->fingerprint));
+            jsonStringBounded(friends, objectEnd, "name", entry->name, sizeof(entry->name));
+            jsonStringBounded(friends, objectEnd, "status", entry->status, sizeof(entry->status));
+            entry->is_requester = jsonBoolBounded(friends, objectEnd, "is_requester", false);
+            entry->online = jsonBoolBounded(friends, objectEnd, "online", false);
+            jsonStringBounded(friends, objectEnd, "map", entry->map, sizeof(entry->map));
+            entry->x = jsonIntBounded(friends, objectEnd, "x", -1);
+            entry->y = jsonIntBounded(friends, objectEnd, "y", -1);
+            if (entry->online) {
+                bool wasOnline = false;
+                for (unsigned i = 0; i < previousFriendCount; ++i) {
+                    if (!strcmp(previousFriends[i].fingerprint, entry->fingerprint)) {
+                        wasOnline = previousFriends[i].online;
+                        break;
+                    }
+                }
+                if (!wasOnline && entry->name[0])
+                    showToast(localize(LS_TOAST_FRIEND_ONLINE), entry->name);
+            }
+            ++playerFriendCount;
+            friends = skipJsonSpace(objectEnd, lineEnd);
+            if (friends < lineEnd && *friends == ',') ++friends;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "friend_result")) {
+        // A friend request was answered; refresh the list on next opportunity.
+        requestFriendList();
+        return;
+    }
+    if (jsonTypeIs(line, "friend_removed")) {
+        requestFriendList();
+        return;
+    }
+    if (jsonTypeIs(line, "friend_update")) {
+        requestFriendList();
+        return;
+    }
+    if (jsonTypeIs(line, "guild_info")) {
+        guildInfo.active = false;
+        guildMemberCount = 0;
+        guildMemberPage = 0;
+        const char* lineEnd = line + strlen(line);
+        const char* guild = findJsonValue(line, lineEnd, "guild");
+        if (guild && guild < lineEnd && *guild == '{') {
+            const char* objectEnd = findJsonObjectEnd(guild, lineEnd);
+            if (objectEnd) {
+                guildInfo.active = true;
+                jsonStringBounded(guild, objectEnd, "name", guildInfo.name, sizeof(guildInfo.name));
+                jsonStringBounded(guild, objectEnd, "tag", guildInfo.tag, sizeof(guildInfo.tag));
+                jsonStringBounded(guild, objectEnd, "leader_id", guildInfo.leader_id, sizeof(guildInfo.leader_id));
+            }
+        }
+        const char* members = findJsonValue(line, lineEnd, "members");
+        if (members && members < lineEnd && *members == '[') ++members;
+        while (members && guildMemberCount < 50) {
+            members = skipJsonSpace(members, lineEnd);
+            if (members >= lineEnd || *members == ']') break;
+            if (*members != '{') { members = NULL; break; }
+            const char* objectEnd = findJsonObjectEnd(members, lineEnd);
+            if (!objectEnd) break;
+            GuildMember* member = &guildMembers[guildMemberCount];
+            jsonStringBounded(members, objectEnd, "fingerprint", member->fingerprint, sizeof(member->fingerprint));
+            jsonStringBounded(members, objectEnd, "identity_id", member->identity_id, sizeof(member->identity_id));
+            jsonStringBounded(members, objectEnd, "role", member->role, sizeof(member->role));
+            ++guildMemberCount;
+            members = skipJsonSpace(objectEnd, lineEnd);
+            if (members < lineEnd && *members == ',') ++members;
+        }
+        return;
+    }
+    if (jsonTypeIs(line, "guild_update")) {
+        requestGuildInfo();
+        if (guildInfo.active)
+            showToast(localize(LS_TOAST_GUILD_UPDATED));
+        return;
+    }
+    if (!jsonTypeIs(line, "presence") && !jsonTypeIs(line, "state") && !jsonTypeIs(line, "emote")) return;
+    char id[37] = {}, name[13] = {}, facing[8] = {};
+    if (!jsonString(line, "id", id, sizeof(id))) return;
+    int index = -1;
+    for (int i = 0; i < remoteCount; ++i) if (!strcmp(remoteTrainers[i].id, id)) index = i;
+    if (index < 0 && remoteCount < 8) index = remoteCount++;
+    if (index < 0) return;
+    RemoteTrainer* trainer = &remoteTrainers[index];
+    const bool firstSeen = trainer->id[0] == 0;
+    strcpy(trainer->id, id);
+    if (jsonString(line, "name", name, sizeof(name))) strcpy(trainer->name, name);
+    char title[33] = {};
+    if (jsonString(line, "title", title, sizeof(title))) strcpy(trainer->title, title);
+    const uint64_t now = osGetTime();
+    if (!firstSeen) {
+        trainer->prevX = trainer->x;
+        trainer->prevY = trainer->y;
+    }
+    trainer->x = jsonInt(line, "x", trainer->x);
+    trainer->y = jsonInt(line, "y", trainer->y);
+    if (firstSeen) {
+        trainer->prevX = trainer->x;
+        trainer->prevY = trainer->y;
+    }
+    trainer->updatedAt = now;
+    if (jsonString(line, "facing", facing, sizeof(facing))) trainer->facing = !strcmp(facing, "up") ? 2 : !strcmp(facing, "left") ? 3 : !strcmp(facing, "right") ? 4 : 1;
+    char avatar[8] = {};
+    if (jsonString(line, "avatar", avatar, sizeof(avatar))) trainer->isGirl = !strcmp(avatar, "girl");
+    char emote[12];
+    if (jsonString(line, "emote", emote, sizeof(emote))) {
+        trainer->emote = !strcmp(emote, "wave") ? 1 : !strcmp(emote, "battle") ? 2 : !strcmp(emote, "trade") ? 3 : 4;
+        trainer->emoteUntil = now + 1800;
+    }
+}
+
+static bool consumeProtocolPayload(const unsigned char* payload, size_t size) {
+    if (size > sizeof(receiveBuffer) - 1 - receiveLength) return false;
+    memcpy(receiveBuffer + receiveLength, payload, size);
+    receiveLength += size;
+    receiveBuffer[receiveLength] = 0;
+    char* newline;
+    while ((newline = (char*) memchr(receiveBuffer, '\n', receiveLength))) {
+        size_t lineSize = newline - receiveBuffer;
+        *newline = 0;
+        parseOnlineLine(receiveBuffer);
+        memmove(receiveBuffer, newline + 1, receiveLength - lineSize - 1);
+        receiveLength -= lineSize + 1;
+    }
+    return receiveLength < sizeof(receiveBuffer) - 1;
+}
+
+static bool processWebSocketFrames(void) {
+    size_t consumed = 0;
+    while (webSocketLength - consumed >= 2) {
+        const unsigned char* frame = webSocketBuffer + consumed;
+        if (frame[0] & 0x70) return false;
+        uint8_t opcode = frame[0] & 0x0F;
+        bool masked = (frame[1] & 0x80) != 0;
+        uint64_t payloadLength = frame[1] & 0x7F;
+        size_t headerLength = 2;
+        if (payloadLength == 126) {
+            if (webSocketLength - consumed < 4) break;
+            payloadLength = ((uint64_t) frame[2] << 8) | frame[3];
+            headerLength = 4;
+        } else if (payloadLength == 127) {
+            if (webSocketLength - consumed < 10) break;
+            payloadLength = 0;
+            for (unsigned index = 2; index < 10; ++index) payloadLength = (payloadLength << 8) | frame[index];
+            headerLength = 10;
+        }
+        if (masked || payloadLength > 4096) return false;
+        if (webSocketLength - consumed < headerLength + payloadLength) break;
+        const unsigned char* payload = frame + headerLength;
+        if (opcode == 0x8) return false;
+        if (opcode == 0x9) {
+            if (payloadLength > 125 || !webSocketWriteFrame(0xA, payload, (size_t) payloadLength)) return false;
+        } else if (opcode == 0x0 || opcode == 0x1 || opcode == 0x2) {
+            if (!consumeProtocolPayload(payload, (size_t) payloadLength)) return false;
+        } else if (opcode != 0xA) return false;
+        consumed += headerLength + (size_t) payloadLength;
+    }
+    if (consumed) {
+        memmove(webSocketBuffer, webSocketBuffer + consumed, webSocketLength - consumed);
+        webSocketLength -= consumed;
+    }
+    return webSocketLength < sizeof(webSocketBuffer);
+}
+
+static int onlineReadBytes(unsigned char* data, size_t size) {
+    if (!tlsActive) {
+        int result = (int) recv(onlineSocket, data, size, 0);
+        if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return -2;
+        return result;
+    }
+    int result = mbedtls_ssl_read(&tlsContext, data, size);
+    if (result == MBEDTLS_ERR_SSL_WANT_READ || result == MBEDTLS_ERR_SSL_WANT_WRITE) return -2;
+    return result;
+}
+
+static bool receiveOnlineTraffic(void) {
+    for (;;) {
+        if (secureWebSocket) {
+            if (!processWebSocketFrames()) return false;
+            if (webSocketLength == sizeof(webSocketBuffer)) return false;
+            int count = onlineReadBytes(webSocketBuffer + webSocketLength, sizeof(webSocketBuffer) - webSocketLength);
+            if (count == -2) return true;
+            if (count <= 0) return false;
+            webSocketLength += (size_t) count;
+        } else {
+            unsigned char data[1024];
+            int count = onlineReadBytes(data, sizeof(data));
+            if (count == -2) return true;
+            if (count <= 0) return false;
+            if (!consumeProtocolPayload(data, (size_t) count)) return false;
+        }
+    }
+}
+
+static void onlineUpdate(void) {
+    drainOutgoingBuffer();
+    uint64_t now = osGetTime();
+    if (onlineMode == ONLINE_OFFLINE && onlineEnabled && (!nextReconnect || now >= nextReconnect)) onlineConnect();
+    if (onlineMode == ONLINE_CONNECTING) {
+        // ctrulib's socket service can accept a nonblocking TCP connection
+        // without subsequently marking it writable through select(). Polling
+        // the peer state detects that completed connection reliably. Azahar
+        // validates the guest sockaddr family before servicing getpeername(),
+        // even though the call writes this output structure, so seed AF_INET.
+        sockaddr_in peer = {};
+        peer.sin_family = AF_INET;
+        socklen_t peerSize = sizeof(peer);
+        if (!getpeername(onlineSocket, (sockaddr*)&peer, &peerSize)) {
+            debugStage("connect-peer-ready");
+            int error = 0;
+            socklen_t size = sizeof(error);
+            if (!getsockopt(onlineSocket, SOL_SOCKET, SO_ERROR, &error, &size) && !error) onlineConnected();
+            else onlineFail(error ? error : errno);
+        } else if (errno != ENOTCONN && errno != EINPROGRESS && errno != EALREADY && errno != EAGAIN && errno != EWOULDBLOCK) {
+            onlineFail(errno);
+        } else if (now - connectStarted > 5000) onlineFail(ETIMEDOUT);
+    }
+    if (onlineMode != ONLINE_ACTIVE) return;
+    if (now - lastPing >= 10000) {
+        char ping[64];
+        snprintf(ping, sizeof(ping), "{\"type\":\"ping\",\"at\":%llu}\n", (unsigned long long) now);
+        if (!onlineSend(ping)) return;
+        lastPing = now;
+    }
+    if (presence.valid && (!lastSentPresence.valid || memcmp(&presence, &lastSentPresence, sizeof(presence)))) {
+        char state[192];
+        snprintf(state, sizeof(state), "{\"type\":\"state\",\"seq\":%u,\"map\":\"%u-%u\",\"x\":%d,\"y\":%d,\"facing\":\"%s\",\"avatar\":\"%s\"}\n", ++onlineSequence, presence.mapGroup, presence.mapNum, presence.x, presence.y, facingName(presence.facing), trainerIsGirl ? "girl" : "boy");
+        // Debug invalid_state rejections: log the outgoing state packet here.
+        if (onlineSend(state)) lastSentPresence = presence;
+    }
+    if (onlineAuthenticated && statsEnabled && saveStats.valid && now >= nextStatsUpload) {
+        sendStatsSnapshot();
+        nextStatsUpload = now + 60000;
+    }
+    if (!receiveOnlineTraffic()) onlineFail(ECONNRESET);
+}
+
+static void onlineToggle(void) {
+    onlineEnabled = !onlineEnabled;
+    if (!onlineEnabled) onlineDisconnect(); else onlineConnect();
+}
+
+static void sendEmote(unsigned index) {
+    static const char* names[] = {"wave", "battle", "trade", "gg"};
+    if (onlineMode != ONLINE_ACTIVE || index > 3) return;
+    char packet[64];
+    snprintf(packet, sizeof(packet), "{\"type\":\"emote\",\"emote\":\"%s\"}\n", names[index]);
+    onlineSend(packet);
+}
+
+static void openChat(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    char text[81] = {};
+    if (!inputText(globalChat ? "Message all online trainers" : "Message trainers on this map", text, sizeof(text), 80) || !text[0]) return;
+    for (char* p = text; *p; ++p) if (*p == '"' || *p == '\\' || (unsigned char)*p < 0x20) *p = ' ';
+    char packet[144];
+    snprintf(packet, sizeof(packet), "{\"type\":\"chat\",\"scope\":\"%s\",\"text\":\"%s\"}\n", globalChat ? "global" : "map", text);
+    onlineSend(packet);
+}
+
+static void sendNpcInteract(const char* npcId) {
+    if (onlineMode != ONLINE_ACTIVE || !npcId || !npcId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"npc_interact\",\"npc_id\":\"%s\"}\n", npcId);
+    onlineSend(packet);
+}
+
+static void sendResourceInteract(const char* nodeId) {
+    if (onlineMode != ONLINE_ACTIVE || !nodeId || !nodeId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"resource_interact\",\"node_id\":\"%s\"}\n", nodeId);
+    onlineSend(packet);
+}
+
+static void sendQuestAccept(const char* questId) {
+    if (onlineMode != ONLINE_ACTIVE || !questId || !questId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"quest_accept\",\"quest_id\":\"%s\"}\n", questId);
+    onlineSend(packet);
+}
+
+static void sendQuestClaim(const char* questId) {
+    if (onlineMode != ONLINE_ACTIVE || !questId || !questId[0]) return;
+    char packet[96];
+    snprintf(packet, sizeof(packet), "{\"type\":\"quest_claim\",\"quest_id\":\"%s\"}\n", questId);
+    onlineSend(packet);
+}
+
+static void requestQuestList(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"quest_list\"}\n");
+}
+
+static void requestTitleList(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"title_list\"}\n");
+}
+
+static void sendTitleEquip(const char* title) {
+    if (onlineMode != ONLINE_ACTIVE || !title || !title[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"title_equip\",\"title\":\"%s\"}\n", title);
+    onlineSend(packet);
+}
+
+static void requestFriendList(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"friend_list\"}\n");
+}
+
+static void sendFriendRequest(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"friend_request\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static void sendFriendAccept(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"friend_accept\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static void sendFriendRemove(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"friend_remove\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static void requestGuildInfo(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"guild_info\"}\n");
+}
+
+static void sendGuildCreate(const char* name, const char* tag) {
+    if (onlineMode != ONLINE_ACTIVE || !name || !name[0] || !tag || !tag[0]) return;
+    char packet[192];
+    snprintf(packet, sizeof(packet), "{\"type\":\"guild_create\",\"name\":\"%s\",\"tag\":\"%s\"}\n", name, tag);
+    onlineSend(packet);
+}
+
+static void sendGuildJoin(const char* name) {
+    if (onlineMode != ONLINE_ACTIVE || !name || !name[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"guild_join\",\"name\":\"%s\"}\n", name);
+    onlineSend(packet);
+}
+
+static void sendGuildLeave(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"guild_leave\"}\n");
+}
+
+static void sendGuildDisband(void) {
+    if (onlineMode != ONLINE_ACTIVE) return;
+    onlineSend("{\"type\":\"guild_disband\"}\n");
+}
+
+static void sendGuildKick(const char* fingerprint) {
+    if (onlineMode != ONLINE_ACTIVE || !fingerprint || !fingerprint[0]) return;
+    char packet[128];
+    snprintf(packet, sizeof(packet), "{\"type\":\"guild_kick\",\"fingerprint\":\"%s\"}\n", fingerprint);
+    onlineSend(packet);
+}
+
+static bool canCreateCustomTeleport(void) {
+    return !strcmp(trainerRole, "admin") || !strcmp(trainerRole, "moderator");
+}
+
+static void proposeCustomTeleport(void) {
+    if (onlineMode != ONLINE_ACTIVE || !canCreateCustomTeleport()) return;
+    char name[33] = {};
+    if (!inputText(localize(LS_HINT_CUSTOM_DESTINATION_NAME), name, sizeof(name), 32) || !name[0]) return;
+    char coords[48] = {};
+    if (!inputText(localize(LS_HINT_MAPGROUP_MAPNUM_X_Y), coords, sizeof(coords), 31) || !coords[0]) return;
+    unsigned mg = 0, mn = 0;
+    int x = 0, y = 0;
+    if (sscanf(coords, "%u-%u,%d,%d", &mg, &mn, &x, &y) != 4) {
+        strcpy(teleportStatus, localize(LS_INVALID_FORMAT_USE_MAP_MAP_X_Y));
+        teleportStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    if (mg > 255 || mn > 255 || x < 0 || x > 4096 || y < 0 || y > 4096) {
+        strcpy(teleportStatus, localize(LS_COORDINATES_OUT_OF_RANGE));
+        teleportStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    for (char* p = name; *p; ++p) if (*p == '"' || *p == '\\' || (unsigned char)*p < 0x20) *p = ' ';
+    char packet[144];
+    snprintf(packet, sizeof(packet), "{\"type\":\"teleport_custom_propose\",\"name\":\"%s\",\"map_group\":%u,\"map_num\":%u,\"x\":%d,\"y\":%d}\n", name, mg, mn, x, y);
+    if (onlineSend(packet)) {
+        strcpy(teleportStatus, localize(LS_CUSTOM_DEST_SENT_FOR_APPROVAL));
+    } else {
+        strcpy(teleportStatus, localize(LS_FAILED_TO_SEND_CUSTOM_DEST));
+    }
+    teleportStatusUntil = osGetTime() + 5000;
+}
+
+static void openBrowserPairing(void) {
+    if (onlineMode != ONLINE_ACTIVE || !identityId[0]) return;
+    SwkbdState keyboard;
+    char entered[16] = {}, compact[9] = {}, code[10] = {};
+    swkbdInit(&keyboard, SWKBD_TYPE_NORMAL, 1, 9);
+    swkbdSetHintText(&keyboard, localize(LS_HINT_BROWSER_CODE));
+    if (swkbdInputText(&keyboard, entered, sizeof(entered)) != SWKBD_BUTTON_CONFIRM) return;
+    size_t length = 0;
+    for (const char* at = entered; *at && length < sizeof(compact) - 1; ++at) {
+        if (*at == '-' || *at == ' ') continue;
+        char value = (char) toupper((unsigned char) *at);
+        if (!((value >= 'A' && value <= 'Z' && value != 'I' && value != 'O') || (value >= '2' && value <= '9'))) {
+            strcpy(browserPairingStatus, "localize(LS_INVALID_PAIRING_CODE)");
+            browserPairingStatusUntil = osGetTime() + 5000;
+            return;
+        }
+        compact[length++] = value;
+    }
+    if (length != 8) {
+        strcpy(browserPairingStatus, "localize(LS_INVALID_PAIRING_CODE)");
+        browserPairingStatusUntil = osGetTime() + 5000;
+        return;
+    }
+    snprintf(code, sizeof(code), "%.4s-%.4s", compact, compact + 4);
+    char packet[80];
+    snprintf(packet, sizeof(packet), "{\"type\":\"pair_browser_approve\",\"code\":\"%s\"}\n", code);
+    if (onlineSend(packet)) strcpy(browserPairingStatus, localize(LS_PAIRING_APPROVAL_SENT));
+    else strcpy(browserPairingStatus, localize(LS_PAIRING_SEND_FAILED));
+    browserPairingStatusUntil = osGetTime() + 5000;
+}
+
+static bool typedConfirmation(const char* hint, const char* expected) {
+    SwkbdState keyboard; char entered[32] = {};
+    swkbdInit(&keyboard, SWKBD_TYPE_QWERTY, 1, sizeof(entered)-1);
+    swkbdSetHintText(&keyboard, hint);
+    if (swkbdInputText(&keyboard, entered, sizeof(entered)) != SWKBD_BUTTON_CONFIRM) return false;
+    for (char* at=entered;*at;++at) *at=(char)toupper((unsigned char)*at);
+    return !strcmp(entered, expected);
+}
+
+static void enableStatsUpload(void) {
+    if (!typedConfirmation(localize(LS_HINT_TYPE_YES_UPLOAD), "YES")) {
+        strcpy(statsStatus, localize(LS_NOT_ENABLED_NO_DATA_UPLOADED)); statsStatusUntil=osGetTime()+5000; return;
+    }
+    statsEnabled=statsSeenEnabled=statsCaughtEnabled=statsBadgesEnabled=statsFrontierEnabled=true;
+    if (!saveStatsConfig()) { statsEnabled=false; strcpy(statsStatus,localize(LS_COULD_NOT_SAVE_STATS_CFG)); return; }
+    strcpy(statsStatus,localize(LS_CONSENT_SAVED_SYNCING)); statsStatusUntil=osGetTime()+5000;
+    if (onlineAuthenticated) { sendStatsConsent(false); sendStatsSnapshot(); }
+}
+
+static void toggleStatsField(unsigned index) {
+    if (!statsEnabled || index>3) return;
+    bool* fields[] = {&statsSeenEnabled,&statsCaughtEnabled,&statsBadgesEnabled,&statsFrontierEnabled};
+    *fields[index]=!*fields[index];
+    if (!saveStatsConfig()) { *fields[index]=!*fields[index]; strcpy(statsStatus,localize(LS_COULD_NOT_SAVE_STATS_CFG)); return; }
+    strcpy(statsStatus,*fields[index]?localize(LS_FIELD_ENABLED_SYNCING):localize(LS_FIELD_DISABLED_SERVER_DATA_REMOVED)); statsStatusUntil=osGetTime()+5000;
+    if (onlineAuthenticated) { sendStatsConsent(false); if (*fields[index]) sendStatsSnapshot(); }
+}
+
+static void deleteStatsHistory(void) {
+    if (!typedConfirmation(localize(LS_HINT_TYPE_DELETE_ERASE), "DELETE")) {
+        strcpy(statsStatus,localize(LS_DELETE_CANCELLED)); statsStatusUntil=osGetTime()+4000; return;
+    }
+    statsEnabled=statsSeenEnabled=statsCaughtEnabled=statsBadgesEnabled=statsFrontierEnabled=false;
+    saveStatsConfig();
+    if (onlineAuthenticated) sendStatsConsent(true);
+    strcpy(statsStatus,localize(LS_DELETE_SENT_UPLOADS_OFF)); statsStatusUntil=osGetTime()+6000;
+}
+
+static void syncStatsNow(void) {
+    saveStats=readSaveStats();
+    if (!statsEnabled) return enableStatsUpload();
+    if (!onlineAuthenticated) { strcpy(statsStatus,localize(LS_CONNECT_ONLINE_TO_SYNC)); statsStatusUntil=osGetTime()+4000; return; }
+    if (!saveStats.valid) { strcpy(statsStatus,localize(LS_WAITING_FOR_VALID_SAVE_MEMORY)); statsStatusUntil=osGetTime()+4000; return; }
+    sendStatsConsent(false); sendStatsSnapshot(); nextStatsUpload=osGetTime()+60000;
+}
+
+static void drawConnectionDot(float x, float y) {
+    uint32_t color;
+    if (onlineMode == ONLINE_ACTIVE) color = C2D_Color32(50, 205, 50, 255);
+    else if (onlineMode == ONLINE_CONNECTING) color = C2D_Color32(255, 165, 0, 255);
+    else if (onlineEnabled) color = C2D_Color32(220, 50, 50, 255);
+    else color = C2D_Color32(120, 120, 120, 255);
+    C2D_DrawEllipseSolid(x, y, .1f, 8, 8, color);
+}
+
+static const char* bottomPageTitle(BottomPage page) {
+    return page == PAGE_USERS ? localize(LS_ONLINE_USERS_READ_ONLY) :
+        page == PAGE_CHAT ? localize(LS_CHAT) :
+        page == PAGE_PARTY ? localize(LS_PARTY_LOCAL_ONLY) :
+        page == PAGE_BAG ? localize(LS_BAG_LOCAL_ONLY) :
+        page == PAGE_MAP ? localize(LS_MAP_TRAINER_RADAR) :
+        page == PAGE_STATS ? localize(LS_PLAYER_STATS_AND_CONSENT) :
+        page == PAGE_QUESTS ? localize(LS_QUEST_LOG) :
+        page == PAGE_TITLES ? localize(LS_TITLE_LOG) :
+        page == PAGE_FRIENDS ? localize(LS_FRIENDS_LIST) :
+        page == PAGE_GUILD ? localize(LS_GUILD) :
+        page == PAGE_TELEPORT ? localize(LS_TELEPORT) :
+        page == PAGE_UPDATE ? localize(LS_SYSTEM_UPDATE) :
+        page == PAGE_SETTINGS ? localize(LS_SETTINGS) : localize(LS_EMERALD_ONLINE);
+}
+
+static const char* launcherPageLabel(BottomPage page) {
+    switch (page) {
+    case PAGE_ONLINE: return "HOME";
+    case PAGE_USERS: return "ONLINE USERS";
+    case PAGE_CHAT: return "CHAT";
+    case PAGE_PARTY: return "PARTY";
+    case PAGE_BAG: return "BAG";
+    case PAGE_MAP: return "MAP & RADAR";
+    case PAGE_STATS: return "STATS & PRIVACY";
+    case PAGE_QUESTS: return "QUESTS";
+    case PAGE_TITLES: return "TITLES";
+    case PAGE_FRIENDS: return "FRIENDS";
+    case PAGE_GUILD: return "GUILD";
+    case PAGE_TELEPORT: return "TELEPORT";
+    case PAGE_UPDATE: return "UPDATE";
+    case PAGE_SETTINGS: return "SETTINGS";
+    default: return "HOME";
+    }
+}
+
+static unsigned launcherGroupForPage(BottomPage page) {
+    for (unsigned group = 0; group < 4; ++group)
+        for (unsigned index = 0; index < launcherPageCounts[group]; ++index)
+            if (launcherPages[group][index] == page) return group;
+    return 0;
+}
+
+static void selectLauncherGroup(unsigned group) {
+    launcherGroup = group % 4;
+    launcherSelection = 0;
+    for (unsigned index = 0; index < launcherPageCounts[launcherGroup]; ++index)
+        if (launcherPages[launcherGroup][index] == bottomPage) launcherSelection = index;
+}
+
+static void openLauncher(void) {
+    launcherOpen = true;
+    selectLauncherGroup(launcherGroupForPage(bottomPage));
+}
+
+static void drawLauncher(void) {
+    static const LocalizedString groupLabels[4] = {LS_MENU_ONLINE, LS_MENU_ADVENTURE, LS_MENU_SOCIAL, LS_MENU_SYSTEM};
+    for (unsigned group = 0; group < 4; ++group) {
+        const float x = group * 80.0f;
+        const bool selected = group == launcherGroup;
+        C2D_DrawRectSolid(x + 1, 41, 0, 78, 25, selected ? C2D_Color32(38, 145, 91, 255) : C2D_Color32(37, 57, 50, 255));
+        drawTextStatic(x + 8, 48, .25f, C2D_Color32(255, 255, 255, 255), localize(groupLabels[group]));
+    }
+    for (unsigned index = 0; index < launcherPageCounts[launcherGroup]; ++index) {
+        const unsigned row = index / 2;
+        const unsigned column = index % 2;
+        const float x = column ? 165.0f : 10.0f;
+        const float y = 73.0f + row * 44.0f;
+        const bool selected = index == launcherSelection;
+        C2D_DrawRectSolid(x, y, 0, 145, 37, selected ? C2D_Color32(42, 126, 83, 255) : C2D_Color32(22, 61, 46, 255));
+        if (selected) C2D_DrawRectSolid(x, y, .05f, 4, 37, C2D_Color32(255, 209, 102, 255));
+        drawTextStatic(x + 14, y + 11, .34f, C2D_Color32(255, 255, 255, 255), launcherPageLabel(launcherPages[launcherGroup][index]));
+    }
+    drawTextStatic(83, 220, .31f, C2D_Color32(190, 220, 210, 255), localize(LS_MENU_CLOSE_GROUPS));
+}
+
+static void drawContextPrompt(void) {
+    if (remoteCount > 0) {
+        drawText(38, 91, .29f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_NEARBY_FORMAT), remoteCount, remoteCount == 1 ? "" : "S");
+    } else if (lastChatText[0]) {
+        drawText(44, 91, .29f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_MESSAGE_FORMAT), lastChatName);
+    } else if (linkConfigured) {
+        drawTextStatic(25, 91, .27f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_LINK_READY));
+    } else if (questLogCount > 0) {
+        drawText(58, 91, .29f, C2D_Color32(255, 220, 130, 255), localize(LS_CONTEXT_QUESTS_FORMAT), questLogCount, questLogCount == 1 ? "" : "S");
+    } else {
+        drawTextStatic(80, 91, .30f, C2D_Color32(180, 205, 200, 255), localize(LS_TAP_PROFILE_PAIR_BROWSER));
+    }
+}
+
+static void drawPageIndicators(float y) {
+    static const uint32_t colors[] = {
+        C2D_Color32(80, 164, 245, 255),  // Online
+        C2D_Color32(80, 164, 245, 255),  // Users
+        C2D_Color32(80, 164, 245, 255),  // Chat
+        C2D_Color32(130, 200, 80, 255),  // Party
+        C2D_Color32(130, 200, 80, 255),  // Bag
+        C2D_Color32(130, 200, 80, 255),  // Map
+        C2D_Color32(160, 160, 160, 255), // Stats
+        C2D_Color32(130, 220, 120, 255), // Quests
+        C2D_Color32(210, 190, 80, 255),  // Titles
+        C2D_Color32(210, 120, 200, 255), // Friends
+        C2D_Color32(120, 120, 220, 255), // Guild
+        C2D_Color32(200, 130, 60, 255),  // Teleport
+        C2D_Color32(200, 100, 160, 255), // Update
+        C2D_Color32(180, 180, 180, 255), // Settings
+    };
+    const float startX = 160 - (PAGE_COUNT * 14) / 2.0f;
+    for (unsigned page = 0; page < PAGE_COUNT; ++page) {
+        float cx = startX + page * 14 + 4;
+        bool active = page == (unsigned) bottomPage;
+        uint32_t dotColor = active ? C2D_Color32(255, 255, 255, 255) : colors[page];
+        if (active) {
+            C2D_DrawEllipseSolid(cx, y, .05f, 7, 7, C2D_Color32(255, 255, 255, 255));
+            C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
+        } else {
+            C2D_DrawEllipseSolid(cx, y, .1f, 5, 5, dotColor);
+        }
+    }
+}
+
+static void drawBottom(void) {
+    C2D_TargetClear(bottomTarget, C2D_Color32(11, 36, 26, 255));
+    C2D_SceneBegin(bottomTarget);
+    C2D_DrawRectSolid(0, 0, 0, 320, 38, C2D_Color32(16, 45, 34, 255));
+    C2D_DrawRectSolid(0, 36, 0, 320, 2, C2D_Color32(47, 184, 230, 255));
+    C2D_TextBufClear(textBuffer);
+    const char* title = launcherOpen ? localize(LS_PAGE_MENU) : bottomPageTitle(bottomPage);
+    drawTextStatic(16, 11, .55f, C2D_Color32(255,255,255,255), title);
+    drawConnectionDot(306, 16);
+    if (!launcherOpen) {
+        drawTextStatic(248, 14, .30f, C2D_Color32(180,220,205,255), localize(LS_Y_ARROW));
+        drawPageIndicators(31);
+    }
+    if (launcherOpen) { drawLauncher(); return; }
+    if (bottomPage == PAGE_SETTINGS) { drawSettingsPage(); return; }
+    if (bottomPage == PAGE_UPDATE) { drawUpdatePage(); return; }
+    if (bottomPage == PAGE_TELEPORT) { drawTeleportPage(); return; }
+    if (bottomPage == PAGE_GUILD) { drawGuildPage(); return; }
+    if (bottomPage == PAGE_FRIENDS) { drawFriendsPage(); return; }
+    if (bottomPage == PAGE_TITLES) { drawTitlesPage(); return; }
+    if (bottomPage == PAGE_QUESTS) { drawQuestPage(); return; }
+    if (bottomPage == PAGE_USERS) { drawOnlineUsersPage(); return; }
+    if (bottomPage == PAGE_CHAT) { drawChatPage(); return; }
+    if (bottomPage == PAGE_STATS) { drawStatsPage(); return; }
+    if (bottomPage == PAGE_MAP) { drawMapPage(); return; }
+    if (bottomPage == PAGE_BAG) { drawBagPage(); return; }
+    if (bottomPage == PAGE_PARTY) {
+        if (!gbaEwram) drawWaitingMessage(localize(LS_WAITING_EMERALD_MEMORY_PARTY));
+        else {
+            unsigned count = gbaEwram[0x244E9];
+            if (count > 6) count = 0;
+            for (unsigned i = 0; i < 6; ++i) {
+                float y = 45 + i * 28;
+                C2D_DrawRectSolid(10, y, 0, 300, 24, C2D_Color32(i & 1 ? 22 : 25, i & 1 ? 61 : 74, i & 1 ? 46 : 54, 255));
+                if (i >= count) continue;
+                size_t base = 0x244EC + i * 100;
+                char nickname[11] = {};
+                for (int j = 0; j < 10 && gbaEwram[base + 8 + j] != 0xFF; ++j) nickname[j] = decodeEmerald(gbaEwram[base + 8 + j]);
+                uint8_t level = gbaEwram[base + 84];
+                uint16_t hp = read16(gbaEwram, base + 86), maxHp = read16(gbaEwram, base + 88);
+                drawText(18, y + 5, .42f, C2D_Color32(255,255,255,255), "%u  %.10s", i + 1, nickname);
+                drawText(190, y + 5, .39f, C2D_Color32(190,220,210,255), localize(LS_LEVEL_FORMAT), level);
+                drawText(248, y + 5, .39f, C2D_Color32(255,255,255,255), "%u/%u", hp, maxHp);
+            }
+        }
+        drawTextStatic(119, 222, .38f, C2D_Color32(190,220,210,255), localize(LS_Y_BAG));
+        return;
+    }
+    const char* status = onlineMode == ONLINE_ACTIVE ? localize(LS_ONLINE) : onlineMode == ONLINE_CONNECTING ? localize(LS_CONNECTING) : onlineEnabled ? localize(LS_RETRYING) : localize(LS_OFFLINE);
+    uint32_t statusColor = onlineMode == ONLINE_ACTIVE ? C2D_Color32(78,168,95,255) : onlineEnabled ? C2D_Color32(58,143,207,255) : C2D_Color32(77,80,96,255);
+    C2D_DrawRectSolid(205, 7, 0, 103, 24, statusColor);
+    drawTextStatic(225, 12, .42f, C2D_Color32(255,255,255,255), status);
+    C2D_DrawRectSolid(10, 46, 0, 300, 43, C2D_Color32(25,74,54,255));
+        drawText(20, 52, .43f, C2D_Color32(160,232,255,255), "%s", trainerName);
+        if (identityFingerprint[0]) drawText(126, 52, .32f, C2D_Color32(185,215,205,255), localize(LS_ID_FORMAT), identityFingerprint);
+        if (strcmp(trainerRole, "player")) {
+            uint32_t localRoleColor = roleColor(trainerRole);
+            C2D_DrawRectSolid(198, 49, .05f, 52, 18, localRoleColor);
+            drawText(224, 52, .28f, C2D_Color32(255,255,255,255), "%s", roleLabel(trainerRole));
+        }
+    if (fpsVisible) drawText(270, 52, .43f, C2D_Color32(200,220,220,255), localize(LS_FPS_FORMAT), measuredFps);
+    if (presence.valid) drawText(20, 70, .38f, C2D_Color32(255,255,255,255), localize(LS_MAP_TILE_FORMAT), presence.mapGroup, presence.mapNum, presence.x, presence.y);
+    else drawText(20, 70, .38f, C2D_Color32(210,220,215,255), "%s", localize(LS_WAITING_OVERWORLD));
+        if (recoveryCode[0]) drawText(22, 91, .31f, C2D_Color32(255,220,130,255), localize(LS_RECOVERY_WRITE_DOWN_FORMAT), recoveryCode);
+        else if (browserPairingStatus[0] && osGetTime() < browserPairingStatusUntil) drawText(75, 91, .32f, C2D_Color32(255,220,130,255), "%s", browserPairingStatus);
+        else if (onlineMode != ONLINE_ACTIVE)
+            drawText(18, 91, .27f, C2D_Color32(180,205,200,255), localize(LS_VERSION_HOST_PORT_FORMAT), APP_VERSION, serverHost, serverPort);
+        else drawContextPrompt();
+    if (onlineMode != ONLINE_ACTIVE) {
+        static const char* stages[] = {"SOCKET", "TLS INIT", "TLS SETUP", "TLS HANDSHAKE", "CERT VERIFY", "WS REQUEST", "WS RESPONSE", "WS ACCEPT"};
+        // These are short protocol-stage tokens used only inside the diagnostic
+        // overlay. They are left as literals because they map 1:1 to server logs.
+        const char* stage = onlineProtocolStage >= 0 && onlineProtocolStage <= 7 ? stages[onlineProtocolStage] : "UNKNOWN";
+        C2D_DrawRectSolid(10, 104, 0, 300, 90, C2D_Color32(44,52,49,255));
+        drawTextStatic(20, 110, .40f, C2D_Color32(160,232,255,255), localize(LS_NETWORK_DIAGNOSTIC));
+        drawText(20, 130, .39f, C2D_Color32(255,220,130,255), localize(LS_NETWORK_DIAGNOSTIC_DETAIL_FORMAT), onlineLastError, stage, onlineProtocolStage);
+        drawText(20, 150, .38f, C2D_Color32(255,255,255,255), localize(LS_TLS_RESULT_FORMAT), onlineTlsResult);
+        drawText(20, 169, .34f, C2D_Color32(255,255,255,255), localize(LS_VERIFY_CLOCK_FORMAT), (unsigned long) onlineTlsVerify, onlineTlsFutureSkew);
+        drawTextStatic(20, 186, .24f, C2D_Color32(180,205,200,255), localize(LS_LOG_PATH_LABEL));
+    } else {
+        C2D_DrawRectSolid(10, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
+        C2D_DrawRectSolid(165, 104, 0, 145, 90, C2D_Color32(22,61,46,255));
+        drawText(20, 110, .34f, C2D_Color32(160,232,255,255), localize(LS_NEARBY_ONLINE_FORMAT), remoteCount, onlineUserCount);
+        for (int i = 0; i < remoteCount && i < 3; ++i) drawText(20, 130 + i * 17, .36f, C2D_Color32(255,255,255,255), "%.12s  %d,%d", remoteTrainers[i].name, remoteTrainers[i].x, remoteTrainers[i].y);
+        if (!remoteCount) drawText(27, 145, .34f, C2D_Color32(180,205,200,255), "%s", localize(LS_TAP_FOR_ALL_USERS));
+        drawText(175, 110, .38f, C2D_Color32(160,232,255,255), "%s", localize(LS_MAP_CHAT));
+        if (lastChatText[0]) {
+            drawText(175, 130, .34f, C2D_Color32(160,232,255,255), "%.12s", lastChatName);
+            drawText(175, 150, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText);
+            if (strlen(lastChatText) > 20) drawText(175, 168, .32f, C2D_Color32(255,255,255,255), "%.20s", lastChatText + 20);
+        } else drawText(181, 145, .34f, C2D_Color32(180,205,200,255), "%s", localize(LS_TAP_FOR_MESSAGES));
+    }
+    const uint32_t colors[4] = {C2D_Color32(41,93,66,255),C2D_Color32(66,80,165,255),C2D_Color32(58,118,80,255),C2D_Color32(98,87,46,255)};
+    const char* labels[4] = {localize(LS_WAVE), localize(LS_BATTLE), localize(LS_TRADE), localize(LS_GG)};
+    for (int i = 0; i < 4; ++i) {
+        C2D_DrawRectSolid(i * 81, 202, 0, i == 2 ? 77 : 78, 38, colors[i]);
+        drawTextStatic(i * 81 + 17, 214, .36f, C2D_Color32(255,255,255,255), labels[i]);
+    }
+    if (linkConfigured) drawText(12, 193, .24f, C2D_Color32(255,220,130,255), localize(LS_LINK_STATUS_TX_RX_FORMAT), linkStatus, linkPacketsSent, linkPacketsReceived);
+}
+
+static unsigned filteredTeleportCount(void) {
+    unsigned count = 0;
+    for (unsigned i = 0; i < teleportDestinationCount; ++i)
+        if (teleportKindMatches(teleportDestinations[i].kind)) ++count;
+    return count;
+}
+
+static void handleRepeatInput(void) {
+    if (!repeatKeys) return;
+    if (repeatKeys & KEY_Y) {
+        if (launcherOpen) launcherOpen = false;
+        else if (!npcDialogue.active) openLauncher();
+        return;
+    }
+    if (launcherOpen) {
+        const unsigned count = launcherPageCounts[launcherGroup];
+        if (repeatKeys & KEY_L) selectLauncherGroup((launcherGroup + 3) % 4);
+        else if (repeatKeys & KEY_R) selectLauncherGroup((launcherGroup + 1) % 4);
+        else if (repeatKeys & (KEY_UP | KEY_CPAD_UP)) launcherSelection = launcherSelection >= 2 ? launcherSelection - 2 : launcherSelection;
+        else if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) { if (launcherSelection + 2 < count) launcherSelection += 2; }
+        else if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) { if (launcherSelection & 1) --launcherSelection; }
+        else if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) { if (!(launcherSelection & 1) && launcherSelection + 1 < count) ++launcherSelection; }
+        else if (repeatKeys & KEY_A) { bottomPage = launcherPages[launcherGroup][launcherSelection]; launcherOpen = false; }
+        else if (repeatKeys & KEY_B) launcherOpen = false;
+        return;
+    }
+    if (repeatKeys & KEY_L) {
+        bottomPage = (BottomPage) (((unsigned) bottomPage + PAGE_COUNT - 1) % PAGE_COUNT);
+        return;
+    }
+    if (repeatKeys & KEY_R) {
+        bottomPage = (BottomPage) (((unsigned) bottomPage + 1) % PAGE_COUNT);
+        return;
+    }
+    if (bottomPage == PAGE_SETTINGS) {
+        const unsigned settingCount = 5;
+        if (repeatKeys & (KEY_UP | KEY_CPAD_UP)) {
+            settingsSelected = settingsSelected ? settingsSelected - 1 : settingCount - 1;
+        }
+        if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) {
+            settingsSelected = (settingsSelected + 1) % settingCount;
+        }
+        bool changed = false;
+        if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT | KEY_A)) {
+            if (settingsSelected == 0) { hudVisible = !hudVisible; changed = true; }
+            else if (settingsSelected == 1) { fpsVisible = !fpsVisible; changed = true; }
+            else if (settingsSelected == 2) { trailLength = trailLength ? trailLength - 1 : 8; changed = true; }
+            else if (settingsSelected == 3) { labelFadeDistance = labelFadeDistance ? labelFadeDistance - 1 : 8; changed = true; }
+            else if (settingsSelected == 4) { accessibilityMode = !accessibilityMode; changed = true; }
+        }
+        if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
+            if (settingsSelected == 0) { hudVisible = !hudVisible; changed = true; }
+            else if (settingsSelected == 1) { fpsVisible = !fpsVisible; changed = true; }
+            else if (settingsSelected == 2) { trailLength = (trailLength + 1) % 9; changed = true; }
+            else if (settingsSelected == 3) { labelFadeDistance = (labelFadeDistance + 1) % 9; changed = true; }
+            else if (settingsSelected == 4) { accessibilityMode = !accessibilityMode; changed = true; }
+        }
+        if (changed) {
+            saveDisplayConfig();
+            settingsSavedUntil = osGetTime() + 1500;
+        }
+        return;
+    }
+    if (bottomPage == PAGE_TELEPORT) {
+        const unsigned categoryCount = teleportCustomVisible ? 6 : 5;
+        if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) {
+            teleportCategory = (teleportCategory + categoryCount - 1) % categoryCount;
+            teleportScroll = 0;
+            teleportSelectedIndex = -1;
+        }
+        if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
+            teleportCategory = (teleportCategory + 1) % categoryCount;
+            teleportScroll = 0;
+            teleportSelectedIndex = -1;
+        }
+        const unsigned filteredCount = filteredTeleportCount();
+        const unsigned maxRows = 7;
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && teleportScroll) --teleportScroll;
+        if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && teleportScroll + maxRows < filteredCount) ++teleportScroll;
+    } else if (bottomPage == PAGE_USERS) {
+        const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && onlineUserPage) --onlineUserPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && onlineUserPage + 1 < pageCount) ++onlineUserPage;
+    } else if (bottomPage == PAGE_CHAT && chatDetailIndex < 0) {
+        unsigned indices[24];
+        const unsigned count = currentChatIndices(indices);
+        const unsigned pageCount = count ? (count + 2) / 3 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && chatPage) --chatPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && chatPage + 1 < pageCount) ++chatPage;
+    } else if (bottomPage == PAGE_BAG) {
+        if (repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) { bagPocket = (bagPocket + 4) % 5; bagPage = 0; }
+        if (repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) { bagPocket = (bagPocket + 1) % 5; bagPage = 0; }
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && bagPage) --bagPage;
+        if (repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) ++bagPage;
+    } else if (bottomPage == PAGE_QUESTS) {
+        if (questDetailOpen) {
+            if (repeatKeys & (KEY_B | KEY_LEFT)) questDetailOpen = false;
+            if (repeatKeys & KEY_A) {
+                const QuestLogEntry* entry = &questLog[questLogSelected];
+                if (!strcmp(entry->status, "available")) sendQuestAccept(entry->quest_id);
+                else if (!strcmp(entry->status, "completed")) sendQuestClaim(entry->quest_id);
+            }
+        } else {
+            const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
+            if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && questLogPage) --questLogPage;
+            if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && questLogPage + 1 < pageCount) ++questLogPage;
+            const unsigned start = questLogPage * 6;
+            const unsigned end = start + 6 < questLogCount ? start + 6 : questLogCount;
+            if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && questLogSelected > (int)start) --questLogSelected;
+            if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && questLogSelected + 1 < (int)end) ++questLogSelected;
+            if (repeatKeys & KEY_A) questDetailOpen = true;
+        }
+    } else if (bottomPage == PAGE_TITLES) {
+        const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && playerTitlePage) --playerTitlePage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && playerTitlePage + 1 < pageCount) ++playerTitlePage;
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && playerTitleSelected > playerTitlePage * 6) --playerTitleSelected;
+        if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && playerTitleSelected + 1 < playerTitleCount && playerTitleSelected < (playerTitlePage + 1) * 6) ++playerTitleSelected;
+    } else if (bottomPage == PAGE_FRIENDS) {
+        const unsigned pageCount = playerFriendCount ? (playerFriendCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && playerFriendPage) --playerFriendPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && playerFriendPage + 1 < pageCount) ++playerFriendPage;
+        if ((repeatKeys & (KEY_UP | KEY_CPAD_UP)) && playerFriendSelected > playerFriendPage * 6) --playerFriendSelected;
+        if ((repeatKeys & (KEY_DOWN | KEY_CPAD_DOWN)) && playerFriendSelected + 1 < playerFriendCount && playerFriendSelected < (playerFriendPage + 1) * 6) ++playerFriendSelected;
+    } else if (bottomPage == PAGE_GUILD) {
+        const unsigned pageCount = guildMemberCount ? (guildMemberCount + 5) / 6 : 1;
+        if ((repeatKeys & (KEY_LEFT | KEY_CPAD_LEFT)) && guildMemberPage) --guildMemberPage;
+        if ((repeatKeys & (KEY_RIGHT | KEY_CPAD_RIGHT)) && guildMemberPage + 1 < pageCount) ++guildMemberPage;
+    }
+}
+
+static inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+static inline float smoothstepf(float t) { t = clampf(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+
+static uint32_t withAlpha(uint32_t color, float alpha) {
+    u8 a = (u8)(clampf(alpha, 0.0f, 1.0f) * (color >> 24));
+    return (color & 0x00FFFFFF) | ((u32)a << 24);
+}
+
+static void drawRemoteTrainer(const RemoteTrainer* trainer, float x, float y, float alpha, bool moving) {
+    if (avatarSheet) {
+        unsigned frame;
+        bool flip = false;
+        // Use a faster cadence while the trainer is moving so the walk cycle
+        // matches the interpolated motion; idle when standing still.
+        const unsigned period = moving ? 90 : 160;
+        // Performance mode uses a 2-frame toggle instead of a 4-frame cycle
+        // to reduce texture lookups and CPU work on Old 3DS.
+        const unsigned cycleMask = overlayQuality == OVERLAY_QUALITY_PERFORMANCE ? 1 : 3;
+        unsigned phase = (osGetTime() / period) & cycleMask;
+        if (trainer->facing == 1) {
+            static const unsigned downFrames[4] = {0, 3, 0, 4};
+            frame = downFrames[phase];
+        } else if (trainer->facing == 2) {
+            static const unsigned upFrames[4] = {1, 5, 1, 6};
+            frame = upFrames[phase];
+        } else {
+            static const unsigned sideFrames[4] = {2, 7, 2, 8};
+            frame = sideFrames[phase];
+            flip = trainer->facing == 4;
+        }
+        C2D_Image image = C2D_SpriteSheetGetImage(avatarSheet, (trainer->isGirl ? 9 : 0) + frame);
+        C2D_ImageTint tint;
+        C2D_AlphaImageTint(&tint, alpha);
+        C2D_DrawImageAt(image, flip ? x + 24.0f : x, y, .36f, &tint, flip ? -REMOTE_SPRITE_SCALE : REMOTE_SPRITE_SCALE, REMOTE_SPRITE_SCALE);
+        return;
+    }
+    const float z = 0.35f;
+    // Walk cycle for the fallback silhouette: swap leg height and bob the body.
+    const unsigned period = moving ? 100 : 220;
+    const bool step = ((osGetTime() / period) + trainer->x + trainer->y) & 1;
+    const float bob = step ? 1.0f : 0.0f;
+    const uint32_t outline = withAlpha(C2D_Color32(25, 35, 45, 245), alpha);
+    const uint32_t skin = withAlpha(C2D_Color32(244, 190, 145, 255), alpha);
+    const uint32_t cap = withAlpha(C2D_Color32(225, 58, 70, 255), alpha);
+    const uint32_t shirt = withAlpha(C2D_Color32(48, 126, 205, 255), alpha);
+    const uint32_t pack = withAlpha(C2D_Color32(244, 196, 61, 255), alpha);
+    const uint32_t pants = withAlpha(C2D_Color32(42, 58, 92, 255), alpha);
+
+    // Shadow and outlined pixel-art silhouette, sized to remain readable over
+    // Emerald's upscaled 400x240 framebuffer on an Old 3DS display.
+    C2D_DrawEllipseSolid(x + 2, y + 31, z, 22, 6, withAlpha(C2D_Color32(0, 0, 0, 100), alpha));
+    C2D_DrawRectSolid(x + 4, y + 5 + bob, z, 16, 12, outline);
+    C2D_DrawRectSolid(x + 6, y + 7 + bob, z + .01f, 12, 9, skin);
+    // Cap shape changes per facing direction so up/down/left/right read clearly.
+    if (trainer->facing == 1) {
+        // Down: brim centered, visor visible.
+        C2D_DrawRectSolid(x + 3, y + 3 + bob, z + .02f, 18, 5, cap);
+        C2D_DrawRectSolid(x + 7, y + 1 + bob, z + .02f, 10, 2, cap);
+    } else if (trainer->facing == 2) {
+        // Up: smaller cap, no visor.
+        C2D_DrawRectSolid(x + 5, y + 3 + bob, z + .02f, 14, 5, cap);
+    } else if (trainer->facing == 3) {
+        // Left: brim on left side.
+        C2D_DrawRectSolid(x + 3, y + 3 + bob, z + .02f, 16, 5, cap);
+        C2D_DrawRectSolid(x, y + 5 + bob, z + .02f, 5, 3, cap);
+    } else {
+        // Right: brim on right side.
+        C2D_DrawRectSolid(x + 5, y + 3 + bob, z + .02f, 16, 5, cap);
+        C2D_DrawRectSolid(x + 19, y + 5 + bob, z + .02f, 5, 3, cap);
+    }
+    C2D_DrawRectSolid(x + 3, y + 16 + bob, z, 18, 12, outline);
+    C2D_DrawRectSolid(x + 5, y + 17 + bob, z + .01f, 14, 10, shirt);
+    C2D_DrawRectSolid(x + (trainer->facing == 3 ? 15 : 5), y + 18 + bob, z + .02f, 4, 7, pack);
+    C2D_DrawRectSolid(x, y + 18 + bob, z, 5, 9, skin);
+    C2D_DrawRectSolid(x + 19, y + 18 + bob, z, 5, 9, skin);
+    C2D_DrawRectSolid(x + 5, y + 27 + bob, z, 6, step ? 7 : 5, pants);
+    C2D_DrawRectSolid(x + 13, y + 27 + bob, z, 6, step ? 5 : 7, pants);
+}
+
+static bool visibleCacheDirty(uint64_t now) {
+    return cachedRemoteTrainerVersion != remoteTrainerVersion ||
+           cachedVisibleMapGroup != presence.mapGroup ||
+           cachedVisibleMapNum != presence.mapNum ||
+           cachedVisibleX != presence.x ||
+           cachedVisibleY != presence.y ||
+           now - cachedVisibleBuiltAt >= VISIBLE_TRAINER_REBUILD_MS;
+}
+
+static void rebuildVisibleTrainers(uint64_t now) {
+    cachedVisibleCount = 0;
+    cachedVisibleMapGroup = presence.mapGroup;
+    cachedVisibleMapNum = presence.mapNum;
+    cachedVisibleX = presence.x;
+    cachedVisibleY = presence.y;
+    cachedVisibleBuiltAt = now;
+    cachedRemoteTrainerVersion = remoteTrainerVersion;
+
+    for (int i = 0; i < remoteCount; ++i) {
+        const RemoteTrainer* t = &remoteTrainers[i];
+        float elapsed = (float)(now - t->updatedAt);
+        float tFactor = smoothstepf(elapsed / (float)REMOTE_INTERPOLATION_MS);
+        float tileX = (float)t->prevX + ((float)t->x - (float)t->prevX) * tFactor;
+        float tileY = (float)t->prevY + ((float)t->y - (float)t->prevY) * tFactor;
+        float dx = tileX - (float)presence.x;
+        float dy = tileY - (float)presence.y;
+        if (dx < -8.0f || dx > 8.0f || dy < -6.0f || dy > 6.0f) continue;
+        float sx = 200.0f + dx * OVERLAY_TILE_W - 12.0f;
+        float sy = 120.0f + dy * OVERLAY_TILE_H - 23.0f;
+        if (sx < -32.0f || sx > 432.0f || sy < -48.0f || sy > 288.0f) continue;
+
+        const bool behind = tileY < (float)presence.y;
+        float alpha = behind ? 0.55f : 1.0f;
+
+        float distance = (dx < 0.0f ? -dx : dx) + (dy < 0.0f ? -dy : dy);
+        float labelAlpha = alpha;
+        if (labelFadeDistance > 0 && distance > (float)labelFadeDistance) {
+            labelAlpha *= clampf(1.0f - (distance - (float)labelFadeDistance) / 4.0f, 0.0f, 1.0f);
+        }
+
+        bool moving = (t->x != t->prevX || t->y != t->prevY) && elapsed < REMOTE_INTERPOLATION_MS;
+        cachedVisible[cachedVisibleCount++] = { t, tileX, tileY, sx, sy, moving, alpha, labelAlpha };
+    }
+
+    for (int i = 0; i < cachedVisibleCount - 1; ++i) {
+        for (int j = i + 1; j < cachedVisibleCount; ++j) {
+            if (cachedVisible[j].screenY > cachedVisible[i].screenY) {
+                CachedVisibleTrainer tmp = cachedVisible[i];
+                cachedVisible[i] = cachedVisible[j];
+                cachedVisible[j] = tmp;
+            }
+        }
+    }
+}
+
+static void drawTop(void) {
+    C2D_TargetClear(topTarget, C2D_Color32(0,0,0,255));
+    C2D_SceneBegin(topTarget);
+    if (videoReady) C2D_DrawImageAt(gameImage, 0, 0, 0, NULL, 400.0f / 240.0f, 240.0f / 160.0f);
+    C2D_TextBufClear(textBuffer);
+
+    // Minimal top-screen HUD: FPS, connection status, and nearby count.
+    // Drawn before the early overworld return so it is visible in menus too.
+    if (hudVisible) {
+        const char* status = onlineMode == ONLINE_ACTIVE ? localize(LS_ONLINE) :
+            onlineMode == ONLINE_CONNECTING ? localize(LS_CONNECTING) :
+            onlineEnabled ? localize(LS_RETRYING) : localize(LS_OFFLINE);
+        uint32_t statusColor = onlineMode == ONLINE_ACTIVE ? C2D_Color32(78, 168, 95, 255) :
+            onlineEnabled ? C2D_Color32(58, 143, 207, 255) : C2D_Color32(120, 120, 120, 255);
+        unsigned hudLines = 1;
+        if (fpsVisible) ++hudLines;
+        if (presence.valid) ++hudLines;
+        C2D_DrawRectSolid(6, 6, 0.05f, 80, 10 + hudLines * 14, uiPanelColor(C2D_Color32(0, 0, 0, 140)));
+        float hy = 10;
+        if (fpsVisible) {
+            drawText(12, hy, .28f, C2D_Color32(200, 220, 210, 255), localize(LS_FPS_FORMAT), measuredFps);
+            hy += 14;
+        }
+        drawText(12, hy, .28f, statusColor, "%s", status);
+        hy += 14;
+        if (presence.valid)
+            drawText(12, hy, .28f, C2D_Color32(160, 232, 255, 255), localize(LS_NEARBY_FORMAT), remoteCount);
+    }
+
+    // Toast banners are drawn above overlays so they remain readable.
+    drawToasts();
+
+    // Coordinates remain populated while Emerald is in battles and menus.
+    // Recheck callback2 at draw time so stale presence can never place a
+    // network trainer over a non-overworld framebuffer.
+    if (!isEmeraldOverworld() || !presence.valid) return;
+
+    const uint64_t now = osGetTime();
+    if (visibleCacheDirty(now)) rebuildVisibleTrainers(now);
+    // Draw the cached visible trainers (the cache is rebuilt only when remote
+    // state or local presence changes, or every VISIBLE_TRAINER_REBUILD_MS).
+    for (int i = 0; i < cachedVisibleCount; ++i) {
+        const CachedVisibleTrainer& v = cachedVisible[i];
+        const RemoteTrainer* t = v.trainer;
+
+
+        // Clamp the whole overlay (sprite + name/title/emote) to the top screen
+        // so trainers at the edge of the visible window stay fully readable.
+        const float spriteW = 36.0f;
+        const float spriteH = 57.0f;
+        const float labelH = 28.0f;
+        float sx = clampf(v.screenX, 12.0f, 400.0f - spriteW - 12.0f);
+        float sy = clampf(v.screenY, labelH, 240.0f - spriteH);
+
+        // Draw a faint movement trail behind the sprite if the trainer has moved
+        // recently on the same map. trailLength 0 disables trails entirely;
+        // performance mode also disables trails to save Old 3DS GPU/CPU time.
+        if (overlayQuality == OVERLAY_QUALITY_HIGH && trailLength > 1 && t->trailCount > 1) {
+            uint32_t trailColor = withAlpha(C2D_Color32(200, 230, 255, 255), v.alpha * 0.25f);
+            unsigned renderedCount = t->trailCount < trailLength ? t->trailCount : trailLength;
+            for (unsigned n = 1; n < renderedCount; ++n) {
+                const unsigned a = (t->trailNext + 8 - renderedCount + n - 1) % 8;
+                const unsigned b = (t->trailNext + 8 - renderedCount + n) % 8;
+                const MapTrailPoint& pa = t->trail[a];
+                const MapTrailPoint& pb = t->trail[b];
+                if (pa.mapGroup != presence.mapGroup || pa.mapNum != presence.mapNum ||
+                    pb.mapGroup != presence.mapGroup || pb.mapNum != presence.mapNum) continue;
+                float ax = 200.0f + ((float)pa.x - (float)presence.x) * OVERLAY_TILE_W;
+                float ay = 120.0f + ((float)pa.y - (float)presence.y) * OVERLAY_TILE_H;
+                float bx = 200.0f + ((float)pb.x - (float)presence.x) * OVERLAY_TILE_W;
+                float by = 120.0f + ((float)pb.y - (float)presence.y) * OVERLAY_TILE_H;
+                C2D_DrawLine(ax, ay, trailColor, bx, by, trailColor, 2.0f, 0.01f);
+            }
+        }
+
+        drawRemoteTrainer(t, sx, sy, v.alpha, v.moving);
+
+        // Draw title above name, then name above sprite.
+        float labelY = sy - 12.0f;
+        if (t->title[0]) {
+            drawText(sx, labelY - 10.0f, .28f, withAlpha(C2D_Color32(255, 220, 130, 255), v.labelAlpha), "%.14s", t->title);
+        }
+        drawText(sx - 9.0f, labelY, .32f, withAlpha(C2D_Color32(255, 255, 255, 255), v.labelAlpha), "%.8s", t->name);
+
+        if (overlayQuality == OVERLAY_QUALITY_HIGH && t->emote && now < t->emoteUntil) {
+            static const char* bubbles[] = {"", localize(LS_HI), localize(LS_EXCLAMATION), localize(LS_ANGLED_BRACKETS), localize(LS_GG)};
+            C2D_DrawRectSolid(sx + 17.0f, sy - 28.0f, .4f, 22, 15, withAlpha(C2D_Color32(255,255,240,235), v.alpha));
+            drawText(sx + 20.0f, sy - 26.0f, .34f, withAlpha(C2D_Color32(35,45,50,255), v.alpha), "%s", bubbles[t->emote]);
+        }
+    }
+}
+
+static bool initGraphics(void) {
+    gfxInitDefault();
+    debugStage("gfx-ready");
+    gfxSetWide(false);
+    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
+    debugStage("c3d-ready");
+    if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) return false;
+    debugStage("c2d-ready");
+    C2D_Prepare();
+    debugStage("c2d-prepared");
+    topTarget = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    bottomTarget = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    debugStage("targets-ready");
+    gameUploadBuffer[0] = (uint16_t*) linearMemAlign(256 * 256 * sizeof(uint16_t), 128);
+    gameUploadBuffer[1] = (uint16_t*) linearMemAlign(256 * 256 * sizeof(uint16_t), 128);
+    bool texturesOk = C3D_TexInitVRAM(&gameTexture[0], 256, 256, GPU_RGB565) &&
+                      C3D_TexInitVRAM(&gameTexture[1], 256, 256, GPU_RGB565);
+    if (!topTarget || !bottomTarget || !gameUploadBuffer[0] || !gameUploadBuffer[1] || !texturesOk) return false;
+    memset(gameUploadBuffer[0], 0, 256 * 256 * sizeof(uint16_t));
+    memset(gameUploadBuffer[1], 0, 256 * 256 * sizeof(uint16_t));
+    const u32 clearFlags = GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+                           GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
+    C3D_SyncDisplayTransfer((u32*) gameUploadBuffer[0], GX_BUFFER_DIM(256, 256), (u32*) gameTexture[0].data, GX_BUFFER_DIM(256, 256), clearFlags);
+    C3D_SyncDisplayTransfer((u32*) gameUploadBuffer[1], GX_BUFFER_DIM(256, 256), (u32*) gameTexture[1].data, GX_BUFFER_DIM(256, 256), clearFlags);
+    debugStage("texture-ready");
+    C3D_TexSetFilter(&gameTexture[0], GPU_LINEAR, GPU_LINEAR);
+    C3D_TexSetFilter(&gameTexture[1], GPU_LINEAR, GPU_LINEAR);
+    C3D_TexSetWrap(&gameTexture[0], GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    C3D_TexSetWrap(&gameTexture[1], GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    uiFont = C2D_FontLoadSystem(CFG_REGION_USA);
+    avatarSheet = C2D_SpriteSheetLoad(AVATAR_PATH);
+    debugStage("font-ready");
+    textBuffer = C2D_TextBufNew(4096);
+    if (!initStaticTextCache()) return false;
+    debugStage("text-ready");
+    return textBuffer != NULL;
+}
+
+static void uploadVideo(void) {
+    if (!videoReady || !videoPixels || !gameUploadBuffer[0]) return;
+    // Ping-pong async upload: write the next frame into the back buffer and
+    // kick a non-blocking display transfer.  The previous transfer completes
+    // during C3D_FrameBegin(C3D_FRAME_SYNCDRAW), after which we swap indices.
+    int back = gameTextureBack;
+    uint16_t* upload = gameUploadBuffer[back];
+    C3D_Tex* tex = &gameTexture[back];
+    // DisplayTransfer scales when its input/output dimensions differ. Pad the
+    // 240x160 frame to the texture's exact 256x256 dimensions first so the
+    // visible subtexture is neither stretched into the padding nor corrupted.
+    // FLIP_VERT operates across the complete 256-row transfer. Place the GBA
+    // image in the lower 160 source rows so it lands in the texture region
+    // addressed by the standard top-left 240x160 Citro2D subtexture. Reverse
+    // the rows here because DisplayTransfer's full-texture flip would
+    // otherwise leave the visible GBA frame upside down.
+    for (unsigned y = 0; y < 160; ++y)
+        memcpy(upload + (y + 96) * 256,
+               (const uint8_t*)videoPixels + (159 - y) * videoPitch,
+               240 * sizeof(uint16_t));
+    GSPGPU_FlushDataCache(upload, 256 * 256 * sizeof(uint16_t));
+    GX_DisplayTransfer((u32*) upload, GX_BUFFER_DIM(256, 256), (u32*) tex->data, GX_BUFFER_DIM(256, 256),
+        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+        GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+}
+
+int main(void) {
+    remove(DEBUG_LOG_PATH);
+    runtimeLogInit();
+    localizationInit();
+    strcpy(linkStatus, localize(LS_LINK_SPIKE_DISABLED));
+    strcpy(statsStatus, localize(LS_UPLOADS_OFF_TAP_ENABLE));
+    debugStage("main");
+    // On New 3DS hardware this enables the faster CPU clock and L2 cache. It
+    // is harmless on Old 3DS and keeps RFU sessions from falling behind when
+    // TLS, emulation, and both-screen rendering are active together.
+    osSetSpeedupEnable(true);
+    debugStage("new3ds-speedup-requested");
+        loadConfig();
+        loadIdentity();
+        loadStatsConfig();
+        loadDisplayConfig();
+    debugStage("config-loaded");
+    socBuffer = (uint32_t*) memalign(0x1000, SOC_BUFFER_SIZE);
+    if (!socBuffer || R_FAILED(socInit(socBuffer, SOC_BUFFER_SIZE))) {
+        if (socBuffer) free(socBuffer);
+        socBuffer = NULL;
+        onlineEnabled = false;
+    }
+    debugStage(socBuffer ? "soc-ready" : "soc-unavailable");
+    if (!initGraphics()) return 1;
+    debugStage("graphics-ready");
+    // The shared TLS config lives in the HTTP client, but the WebSocket keeps
+    // its own persistent SSL context so session resets work across reconnects.
+    if (httpClientInit()) {
+        mbedtls_ssl_init(&tlsContext);
+        if (mbedtls_ssl_setup(&tlsContext, &tlsConfig)) {
+            mbedtls_ssl_free(&tlsContext);
+            httpClientShutdown();
+            onlineEnabled = false;
+        }
+    } else {
+        onlineEnabled = false;
+    }
+    if (R_SUCCEEDED(ndspInit())) {
+        ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+        ndspChnReset(0);
+        ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+        ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
+        audioData = (int16_t*) linearAlloc(AUDIO_BUFFERS * AUDIO_FRAMES * 2 * sizeof(int16_t));
+        LightLock_Init(&audioLock);
+        LightLock_Init(&outgoingLock);
+        LightEvent_Init(&audioEvent, RESET_ONESHOT);
+        audioThreadRun = true;
+        audioThread = threadCreate(audioThreadMain, NULL, 4096, 0x18, -2, true);
+    }
+    debugStage("audio-ready");
+
+    if (audioThread) aptHook(&aptCookie, aptHookCallback, NULL);
+
+    retro_set_environment(environmentCallback);
+    retro_set_video_refresh(videoCallback);
+    retro_set_audio_sample(audioSampleCallback);
+    retro_set_audio_sample_batch(audioBatchCallback);
+    retro_set_input_poll(inputPollCallback);
+    retro_set_input_state(inputStateCallback);
+    debugStage("callbacks-ready");
+    if (dynarecEnabled) {
+        Result svchaxResult = svchax_init(false);
+        debugStage(R_SUCCEEDED(svchaxResult) && __ctr_svchax ? "svchax-ready" : "svchax-failed");
+    } else {
+        debugStage("svchax-skipped");
+    }
+    retro_init();
+    debugStage("retro-init-ready");
+    retro_game_info game = {ROM_PATH, NULL, 0, NULL};
+    if (!retro_load_game(&game)) {
+        debugStage("rom-load-failed");
+        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        C2D_TargetClear(bottomTarget, C2D_Color32(30,15,15,255));
+        C2D_SceneBegin(bottomTarget);
+        C2D_TextBufClear(textBuffer);
+        drawText(18, 80, .55f, C2D_Color32(255,255,255,255), "%s", localize(LS_COULD_NOT_LOAD_EMERALD_GBA));
+        drawText(18, 115, .38f, C2D_Color32(255,200,200,255), "%s", localize(LS_3DS_EMERALD_ONLINE_3DS));
+        C3D_FrameEnd(0);
+        while (aptMainLoop()) { hidScanInput(); if (hidKeysDown() & KEY_START) break; gspWaitForVBlank(); }
+        quitRequested = true;
+    } else {
+        debugStage("rom-loaded");
+        // This frontend statically links gpSP, so bind its exported RAM arrays
+        // directly as a robust fallback to the optional libretro memory map.
+        gbaEwram = gpspEwram;
+        gbaIwram = gpspIwram + 0x8000;
+        debugStage("gba-memory-bound");
+        // gpSP applies gpsp_sound_rate while loading content. Querying AV info
+        // before retro_load_game leaves NDSP at the 65536 Hz default while the
+        // core emits 32768 Hz blocks, making every block play too quickly and
+        // producing a gap between frames.
+        retro_system_av_info av = {};
+        retro_get_system_av_info(&av);
+        audioRate = av.timing.sample_rate;
+        ndspChnSetRate(0, audioRate);
+        debugStage(audioRate == 32768.0 ? "audio-rate-32768" : "audio-rate-other");
+        loadSave();
+        loadPrivateItemNames();
+        debugStage("save-loaded");
+        if (onlineEnabled) onlineConnect();
+        debugStage("online-started");
+    }
+
+    while (!quitRequested && aptMainLoop()) {
+        hidScanInput();
+        heldKeys = hidKeysHeld();
+        repeatKeys = hidKeysDownRepeat();
+        uint32_t down = hidKeysDown();
+        uint64_t now = osGetTime();
+        if (!launcherOpen && (down & KEY_X)) onlineToggle();
+        if (!launcherOpen && (down & KEY_A)) {
+            if (npcDialogue.active) {
+                if (npcDialogue.quest_id[0]) {
+                    sendQuestAccept(npcDialogue.quest_id);
+                    npcDialogue.active = false;
+                } else {
+                    npcDialogue.active = false;
+                }
+            } else {
+                const OnlineNpc* adjacent = nullptr;
+                for (unsigned i = 0; i < onlineNpcCount; ++i) {
+                    if (presence.valid && abs((int)onlineNpcs[i].x - (int)presence.x) + abs((int)onlineNpcs[i].y - (int)presence.y) <= 2) {
+                        adjacent = &onlineNpcs[i];
+                        break;
+                    }
+                }
+                if (adjacent) sendNpcInteract(adjacent->npc_id);
+                else {
+                    const ResourceNode* resource = nullptr;
+                    for (unsigned i = 0; i < resourceNodeCount; ++i) {
+                        if (presence.valid && resourceNodes[i].available && abs((int)resourceNodes[i].x - (int)presence.x) + abs((int)resourceNodes[i].y - (int)presence.y) <= 2) {
+                            resource = &resourceNodes[i];
+                            break;
+                        }
+                    }
+                    if (resource) sendResourceInteract(resource->node_id);
+                    else if (bottomPage == PAGE_TITLES && playerTitleSelected < playerTitleCount) {
+                    sendTitleEquip(playerTitles[playerTitleSelected].title);
+                } else if (bottomPage == PAGE_FRIENDS && playerFriendSelected < playerFriendCount) {
+                    const FriendEntry* friendEntry = &playerFriends[playerFriendSelected];
+                    if (!strcmp(friendEntry->status, "pending") && !friendEntry->is_requester) {
+                        sendFriendAccept(friendEntry->fingerprint);
+                    } else if (!strcmp(friendEntry->status, "accepted")) {
+                        sendFriendRemove(friendEntry->fingerprint);
+                    }
+                }
+            }
+        }
+    }
+    handleRepeatInput();
+        if ((down & KEY_TOUCH) && now >= touchDebounceUntil) {
+            touchDebounceUntil = now + TOUCH_DEBOUNCE_MS;
+            touchPosition touch;
+            hidTouchRead(&touch);
+            if (launcherOpen) {
+                if (touch.py >= 41 && touch.py < 68) {
+                    selectLauncherGroup(touch.px / 80);
+                } else if (touch.py >= 73 && touch.py < 205) {
+                    const unsigned row = (touch.py - 73) / 44;
+                    const unsigned column = touch.px >= 160 ? 1 : 0;
+                    const unsigned index = row * 2 + column;
+                    if (index < launcherPageCounts[launcherGroup]) {
+                        bottomPage = launcherPages[launcherGroup][index];
+                        launcherOpen = false;
+                    }
+                }
+            } else if (npcDialogue.active && touch.py >= 196) {
+                if (npcDialogue.quest_id[0]) sendQuestAccept(npcDialogue.quest_id);
+                npcDialogue.active = false;
+            } else if (bottomPage == PAGE_USERS && touch.py >= 210) {
+                const unsigned pageCount = onlineUserCount ? (onlineUserCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (onlineUserPage) --onlineUserPage; }
+                else if (onlineUserPage + 1 < pageCount) ++onlineUserPage;
+            } else if (bottomPage == PAGE_QUESTS && questDetailOpen) {
+                if (touch.py < 40) {
+                    questDetailOpen = false;
+                } else if (touch.py >= 216) {
+                    const QuestLogEntry* entry = &questLog[questLogSelected];
+                    if (!strcmp(entry->status, "available")) sendQuestAccept(entry->quest_id);
+                    else if (!strcmp(entry->status, "completed")) sendQuestClaim(entry->quest_id);
+                }
+            } else if (bottomPage == PAGE_QUESTS && touch.py >= 42 && touch.py < 216) {
+                int row = (int)((touch.py - 42) / 30);
+                unsigned visible = questLogPage * 6 + row;
+                if (row >= 0 && visible < questLogCount) {
+                    questLogSelected = (int)visible;
+                    questDetailOpen = true;
+                }
+            } else if (bottomPage == PAGE_QUESTS && touch.py >= 216) {
+                const unsigned pageCount = questLogCount ? (questLogCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (questLogPage) --questLogPage; }
+                else if (questLogPage + 1 < pageCount) ++questLogPage;
+            } else if (bottomPage == PAGE_TITLES && touch.py >= 42 && touch.py < 216) {
+                int row = (int)((touch.py - 42) / 30);
+                unsigned visible = playerTitlePage * 6 + row;
+                if (row >= 0 && visible < playerTitleCount) playerTitleSelected = visible;
+            } else if (bottomPage == PAGE_TITLES && touch.py >= 216) {
+                const unsigned pageCount = playerTitleCount ? (playerTitleCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (playerTitlePage) --playerTitlePage; }
+                else if (playerTitlePage + 1 < pageCount) ++playerTitlePage;
+            } else if (bottomPage == PAGE_FRIENDS && touch.py >= 42 && touch.py < 216) {
+                int row = (int)((touch.py - 42) / 30);
+                unsigned visible = playerFriendPage * 6 + row;
+                if (row >= 0 && visible < playerFriendCount) playerFriendSelected = visible;
+            } else if (bottomPage == PAGE_FRIENDS && touch.py >= 216) {
+                const unsigned pageCount = playerFriendCount ? (playerFriendCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (playerFriendPage) --playerFriendPage; }
+                else if (playerFriendPage + 1 < pageCount) ++playerFriendPage;
+            } else if (bottomPage == PAGE_GUILD && touch.py >= 216) {
+                const unsigned pageCount = guildMemberCount ? (guildMemberCount + 5) / 6 : 1;
+                if (touch.px < 160) { if (guildMemberPage) --guildMemberPage; }
+                else if (guildMemberPage + 1 < pageCount) ++guildMemberPage;
+            } else if (bottomPage == PAGE_SETTINGS) {
+                if (touch.py >= 46 && touch.py < 216) {
+                    unsigned row = (unsigned)(touch.py - 46) / 34;
+                    if (row < 5) {
+                        settingsSelected = row;
+                        if (settingsSelected == 0) hudVisible = !hudVisible;
+                        else if (settingsSelected == 1) fpsVisible = !fpsVisible;
+                        else if (settingsSelected == 2) trailLength = (trailLength + 1) % 9;
+                        else if (settingsSelected == 3) labelFadeDistance = (labelFadeDistance + 1) % 9;
+                        else if (settingsSelected == 4) accessibilityMode = !accessibilityMode;
+                        saveDisplayConfig();
+                        settingsSavedUntil = osGetTime() + 1500;
+                    }
+                }
+            } else if (bottomPage == PAGE_CHAT && touch.py >= 40 && touch.py < 68) {
+                globalChat = touch.px >= 160;
+                chatPage = 0;
+                chatDetailIndex = -1;
+            } else if (bottomPage == PAGE_CHAT && chatDetailIndex >= 0) {
+                if (touch.py >= 210) chatDetailIndex = -1;
+            } else if (bottomPage == PAGE_CHAT && touch.py >= 86 && touch.py < 207) {
+                unsigned indices[24];
+                const unsigned count = currentChatIndices(indices);
+                const unsigned visible = chatPage * 3 + (touch.py - 86) / 40;
+                if (visible < count) chatDetailIndex = (int) indices[visible];
+            } else if (bottomPage == PAGE_CHAT && touch.py >= 210) {
+                unsigned indices[24];
+                const unsigned count = currentChatIndices(indices);
+                const unsigned pageCount = count ? (count + 2) / 3 : 1;
+                if (chatPage >= pageCount) chatPage = pageCount - 1;
+                if (touch.px < 108) { if (chatPage) --chatPage; }
+                else if (touch.px < 212) openChat();
+                else if (chatPage + 1 < pageCount) ++chatPage;
+            } else if (bottomPage == PAGE_STATS) {
+                if (touch.py >= 82 && touch.py < 194) toggleStatsField((touch.py - 82) / 28);
+                else if (touch.py >= 208 && (!statsEnabled || touch.px < 160)) syncStatsNow();
+                else if (touch.py >= 208 && touch.px >= 160) deleteStatsHistory();
+            } else if (bottomPage == PAGE_BAG) {
+                if (touch.py >= 40 && touch.py < 72) { bagPocket = touch.px / 64; if (bagPocket > 4) bagPocket = 4; bagPage = 0; }
+                else if (touch.py >= 210 && touch.px < 160) { if (bagPage) --bagPage; }
+                else if (touch.py >= 210 && touch.px >= 160) ++bagPage;
+            } else if (bottomPage == PAGE_TELEPORT) {
+                const unsigned categoryCount = teleportCustomVisible ? 6 : 5;
+                const float tabWidth = 300.0f / categoryCount;
+                if (touch.py >= 42 && touch.py < 64) {
+                    unsigned cat = (unsigned)((touch.px - 10) / tabWidth);
+                    if (cat < categoryCount) { teleportCategory = cat; teleportScroll = 0; teleportSelectedIndex = -1; }
+                } else if (touch.py >= 70 && touch.py < 210) {
+                    unsigned filtered[64];
+                    unsigned filteredCount = 0;
+                    for (unsigned i = 0; i < teleportDestinationCount; ++i)
+                        if (teleportKindMatches(teleportDestinations[i].kind)) filtered[filteredCount++] = i;
+                    int row = (int)((touch.py - 70) / 20);
+                    unsigned visible = teleportScroll + row;
+                    if (row >= 0 && visible < filteredCount) teleportSelectedIndex = (int)filtered[visible];
+                } else if (touch.py >= 216) {
+                    if (teleportSelectedIndex >= 0 && teleportSelectedIndex < (int)teleportDestinationCount) {
+                        const TeleportDestination* dest = &teleportDestinations[teleportSelectedIndex];
+                        char packet[96];
+                        snprintf(packet, sizeof(packet), "{\"type\":\"teleport\",\"destination_id\":\"%s\"}\n", dest->id);
+                        onlineSend(packet);
+                    } else if (teleportCategory == 5 && canCreateCustomTeleport() && teleportScroll == 0 && touch.px < 160) {
+                        proposeCustomTeleport();
+                    }
+                }
+            } else if (bottomPage == PAGE_UPDATE) {
+                if (touch.py >= 166 && touch.py < 190 && (updateState == UPDATE_IDLE || updateState == UPDATE_CHECKING || updateState == UPDATE_AVAILABLE || updateState == UPDATE_ERROR)) {
+                    checkForUpdate();
+                } else if (touch.py >= 194 && touch.py < 218) {
+                    if (updateState == UPDATE_AVAILABLE) startUpdateDownload();
+                    else if (updateState == UPDATE_READY) installUpdate();
+                    else if (updateState == UPDATE_DONE) quitRequested = true;
+                }
+            } else if (bottomPage == PAGE_ONLINE && touch.py >= 202) sendEmote(touch.px / 81);
+            else if (bottomPage == PAGE_ONLINE && touch.py >= 46 && touch.py < 90) openBrowserPairing();
+            else if (bottomPage == PAGE_ONLINE && touch.px < 155 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_USERS;
+            else if (bottomPage == PAGE_ONLINE && touch.px >= 165 && touch.py >= 104 && touch.py < 194) bottomPage = PAGE_CHAT;
+        }
+        if (systemAsleep) {
+            if (onlineMode != ONLINE_OFFLINE) onlineDisconnect();
+            gspWaitForVBlank();
+            continue;
+        }
+        frameTimingStart(FS_FRAME_TOTAL);
+        uint64_t realNowUs = frameTimingUs(frameTimingNow());
+        if (lastFrameRealTimeUs == 0) lastFrameRealTimeUs = realNowUs;
+        emulationTimeDebtUs += (int64_t)(realNowUs - lastFrameRealTimeUs);
+        lastFrameRealTimeUs = realNowUs;
+        unsigned runFrames = 0;
+        do {
+            frameTimingStart(FS_EMULATION);
+            retro_run();
+            frameTimingStop(FS_EMULATION);
+            static bool firstFrameLogged;
+            if (!firstFrameLogged) { debugStage("first-frame"); firstFrameLogged = true; }
+            emulationTimeDebtUs -= (int64_t)GBA_FRAME_PERIOD_US;
+            ++runFrames;
+        } while (emulationTimeDebtUs >= (int64_t)GBA_FRAME_PERIOD_US && runFrames < MAX_CATCHUP_FRAMES);
+        frameTimingStart(FS_PRESENCE);
+        presence = readPresence();
+        recordMapTrail(presence);
+        updateTrainerNameFromSave();
+        frameTimingStop(FS_PRESENCE);
+        now = osGetTime();
+        // Save-derived aggregates change slowly. Re-reading the Pokédex flags
+        // every emulated frame wastes Old 3DS CPU time without improving UI or
+        // upload freshness, so refresh the cached summary once per second.
+        if (now >= nextStatsRead) { saveStats = readSaveStats(); nextStatsRead = now + 1000; }
+        // RFU response windows are much tighter than ordinary presence sync.
+        // While linked, service the nonblocking socket once per emulated frame.
+        if (now >= nextOnlinePoll) {
+            nextOnlinePoll = now + (linkStarted ? 1 : 100);
+            frameTimingStart(FS_NETWORK);
+            onlineUpdate();
+            frameTimingStop(FS_NETWORK);
+        }
+        if (bottomPage == PAGE_QUESTS && onlineMode == ONLINE_ACTIVE && now >= nextQuestListRequest) {
+            requestQuestList();
+            nextQuestListRequest = now + 5000;
+        }
+        if (bottomPage == PAGE_TITLES && onlineMode == ONLINE_ACTIVE && now >= nextTitleListRequest) {
+            requestTitleList();
+            nextTitleListRequest = now + 5000;
+        }
+        if (bottomPage == PAGE_FRIENDS && onlineMode == ONLINE_ACTIVE && now >= nextFriendListRequest) {
+            requestFriendList();
+            nextFriendListRequest = now + 5000;
+        }
+        if (bottomPage == PAGE_GUILD && onlineMode == ONLINE_ACTIVE && now >= nextGuildInfoRequest) {
+            requestGuildInfo();
+            nextGuildInfoRequest = now + 5000;
+        }
+        if (now >= nextSaveCheck) { nextSaveCheck = now + 5000; writeSave(false); }
+        if (!fpsStarted) fpsStarted = now;
+        if (++fpsFrames && now - fpsStarted >= 1000) {
+            measuredFps = fpsFrames * 1000 / (now - fpsStarted);
+            fpsFrames = 0;
+            fpsStarted = now;
+        }
+        frameTimingStart(FS_RENDER_SUBMIT);
+        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        // Swap the ping-pong textures after the GPU sync so the previously
+        // uploaded back buffer becomes the new front buffer for this frame.
+        int newFront = gameTextureBack;
+        gameTextureBack = gameTextureFront;
+        gameTextureFront = newFront;
+        gameImage.tex = &gameTexture[gameTextureFront];
+        frameTimingStop(FS_RENDER_SUBMIT);
+        frameTimingStart(FS_DRAW_TOP);
+        drawTop();
+        frameTimingStop(FS_DRAW_TOP);
+        frameTimingStart(FS_DRAW_BOTTOM);
+        if (renderedFrames < 2 || renderedFrames % 5 == 0) drawBottom();
+        drawNpcDialogueOverlay();
+        frameTimingStop(FS_DRAW_BOTTOM);
+        frameTimingStart(FS_UPLOAD);
+        uploadVideo();
+        frameTimingStop(FS_UPLOAD);
+        ++renderedFrames;
+        frameTimingStart(FS_RENDER_SUBMIT);
+        C3D_FrameEnd(0);
+        frameTimingStop(FS_RENDER_SUBMIT);
+        frameTimingStop(FS_FRAME_TOTAL);
+        frameTimingLog(now);
+    }
+
+    writeSave(true);
+    onlineDisconnect();
+    retro_unload_game();
+    retro_deinit();
+    audioThreadRun = false;
+    LightEvent_Signal(&audioEvent);
+    if (audioThread) {
+        threadJoin(audioThread, U64_MAX);
+        threadFree(audioThread);
+        audioThread = NULL;
+    }
+    if (audioData) linearFree(audioData);
+    ndspExit();
+    aptUnhook(&aptCookie);
+    shutdownStaticTextCache();
+    if (textBuffer) C2D_TextBufDelete(textBuffer);
+    if (uiFont) C2D_FontFree(uiFont);
+    if (avatarSheet) C2D_SpriteSheetFree(avatarSheet);
+    C3D_TexDelete(&gameTexture[0]);
+    C3D_TexDelete(&gameTexture[1]);
+    if (gameUploadBuffer[0]) linearFree(gameUploadBuffer[0]);
+    if (gameUploadBuffer[1]) linearFree(gameUploadBuffer[1]);
+    C2D_Fini();
+    C3D_Fini();
+    gfxExit();
+    mbedtls_ssl_free(&tlsContext);
+    httpClientShutdown();
+    if (socBuffer) { socExit(); free(socBuffer); }
+    runtimeLogShutdown();
+    localizationShutdown();
+    return 0;
+}
