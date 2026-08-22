@@ -299,7 +299,7 @@ float uiScale(float size);
 uint32_t uiTextColor(uint32_t normal);
 uint32_t uiPanelColor(uint32_t normal);
 
-#define APP_VERSION "0.8.9"
+#define APP_VERSION "0.8.10"
 
 // Common text helper used by pages and the main renderer.
 void drawText(float x, float y, float size, uint32_t color, const char* format, ...);

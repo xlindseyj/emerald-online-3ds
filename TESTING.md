@@ -1,6 +1,6 @@
 # Hardware smoke test
 
-The current public release is 0.8.9 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes the grouped lower-screen launcher, Online Users, and switchable Map and Global Chat, and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
+The current public release is 0.8.10 and defaults to `wss://live.emeraldonline3ds.com/game`; `online.cfg` can change that without rebuilding. It includes stable, larger quest details, the grouped lower-screen launcher, Online Users, and switchable Map and Global Chat, and contains the gpSP 3DS ARM dynarec core but no ROM data. Experimental RFU remains disabled unless `link_room` is explicitly configured. When connection fails, the bottom screen replaces Nearby/Chat with a readable diagnostic panel; report all four lines, not only `E71`.
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
 

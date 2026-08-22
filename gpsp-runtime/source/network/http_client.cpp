@@ -21,7 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define APP_VERSION "0.8.9"
+#define APP_VERSION "0.8.10"
 
 // The production endpoint uses Google Trust Services.
 // Trust the long-lived issuing root, not a rotating leaf or intermediate.

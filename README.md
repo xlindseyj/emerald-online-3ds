@@ -4,6 +4,8 @@ Clean-room homebrew framework for a dual-screen, online-capable monster-RPG on N
 
 ## Current milestone
 
+Version 0.8.10 keeps quest details open while they are being read, wraps descriptions at a larger size, and gives the welcome quest an explicit scientist objective.
+
 - Actual Emerald gameplay, saves, battles, and audio run through a pinned gpSP ARM dynarec core on the top screen. An earlier Old 3DS XL baseline reached 60 FPS; the current Gate 4 run is 48-52 FPS, so performance acceptance remains open.
 - The native lower screen provides a grouped Online/Adventure/Social/System launcher, context-aware nearby/chat/link/quest prompts, a paged global roster, switchable session-only Map and Global Chat, touch emotes, local-only adventure tools, and explicit-consent statistics.
 - Online presence includes interpolated trainer overlays, stationary keepalives, and automatic reconnect; offline gameplay remains uninterrupted.

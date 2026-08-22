@@ -1,6 +1,6 @@
 {
   "name": "emerald-online-3ds-desktop",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "private": true,
   "type": "module",
   "description": "Windows desktop launcher for Emerald Online 3DS",
@@ -52,12 +52,16 @@
       {
         "from": "resources/azahar",
         "to": "azahar",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "resources/licenses",
         "to": "licenses",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "linux": {
@@ -70,7 +74,9 @@
       "executableName": "Emerald Online 3DS",
       "signAndEditExecutable": true,
       "signtoolOptions": {
-        "signingHashAlgorithms": ["sha256"]
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
       }
     },
     "nsis": {

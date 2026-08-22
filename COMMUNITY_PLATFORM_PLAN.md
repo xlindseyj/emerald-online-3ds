@@ -2,6 +2,8 @@
 
 ## Summary
 
+Gate 4: feasibility transport remains experimental in release 0.8.10; this maintenance release changes quest interaction and readability without widening RFU claims.
+
 Proceed with the database, leaderboards, forum, defects, contextual 3DS hub, and link multiplayer—but release them through independent gates.
 
 The revised plan avoids three major risks:

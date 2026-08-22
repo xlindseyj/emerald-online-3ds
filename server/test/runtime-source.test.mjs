@@ -231,6 +231,11 @@ test('gpSP frontend draws an animated remote trainer and emote bubble', () => {
   assert.match(pagesSource, /questDetailOpen/);
   assert.match(pagesSource, /LS_QUEST_STAGES/);
   assert.match(gpspSource, /sendQuestClaim/);
+  // Background quest refreshes must not dismiss a detail view while it is being read.
+  assert.match(gpspSource, /bottomPage == PAGE_QUESTS && !questDetailOpen/);
+  // Quest descriptions are wrapped at a legible size instead of being truncated on one tiny line.
+  assert.match(pagesSource, /row < 3 && \*description/);
+  assert.match(pagesSource, /72 \+ row \* 20, \.36f/);
 });
 
 test('gpSP reports native-map coordinates but suppresses overlay trainers outside the verified overworld', () => {

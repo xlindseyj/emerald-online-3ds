@@ -56,7 +56,7 @@ VALUES (
   'welcome-to-hoenn-online',
   'Welcome to Hoenn Online',
   'The scientist in Littleroot needs your help testing the online connection.',
-  '[]'::jsonb,
+  '[{"kind":"talk_to_npc","npc_id":"scientist-welcome","label":"Talk to the Littleroot scientist"}]'::jsonb,
   'title',
   '{"title":"Beta Pioneer"}'::jsonb,
   true

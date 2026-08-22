@@ -554,14 +554,27 @@ void drawQuestPage(void) {
         drawText(10, 10, .32f, C2D_Color32(200,220,220,255), "< %s", localize(LS_QUEST_CLOSE));
         C2D_DrawRectSolid(10, 40, 0, 300, 2, C2D_Color32(47,184,230,255));
         drawText(14, 48, .38f, C2D_Color32(255,220,130,255), "%.34s", entry->title);
-        drawText(14, 72, .29f, C2D_Color32(220,230,220,255), "%.92s", entry->description);
+        const char* description = entry->description;
+        for (unsigned row = 0; row < 3 && *description; ++row) {
+            size_t remaining = strlen(description), length = remaining > 34 ? 34 : remaining;
+            if (remaining > length) {
+                size_t split = length;
+                while (split > 20 && description[split] != ' ') --split;
+                if (split > 20) length = split;
+            }
+            char line[35] = {};
+            memcpy(line, description, length);
+            drawText(14, 72 + row * 20, .36f, C2D_Color32(235,242,235,255), "%s", line);
+            description += length;
+            while (*description == ' ') ++description;
+        }
 
-        drawText(14, 100, .32f, C2D_Color32(160,232,255,255), "%s", localize(LS_QUEST_STAGES));
-        float y = 118;
-        for (unsigned i = 0; i < entry->requirementCount && y < 190; ++i) {
+        drawText(14, 136, .35f, C2D_Color32(160,232,255,255), "%s", localize(LS_QUEST_STAGES));
+        float y = 156;
+        for (unsigned i = 0; i < entry->requirementCount && y < 196; ++i) {
             const QuestRequirement* req = &entry->requirements[i];
-            drawText(14, y, .28f, C2D_Color32(220,230,220,255), "%s %.54s", req->completed ? "[x]" : "[ ]", req->label);
-            y += 18;
+            drawText(14, y, .34f, C2D_Color32(230,240,230,255), "%s %.42s", req->completed ? "[x]" : "[ ]", req->label);
+            y += 20;
         }
 
         if (entry->reward_kind[0]) {

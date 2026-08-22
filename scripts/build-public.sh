@@ -7,7 +7,7 @@ packaging_image='mgba/3ds@sha256:2adee3ce361b86a4a92e6183fd3c59af614db7a7321d230
 mgba_commit='26b7884bc25a5933960f3cdcd98bac1ae14d42e2'
 tooling_dir="${project_root}/generated/tooling/mgba-${mgba_commit}"
 release_dir="${project_root}/release"
-version="$(node -p "require('${project_root}/package.json').version")"
+version="$(cd "${project_root}" && node -p "require('./package.json').version")"
 IFS=. read -r version_major version_minor version_micro <<<"${version}"
 if [[ ! "${version_major}" =~ ^[0-9]+$ || ! "${version_minor}" =~ ^[0-9]+$ || ! "${version_micro}" =~ ^[0-9]+$ ]]; then
   echo "package version must be a numeric major.minor.micro value" >&2
@@ -39,25 +39,25 @@ fetch_verified \
   '0939f3354c9309cd1285fe7889ae012f16b29daa20df8cd4d05b4b6f40ba6691'
 node "${project_root}/tools/prepare-cia-assets.mjs" "${tooling_dir}/cia.rsf.in" "${tooling_dir}/emerald-online-3ds.rsf"
 
-docker run --rm \
+MSYS_NO_PATHCONV=1 docker run --rm \
   -e DEVKITPRO=/opt/devkitpro -e DEVKITARM=/opt/devkitpro/devkitARM -e CTRULIB=/opt/devkitpro/libctru \
   -v "${project_root}/third_party/gpsp:/src" -w /src \
   "${devkit_image}" make platform=ctr clean
-docker run --rm \
+MSYS_NO_PATHCONV=1 docker run --rm \
   -e DEVKITPRO=/opt/devkitpro -e DEVKITARM=/opt/devkitpro/devkitARM -e CTRULIB=/opt/devkitpro/libctru \
   -v "${project_root}/third_party/gpsp:/src" -w /src \
   "${devkit_image}" make platform=ctr -j8
 
-docker run --rm \
+MSYS_NO_PATHCONV=1 docker run --rm \
   -e DEVKITPRO=/opt/devkitpro -e DEVKITARM=/opt/devkitpro/devkitARM -e CTRULIB=/opt/devkitpro/libctru \
   -v "${project_root}:/project" -w /project/gpsp-runtime \
   "${devkit_image}" make clean
-docker run --rm \
+MSYS_NO_PATHCONV=1 docker run --rm \
   -e DEVKITPRO=/opt/devkitpro -e DEVKITARM=/opt/devkitpro/devkitARM -e CTRULIB=/opt/devkitpro/libctru \
   -v "${project_root}:/project" -w /project/gpsp-runtime \
   "${devkit_image}" make -j8
 
-docker run --rm -v "${project_root}:/project" -w /project "${packaging_image}" sh -lc \
+MSYS_NO_PATHCONV=1 docker run --rm -v "${project_root}:/project" -w /project "${packaging_image}" sh -lc \
   "/opt/devkitpro/devkitARM/bin/arm-none-eabi-strip gpsp-runtime/emerald-online-3ds.elf -o gpsp-runtime/emerald-online-3ds-stripped.elf && \
    /opt/devkitpro/tools/bin/bannertool makebanner -i assets/emerald-online-3ds-banner.png -a generated/tooling/mgba-${mgba_commit}/bios.wav -o gpsp-runtime/emerald-online-3ds.bnr && \
    /opt/devkitpro/tools/bin/makerom -f cia -o gpsp-runtime/emerald-online-3ds.cia -rsf generated/tooling/mgba-${mgba_commit}/emerald-online-3ds.rsf -target t -exefslogo -elf gpsp-runtime/emerald-online-3ds-stripped.elf -icon gpsp-runtime/emerald-online-3ds.smdh -banner gpsp-runtime/emerald-online-3ds.bnr -major ${version_major} -minor ${version_minor} -micro ${version_micro}"
@@ -69,7 +69,7 @@ cp "${project_root}/gpsp-runtime/emerald-online-3ds.3dsx" "${release_dir}/emeral
 
 (
   cd "${release_dir}"
-  sha256sum emerald-online-3ds.cia emerald-online-3ds.3dsx "emerald-online-3ds-source-${version}.tar.gz" > SHA256SUMS
+  sha256sum --text emerald-online-3ds.cia emerald-online-3ds.3dsx "emerald-online-3ds-source-${version}.tar.gz" > SHA256SUMS
 )
 
 node "${project_root}/tools/generate-unistore.mjs"

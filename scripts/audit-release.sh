@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-version="$(node -p "require(process.argv[1]).version" "${project_root}/package.json")"
+version="$(cd "${project_root}" && node -p "require('./package.json').version")"
 release_dir="${project_root}/release"
 source_archive="${release_dir}/emerald-online-3ds-source-${version}.tar.gz"
 

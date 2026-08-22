@@ -667,17 +667,17 @@
     "artifacts": [
       {
         "label": "CIA",
-        "sha256": "beed0f0b1f14c5c4b7e56745686ac8f8f2895141a3d479a829bdcb21c1b6a5ea",
+        "sha256": "dc0659d29e679b378c2d73a33c69625c24190a230bec29d595385490bcd66800",
         "url": "/emerald-online-3ds.cia"
       },
       {
         "label": "3DSX",
-        "sha256": "b325d14c7977191e5c824504a4182120d66383a7bd2cfbd5e45b77af1917825c",
+        "sha256": "20d656665137911a39b5aa5bdb56ce2ccaf1f7f9b507d597d6dfead492698459",
         "url": "/emerald-online-3ds.3dsx"
       },
       {
         "label": "Corresponding source",
-        "sha256": "44fd717443216cda8fc11db827e04408e0da49e5643181ba1238c2aa9dd2ff4e",
+        "sha256": "37b0c6cabffb531d781ad9c47232a1b55d35133593c7cf2dd8c02bc5dba79dd0",
         "url": "/source"
       }
     ],
@@ -706,6 +706,61 @@
         "url": "/release-media/0.8.7-union-room-trade.png",
         "alt": "Native Emerald Union Room trade animation sending Marill",
         "caption": "The verified two-client trade remains emulator evidence only; Gate 4 physical acceptance is still open."
+      }
+    ]
+  },
+  {
+    "version": "0.8.10",
+    "releasedAt": "2026-08-21T00:00:00Z",
+    "title": "Readable, Stable Quest Details",
+    "status": "Current experimental beta",
+    "summary": "Keeps quest details open while they are being read, wraps descriptions at a larger size, and gives the welcome quest an explicit scientist objective.",
+    "highlights": [
+      "Pauses background quest-list refreshes while a quest detail view is open, preventing the view from closing after a few seconds.",
+      "Wraps descriptions across as many as three larger-text lines and increases objective text size.",
+      "Requires a follow-up conversation with the Littleroot scientist so accepting the welcome quest no longer completes it immediately.",
+      "Updates existing servers whose welcome quest still has the original empty requirement without changing already completed or claimed player progress."
+    ],
+    "verification": [
+      "Focused NPC, quest, and runtime-source tests pass with 40 tests and zero failures.",
+      "The ROM-free 3DSX and CIA compile successfully with the pinned devkitARM build image.",
+      "Release catalog validation and the public-content audit pass."
+    ],
+    "knownIssues": [
+      "Online NPCs are represented on the lower Map & Radar screen and do not replace Emerald overworld sprites on the top screen.",
+      "Native RFU battle acceptance remains experimental and blocked on physical acceptance testing."
+    ],
+    "upgradeNotes": [
+      "Back up and preserve emerald.gba, emerald.sav, identity.cfg, stats.cfg, avatars.t3x, online.cfg, display.cfg, and link-backups when replacing the 3DSX or reinstalling the CIA.",
+      "Copying a CIA onto the SD card does not update an installed HOME Menu title; reinstall it through FBI."
+    ],
+    "artifacts": [
+      {
+        "label": "CIA",
+        "sha256": "0dcfb25278b8adfa480754f58b61f287e7a4dbfb3b2acdb16d251ab3859a3e49",
+        "url": "/emerald-online-3ds.cia"
+      },
+      {
+        "label": "3DSX",
+        "sha256": "3ac7754035725a3e8401d1e6aa9540898764b077411769d14f2107cfc0b961c9",
+        "url": "/emerald-online-3ds.3dsx"
+      },
+      {
+        "label": "Corresponding source",
+        "sha256": "be7a26d3fbc0d7bf6cef87d3451ea5b877d9bd0ca6f61f2c1c1bb7d03231a9eb",
+        "url": "/source"
+      }
+    ],
+    "media": [
+      {
+        "url": "/logo.png",
+        "alt": "Emerald Online 3DS network emblem",
+        "caption": "Version 0.8.10 improves quest readability and interaction stability."
+      },
+      {
+        "url": "/qr.svg",
+        "alt": "FBI installation QR code for the current ROM-free CIA",
+        "caption": "Back up private files and reinstall the CIA through FBI to update an installed HOME Menu title."
       }
     ]
   }

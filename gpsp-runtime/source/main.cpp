@@ -3877,7 +3877,7 @@ int main(void) {
             onlineUpdate();
             frameTimingStop(FS_NETWORK);
         }
-        if (bottomPage == PAGE_QUESTS && onlineMode == ONLINE_ACTIVE && now >= nextQuestListRequest) {
+        if (bottomPage == PAGE_QUESTS && !questDetailOpen && onlineMode == ONLINE_ACTIVE && now >= nextQuestListRequest) {
             requestQuestList();
             nextQuestListRequest = now + 5000;
         }

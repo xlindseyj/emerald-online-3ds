@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-version="$(node -p "require('${project_root}/package.json').version")"
+version="$(cd "${project_root}" && node -p "require('./package.json').version")"
 [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]] || { echo 'invalid package version' >&2; exit 1; }
 source_stage="${project_root}/generated/source-${version}"
 release_dir="${project_root}/release"

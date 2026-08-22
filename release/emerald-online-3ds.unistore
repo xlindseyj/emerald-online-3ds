@@ -13,33 +13,33 @@
       "info": {
         "title": "Emerald Online 3DS",
         "author": "Emerald Online 3DS",
-        "description": "Public multiplayer presence, chat, and RFU/Union Room relay for Pokémon Emerald (US) on 3DS. Release v0.8.9.",
+        "description": "Public multiplayer presence, chat, and RFU/Union Room relay for Pokémon Emerald (US) on 3DS. Release v0.8.10.",
         "category": [
           "game"
         ],
         "console": [
           "3DS"
         ],
-        "last_updated": "2026-08-21 at 13:47:00 (UTC)",
+        "last_updated": "2026-08-22 at 03:19:50 (UTC)",
         "license": "gpl-3.0",
-        "version": "v0.8.9"
+        "version": "v0.8.10"
       },
-      "Emerald Online 3DS v0.8.9 (3DSX)": [
+      "Emerald Online 3DS v0.8.10 (3DSX)": [
         {
           "type": "downloadFile",
           "file": "https://emeraldonline3ds.com/emerald-online-3ds.3dsx",
           "output": "%3DSX%/emerald-online-3ds.3dsx",
-          "message": "Downloading emerald-online-3ds v0.8.9 3DSX...",
-          "sha256": "b325d14c7977191e5c824504a4182120d66383a7bd2cfbd5e45b77af1917825c"
+          "message": "Downloading emerald-online-3ds v0.8.10 3DSX...",
+          "sha256": "3ac7754035725a3e8401d1e6aa9540898764b077411769d14f2107cfc0b961c9"
         }
       ],
-      "Emerald Online 3DS v0.8.9 (CIA)": [
+      "Emerald Online 3DS v0.8.10 (CIA)": [
         {
           "type": "downloadFile",
           "file": "https://emeraldonline3ds.com/emerald-online-3ds.cia",
           "output": "sdmc:/emerald-online-3ds.cia",
-          "message": "Downloading emerald-online-3ds v0.8.9 CIA...",
-          "sha256": "beed0f0b1f14c5c4b7e56745686ac8f8f2895141a3d479a829bdcb21c1b6a5ea"
+          "message": "Downloading emerald-online-3ds v0.8.10 CIA...",
+          "sha256": "0dcfb25278b8adfa480754f58b61f287e7a4dbfb3b2acdb16d251ab3859a3e49"
         },
         {
           "type": "installCia",

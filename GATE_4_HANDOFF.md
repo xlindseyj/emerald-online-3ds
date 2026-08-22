@@ -1,5 +1,11 @@
 # Gate 4 handoff: experimental link feasibility
 
+## Current release 0.8.10
+
+- CIA: `0dcfb25278b8adfa480754f58b61f287e7a4dbfb3b2acdb16d251ab3859a3e49`
+- 3DSX: `3ac7754035725a3e8401d1e6aa9540898764b077411769d14f2107cfc0b961c9`
+- Corresponding source: `be7a26d3fbc0d7bf6cef87d3451ea5b877d9bd0ca6f61f2c1c1bb7d03231a9eb`
+
 Gate 4 is an evidence-gathering spike, not a released promise that physical battles or trades are accepted. Release 0.8.9 exposes gpSP's Emerald RFU backend only when a private `online.cfg` contains a valid `link_room`. Testers use Emerald's Wireless Club / Union Room route, not the unsupported Direct Corner path. Ordinary installs remain unchanged and link invitations and battle/trade leaderboards remain disabled.
 
 ## Implemented and proven

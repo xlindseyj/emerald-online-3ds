@@ -1,5 +1,10 @@
 # Gate 4 physical and Azahar test handoff
 
+- Release: `0.8.10`
+- CIA: `0dcfb25278b8adfa480754f58b61f287e7a4dbfb3b2acdb16d251ab3859a3e49`
+- 3DSX: `3ac7754035725a3e8401d1e6aa9540898764b077411769d14f2107cfc0b961c9`
+- Corresponding source: `be7a26d3fbc0d7bf6cef87d3451ea5b877d9bd0ca6f61f2c1c1bb7d03231a9eb`
+
 Gate 4 remains an experimental feasibility test. Version 0.8.9 retains the completed native two-Azahar Union Room trade evidence, but a two-Azahar battle failed after party exchange and public battle/trade invitations and rankings stay disabled until a physical 3DS-to-second-client Union Room battle, trade, save comparison, interruption test, and Old 3DS performance/audio test pass.
 
 ## Current artifacts

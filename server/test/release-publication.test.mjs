@@ -15,20 +15,17 @@ const rawCommunityPublications = JSON.parse(fs.readFileSync(path.join(root, 'rel
 
 test('release catalog produces structured, image-safe official posts', () => {
   const catalog = validateReleaseCatalog(rawCatalog);
-  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7', '0.8.8', '0.8.9']);
+  assert.deepEqual(catalog.map(release => release.version), ['0.3.2', '0.5.0', '0.6.1', '0.7.1', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.7', '0.8.8', '0.8.9', '0.8.10']);
   const current = catalog.at(-1);
   const topic = formatReleaseTopic(current);
-  assert.match(topic.title, /v0\.8\.9/);
+  assert.match(topic.title, /v0\.8\.10/);
   assert.match(topic.body, /## Highlights/);
-  assert.match(topic.body, /performance/i);
-  assert.match(topic.body, /battle acceptance is blocked/);
+  assert.match(topic.body, /quest/i);
+  assert.match(topic.body, /battle acceptance remains experimental/);
   assert.match(topic.body, /\[CIA\]\(\/emerald-online-3ds\.cia\)/);
   const rendered = renderMarkdown(topic.body);
   assert.match(rendered, /<img src="\/logo\.png"/);
   assert.match(rendered, /<img src="\/qr\.svg"/);
-  assert.match(rendered, /<img src="\/release-media\/0\.8\.4-online-users\.png"/);
-  assert.match(rendered, /<img src="\/release-media\/0\.8\.8-map-global-chat\.png"/);
-  assert.match(rendered, /<img src="\/release-media\/0\.8\.7-union-room-trade\.png"/);
   assert.match(rendered, /<h2>Highlights<\/h2>/);
   assert.match(rendered, /<ul><li>/);
   assert.match(rendered, /href="\/emerald-online-3ds\.cia"/);
