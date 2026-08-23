@@ -16,6 +16,15 @@ including invalid-ROM rejection, supported-ROM gameplay, both orientations,
 touch/controller/audio, WSS, background/resume, backup/restore, save integrity,
 and a 15-minute performance/thermal run.
 
+The first 0.9.0 iPhone run installed and reached the 3DSX. Its initial
+missing-ROM screen was caused by an incorrect Azahar save-root option. Manually
+correcting the core-visible SD location removed the error, but the emulated top
+and bottom screens then stayed black while the native control overlay remained
+visible; the inspected runtime log had no obvious error. For 0.9.1, verify the
+app-created path without manual file movement, wait for the visible frame-ready
+state, and export diagnostics after closing if the app reports no frames or
+black frames at 10-15 seconds.
+
 ## Release 0.8.7 native RFU trade (2026-08-16)
 
 - Runtime link path: an explicitly configured private link room now selects gpSP's Emerald RFU backend. The frontend drains packets inside gpSP wait callbacks and once per emulated frame during a live session, preserves temporary RFU host-scan transitions, clears explicit withdrawal/disconnect state, requests New 3DS CPU/L2 acceleration where available, and suppresses external overlays on native multiplayer maps.

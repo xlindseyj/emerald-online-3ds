@@ -1,8 +1,8 @@
 {
   "name": "emerald-online-3ds-mobile",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "releaseDate": "2026-08-23",
-  "releaseSummary": "First iOS sideload preview with a dedicated single-game launcher, portrait and landscape controls, private sandboxed ROM storage, and the Emerald Online launch experience.",
+  "releaseSummary": "Fixes the iOS Azahar virtual-SD root, supplies a persistent software framebuffer, and adds first-frame and privacy-safe runtime-stage diagnostics for physical sideload testing.",
   "private": true,
   "type": "module",
   "description": "Single-game iOS launcher for Emerald Online 3DS",

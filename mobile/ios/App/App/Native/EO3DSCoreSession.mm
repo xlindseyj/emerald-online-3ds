@@ -52,6 +52,8 @@ struct CoreAPI {
   std::atomic<int16_t> _touchY;
   std::atomic_bool _touchPressed;
   std::atomic<double> _fps;
+  std::atomic<NSUInteger> _videoFramesReceived;
+  std::atomic_bool _hasNonBlackVideoFrame;
   std::chrono::steady_clock::time_point _fpsWindow;
   NSUInteger _fpsFrames;
   double _sampleRate;
@@ -60,6 +62,7 @@ struct CoreAPI {
   std::string _systemPath;
   std::string _savePath;
   std::unordered_map<std::string, std::string> _variables;
+  NSMutableData *_softwareFramebuffer;
 }
 @end
 
@@ -94,6 +97,25 @@ static bool environmentCallback(unsigned command, void *data) {
       return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
       return *(retro_pixel_format *)data == RETRO_PIXEL_FORMAT_XRGB8888;
+    case RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER: {
+      retro_framebuffer *framebuffer = static_cast<retro_framebuffer *>(data);
+      if (!framebuffer || framebuffer->width == 0 || framebuffer->height == 0 ||
+          framebuffer->width > 2048 || framebuffer->height > 2048 ||
+          framebuffer->format != RETRO_PIXEL_FORMAT_XRGB8888) return false;
+      const size_t pitch = framebuffer->width * 4;
+      const size_t length = pitch * framebuffer->height;
+      if (!session->_softwareFramebuffer || session->_softwareFramebuffer.length != length) {
+        session->_softwareFramebuffer = [NSMutableData dataWithLength:length];
+      }
+      framebuffer->data = session->_softwareFramebuffer.mutableBytes;
+      framebuffer->pitch = pitch;
+      framebuffer->access_flags = RETRO_MEMORY_ACCESS_WRITE;
+      framebuffer->memory_flags = 0;
+      return true;
+    }
+    case RETRO_ENVIRONMENT_GET_CAN_DUPE:
+      if (data) *(bool *)data = true;
+      return true;
     case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
     case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO:
@@ -136,6 +158,19 @@ static bool environmentCallback(unsigned command, void *data) {
 static void videoCallback(const void *data, unsigned width, unsigned height, size_t pitch) {
   EO3DSCoreSession *session = activeSession;
   if (!session || !data || data == RETRO_HW_FRAME_BUFFER_VALID || width == 0 || height == 0) return;
+  const NSUInteger frameNumber = session->_videoFramesReceived.fetch_add(1) + 1;
+  if (!session->_hasNonBlackVideoFrame.load() && (frameNumber <= 5 || frameNumber % 60 == 0)) {
+    const uint8_t *pixels = static_cast<const uint8_t *>(data);
+    bool nonBlack = false;
+    for (unsigned row = 0; row < height && !nonBlack; row++) {
+      const uint8_t *line = pixels + row * pitch;
+      for (unsigned column = 0; column < width; column++) {
+        const size_t offset = column * 4;
+        if (line[offset] || line[offset + 1] || line[offset + 2]) { nonBlack = true; break; }
+      }
+    }
+    if (nonBlack) session->_hasNonBlackVideoFrame = true;
+  }
   if (session->_videoFramePending.exchange(true)) return;
   NSMutableData *copy = [NSMutableData dataWithLength:width * height * 4];
   uint8_t *destination = static_cast<uint8_t *>(copy.mutableBytes);
@@ -212,6 +247,8 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _videoFramePending = false;
     _touchPressed = false;
     _fps = 0;
+    _videoFramesReceived = 0;
+    _hasNonBlackVideoFrame = false;
     for (auto &button : _buttons) button = false;
     _corePath = coreURL.fileSystemRepresentation;
     _runtimePath = runtimeURL.fileSystemRepresentation;
@@ -224,7 +261,10 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
       {"citra_resolution_factor", "1"},
       {"citra_layout_option", "default"},
       {"citra_use_virtual_sd", "enabled"},
-      {"citra_use_libretro_save_path", "disabled"},
+      // Azahar appends its own Azahar/sdmc tree to the frontend save root.
+      // Use the documented option value; "disabled" is not a valid value and
+      // silently selects Azahar's unrelated platform-default directory.
+      {"citra_use_libretro_save_path", "LibRetro Default"},
       {"citra_enable_touch_touchscreen", "enabled"},
       {"citra_enable_mouse_touchscreen", "disabled"}
     };
@@ -234,6 +274,8 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
 
 - (BOOL)isRunning { return _running.load(); }
 - (double)framesPerSecond { return _fps.load(); }
+- (NSUInteger)videoFramesReceived { return _videoFramesReceived.load(); }
+- (BOOL)hasNonBlackVideoFrame { return _hasNonBlackVideoFrame.load(); }
 
 - (BOOL)startInImageView:(UIImageView *)imageView error:(NSError **)error {
   if (_running.load()) return YES;
@@ -273,6 +315,8 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   }
 
   activeSession = self;
+  _videoFramesReceived = 0;
+  _hasNonBlackVideoFrame = false;
   _imageView = imageView;
   _api.set_environment(environmentCallback);
   _api.set_video_refresh(videoCallback);

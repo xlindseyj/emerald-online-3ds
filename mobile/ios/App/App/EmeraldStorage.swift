@@ -101,7 +101,32 @@ final class EmeraldStorage {
     var installedRuntimeURL: URL { gameRoot.appendingPathComponent("emerald-online-3ds.3dsx") }
     var bundledCoreURL: URL? { Bundle.main.privateFrameworksURL?.appendingPathComponent("azahar_libretro.dylib") }
 
+    private func writeDefaultFileIfMissing(_ url: URL, _ contents: String) throws {
+        guard !manager.fileExists(atPath: url.path) else { return }
+        try Data(contents.utf8).write(to: url, options: .atomic)
+    }
+
+    private func ensureRuntimeLayout() throws {
+        for directory in [
+            azaharRoot,
+            sdRoot,
+            gameRoot,
+            gameRoot.appendingPathComponent("link-backups", isDirectory: true),
+            gameRoot.appendingPathComponent("update", isDirectory: true),
+            azaharRoot.appendingPathComponent("nand", isDirectory: true),
+            azaharRoot.appendingPathComponent("sysdata", isDirectory: true),
+            azaharRoot.appendingPathComponent("log", isDirectory: true),
+            diagnosticsURL.deletingLastPathComponent()
+        ] {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try writeDefaultFileIfMissing(gameRoot.appendingPathComponent("stats.cfg"), "enabled=0\npokedex_seen=0\npokedex_caught=0\nbadges=0\nfrontier_streaks=0\n")
+        try writeDefaultFileIfMissing(gameRoot.appendingPathComponent("display.cfg"), "hud_visible=1\nfps_visible=1\ntrail_length=8\nlabel_fade_distance=4\naccessibility_mode=0\noverlay_quality=1\n")
+        try writeOnlineConfig(readConfig())
+    }
+
     func ensureRuntimeInstalled() throws -> RuntimeManifest {
+        try ensureRuntimeLayout()
         guard let manifestURL = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "Runtime"),
               let bundledURL = Bundle.main.url(forResource: "emerald-online-3ds", withExtension: "3dsx", subdirectory: "Runtime") else {
             throw EmeraldStorageError.missingRuntime
@@ -111,11 +136,11 @@ final class EmeraldStorage {
         guard bundledData.sha256Hex == manifest.sha256 else { throw EmeraldStorageError.missingRuntime }
         let stateURL = appRoot.appendingPathComponent("runtime-state.json")
         let state = (try? JSONDecoder().decode(RuntimeState.self, from: Data(contentsOf: stateURL)))
-        if !manager.fileExists(atPath: installedRuntimeURL.path) || state?.bundledHash != manifest.sha256 || state?.policyVersion != 2 {
+        if !manager.fileExists(atPath: installedRuntimeURL.path) || state?.bundledHash != manifest.sha256 || state?.policyVersion != 3 {
             try manager.createDirectory(at: gameRoot, withIntermediateDirectories: true)
             try bundledData.write(to: installedRuntimeURL, options: .atomic)
         }
-        try JSONEncoder.pretty.encode(RuntimeState(bundledHash: manifest.sha256, policyVersion: 2)).write(to: stateURL, options: .atomic)
+        try JSONEncoder.pretty.encode(RuntimeState(bundledHash: manifest.sha256, policyVersion: 3)).write(to: stateURL, options: .atomic)
         return manifest
     }
 
@@ -260,6 +285,17 @@ final class EmeraldStorage {
 
     func diagnosticReport() throws -> URL {
         let events = (try? String(contentsOf: diagnosticsURL, encoding: .utf8).split(separator: "\n").suffix(100).joined(separator: "\n")) ?? "No launcher events recorded."
+        let runtimeLogURL = gameRoot.appendingPathComponent("gpsp-debug.log")
+        let runtimeStages: String = {
+            guard let text = try? String(contentsOf: runtimeLogURL, encoding: .utf8) else { return "No runtime stages recorded." }
+            let stages = text.split(separator: "\n").suffix(80).compactMap { line -> String? in
+                guard let stage = line.split(separator: " ").last else { return nil }
+                let value = String(stage)
+                guard value.range(of: #"^[a-z0-9-]{1,64}$"#, options: .regularExpression) != nil else { return nil }
+                return value
+            }
+            return stages.isEmpty ? "No recognized runtime stages recorded." : stages.joined(separator: "\n")
+        }()
         let rom = romStatus()
         let text = """
         Emerald Online 3DS privacy-safe diagnostics
@@ -272,6 +308,9 @@ final class EmeraldStorage {
 
         Redacted launcher events:
         \(events)
+
+        Allowlisted runtime stages:
+        \(runtimeStages)
         """
         let url = manager.temporaryDirectory.appendingPathComponent("EmeraldOnline3DS-diagnostics.txt")
         try Data(text.utf8).write(to: url, options: .atomic)

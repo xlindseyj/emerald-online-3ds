@@ -25,8 +25,9 @@ verification, and production rollout.
 - Codemagic build `6a8b683c0869a152bc6f2d9c` produced the published
   SideStore-re-signable IPA.
 - Automated compilation, package, schema, privacy, website, and live-service
-  checks pass. Installation and gameplay on a physical iPhone are still an
-  explicit acceptance gate.
+  checks pass. Physical installation and launch now pass; gameplay remains an
+  explicit acceptance gate because the first device run exposed a black-screen
+  runtime issue after ROM discovery was corrected.
 
 ## What changed
 
@@ -51,6 +52,17 @@ directory before `tee`, deriving mobile version/source metadata from
 `/api/release`, copying mobile metadata into the website image, removing a
 non-standard checksum field from the SideStore document, and renaming the
 canonical source to `/source.json`.
+
+The first physical iPhone run added two important follow-ups. Version 0.9.0
+initially passed the wrong save-root policy to Azahar, so the core mounted a
+platform-default SD directory instead of the launcher's sandboxed virtual SD.
+After the tester manually placed files in the core's effective SD directory,
+the missing-ROM error disappeared, but both emulated screens remained black
+while the native iOS controls stayed visible and the runtime log showed no
+obvious error. Version 0.9.1 corrects the libretro save-root contract, supplies
+a persistent XRGB8888 software framebuffer, records whether the core emits no
+frames or only black frames, and includes only allowlisted runtime stage names
+in the privacy-safe diagnostics export.
 
 ## Runtime architecture
 
@@ -90,6 +102,12 @@ pointer, timing, and lifecycle callbacks. It uses software rendering and
 disables CPU and shader JIT. The no-JIT policy avoids executable-memory and
 sideload entitlement assumptions, but performance depends on the iPhone model
 and must be measured on hardware.
+
+For `citra_use_libretro_save_path=LibRetro Default`, Azahar appends
+`Azahar/sdmc` to the save directory supplied by the frontend. The frontend must
+therefore pass `EmeraldOnline3DS/` as the save root, not
+`EmeraldOnline3DS/Azahar/`. Values such as `disabled` are not valid for this
+string option and make the core silently retain its unrelated platform default.
 
 The native controller converts Azahar's XRGB8888 video frames into iOS images,
 feeds stereo PCM to `AVAudioEngine`, forwards touch coordinates, and maps both
@@ -135,7 +153,16 @@ EmeraldOnline3DS/
       display.cfg
       avatars.t3x
       link-backups/
+      update/
 ```
+
+Before emulation, the app idempotently creates Azahar's `nand/`, `sysdata/`,
+and `log/` directories, the full virtual-SD tree, default `online.cfg`, an
+explicitly opted-out `stats.cfg`, and the default `display.cfg`, then stages the
+verified 3DSX. It does not create placeholder user or credential data:
+`emerald.gba` comes only from the validated document import, `emerald.sav` is
+created by gpSP in its real format, and `identity.cfg` is created only from the
+server's authenticated enrollment response.
 
 At launch, the app verifies the bundled 3DSX against `Runtime/manifest.json`.
 It atomically refreshes the working 3DSX when the bundled hash or runtime policy
@@ -294,6 +321,12 @@ only in the private Gitea mirror.
 - Current public branch contents were scanned for known identifying values and
   use the project commit identity `Emerald Online 3DS
   <noreply@emeraldonline3ds.com>`.
+- Physical iPhone installation and native launcher startup passed. The first
+  run reached the 3DSX's missing-ROM screen, proving the iOS view and Azahar
+  content launch path were active. Manually correcting the core-visible SD path
+  removed that error, after which the emulated top and bottom screens stayed
+  black while native buttons remained responsive. No obvious runtime error was
+  visible in the tester's log. This is the active 0.9.1 retest target.
 
 ## Remaining physical acceptance
 
@@ -301,10 +334,13 @@ The IPA is structurally real and is the exact website download, but automated
 checks do not establish iPhone usability. Before calling the iOS preview fully
 accepted, complete all of the following on a physical iPhone:
 
-1. Add `/source.json` to SideStore and install the re-signed IPA.
-2. Confirm the launch screen, icon, bundle version, and first-run state.
+1. Add `/source.json` to SideStore and install the re-signed IPA. This passed
+   for 0.9.0 and must be repeated after every replacement IPA.
+2. Confirm the launch screen, icon, bundle version, and first-run state. Launch
+   passed for 0.9.0; repeat it on 0.9.1.
 3. Confirm an unrelated/invalid ROM is rejected without being retained.
-4. Import the legally obtained supported dump and reach Emerald gameplay.
+4. Import the legally obtained supported dump and reach Emerald gameplay. This
+   remains blocked by the current post-ROM black-screen result.
 5. Verify audio, on-screen controls, touch, and an external controller.
 6. Rotate between portrait and landscape during both launcher and gameplay.
 7. Connect through production WSS and verify the online lower screen.
@@ -332,4 +368,3 @@ or save safety as passed until this checklist has been completed on the device.
 - `web/sidestore-source.mjs` — standards-conforming SideStore JSON.
 - `web/install-server.mjs` — download, metadata, source, and redirect routes.
 - `Dockerfile` and `.dockerignore` — production artifact staging rules.
-

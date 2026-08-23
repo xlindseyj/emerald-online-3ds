@@ -33,6 +33,12 @@ describe("native iOS architecture", () => {
     expect(host).toContain('{"citra_use_cpu_jit", "disabled"}');
     expect(host).toContain('{"citra_use_shader_jit", "disabled"}');
     expect(host).toContain("RETRO_ENVIRONMENT_GET_JIT_CAPABLE");
+    expect(host).toContain("RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER");
+    expect(host).toContain('{"citra_use_libretro_save_path", "LibRetro Default"}');
+    expect(host).not.toContain('{"citra_use_libretro_save_path", "disabled"}');
+    expect(read("ios/App/App/EmeraldEmulationViewController.swift")).toContain(
+      "userRootURL: storage.appRoot",
+    );
     expect(read("ios/App/App/EmeraldStorage.swift")).toContain(
       "dynarec=disabled",
     );
@@ -56,6 +62,38 @@ describe("native iOS architecture", () => {
     expect(ignore).toContain("ios/App/App/Runtime/*.3dsx");
     expect(read("tools/audit-ipa.mjs")).toContain(
       "Private or copyrighted files found",
+    );
+  });
+
+  it("diagnoses missing and black emulator frames without exporting private runtime data", () => {
+    const controller = read("ios/App/App/EmeraldEmulationViewController.swift");
+    const storage = read("ios/App/App/EmeraldStorage.swift");
+    expect(controller).toContain("emulator-no-video-frames");
+    expect(controller).toContain("emulator-black-video");
+    expect(storage).toContain("Allowlisted runtime stages:");
+    expect(storage).toContain('^[a-z0-9-]{1,64}$');
+  });
+
+  it("creates the complete safe runtime layout without fabricating user or credential files", () => {
+    const storage = read("ios/App/App/EmeraldStorage.swift");
+    for (const entry of [
+      'appendingPathComponent("link-backups"',
+      'appendingPathComponent("update"',
+      'appendingPathComponent("nand"',
+      'appendingPathComponent("sysdata"',
+      'appendingPathComponent("log"',
+      'appendingPathComponent("stats.cfg")',
+      'appendingPathComponent("display.cfg")',
+      "try writeOnlineConfig(readConfig())",
+    ]) {
+      expect(storage).toContain(entry);
+    }
+    expect(storage).not.toContain('writeDefaultFileIfMissing(romURL');
+    expect(storage).not.toContain(
+      'writeDefaultFileIfMissing(gameRoot.appendingPathComponent("identity.cfg")',
+    );
+    expect(storage).not.toContain(
+      'writeDefaultFileIfMissing(gameRoot.appendingPathComponent("emerald.sav")',
     );
   });
 });

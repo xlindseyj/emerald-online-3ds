@@ -12,6 +12,8 @@ typedef void (^EO3DSAudioHandler)(NSData *interleavedInt16, NSUInteger frames, d
 @property(nonatomic, copy, nullable) EO3DSRuntimeMessageHandler messageHandler;
 @property(nonatomic, copy, nullable) EO3DSAudioHandler audioHandler;
 @property(nonatomic, readonly) double framesPerSecond;
+@property(nonatomic, readonly) NSUInteger videoFramesReceived;
+@property(nonatomic, readonly) BOOL hasNonBlackVideoFrame;
 
 - (instancetype)initWithCoreURL:(NSURL *)coreURL
                       runtimeURL:(NSURL *)runtimeURL

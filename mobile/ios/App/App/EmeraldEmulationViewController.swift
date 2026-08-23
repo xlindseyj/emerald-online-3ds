@@ -18,10 +18,13 @@ final class EmeraldEmulationViewController: UIViewController {
     private let audioQueue = DispatchQueue(label: "com.emeraldonline3ds.mobile.audio", qos: .userInteractive)
     private var fpsTimer: Timer?
     private var stopping = false
+    private var startupSeconds = 0
+    private var videoReadyLogged = false
 
     init(storage: EmeraldStorage, coreURL: URL, runtimeURL: URL) {
         self.storage = storage
-        session = EO3DSCoreSession(coreURL: coreURL, runtimeURL: runtimeURL, userRootURL: storage.azaharRoot)
+        // Azahar's LibRetro Default policy appends Azahar/sdmc to this root.
+        session = EO3DSCoreSession(coreURL: coreURL, runtimeURL: runtimeURL, userRootURL: storage.appRoot)
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
     }
@@ -66,6 +69,17 @@ final class EmeraldEmulationViewController: UIViewController {
             fpsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 self.delegate?.emulationViewController(self, didMeasureFPS: self.session.framesPerSecond)
+                self.startupSeconds += 1
+                if self.session.hasNonBlackVideoFrame && !self.videoReadyLogged {
+                    self.videoReadyLogged = true
+                    self.storage.appendDiagnostic(event: "emulator-video-ready", fields: ["seconds": self.startupSeconds, "frames": self.session.videoFramesReceived])
+                } else if self.startupSeconds == 10 && self.session.videoFramesReceived == 0 {
+                    self.storage.appendDiagnostic(event: "emulator-no-video-frames", fields: ["seconds": self.startupSeconds, "coreFPS": self.session.framesPerSecond])
+                    self.showMessage("Azahar is still waiting for its first video frame…")
+                } else if self.startupSeconds == 15 && !self.session.hasNonBlackVideoFrame {
+                    self.storage.appendDiagnostic(event: "emulator-black-video", fields: ["seconds": self.startupSeconds, "frames": self.session.videoFramesReceived, "coreFPS": self.session.framesPerSecond])
+                    self.showMessage("Azahar is running but has not produced a visible frame. Export diagnostics after closing.")
+                }
             }
         } catch {
             stop(error: error)

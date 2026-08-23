@@ -65,10 +65,25 @@ Azahar/
     stats.cfg
     display.cfg
     link-backups/
+    update/
 ```
+
+Before launch the app creates the Azahar `nand/`, `sysdata/`, and `log/`
+directories, the complete virtual-SD directory tree, default `online.cfg`,
+opted-out `stats.cfg`, and default `display.cfg`, then stages the verified
+3DSX. It deliberately does not fabricate `emerald.gba`, `emerald.sav`, or
+`identity.cfg`: the user import creates the ROM, gpSP creates a genuine save,
+and the server issues the identity only after authenticated enrollment.
 
 The launcher writes `dynarec=disabled`. The bundled no-JIT build is intended
 for compatibility testing; performance depends on the iPhone model.
+
+Azahar's `LibRetro Default` storage policy appends `Azahar/sdmc` to the save
+root supplied by the native frontend. The app therefore passes its
+`EmeraldOnline3DS/` Application Support directory to the core and stages game
+files under the single `Azahar/sdmc` tree shown above. Do not add a second
+`Azahar` component or use the invalid legacy value `disabled` for the core's
+save-location option.
 
 ## Physical acceptance
 
@@ -77,3 +92,11 @@ registered physical iPhone installs the IPA, rejects an invalid ROM, imports a
 legal supported dump, reaches gameplay, exercises portrait and landscape touch
 controls, connects to the production WSS service, resumes safely, and runs for
 at least 15 minutes with diagnostics captured.
+
+The first 0.9.0 physical run installed and launched. It exposed an incorrect
+Azahar SD-root contract; after manually correcting the visible path, the ROM
+error cleared but both emulated screens stayed black while native controls
+remained visible. Version 0.9.1 fixes the root contract, provides a persistent
+software framebuffer, and records no-frame versus black-frame state plus
+allowlisted gpSP runtime stages. Gameplay acceptance remains open until the new
+IPA passes on the device.
