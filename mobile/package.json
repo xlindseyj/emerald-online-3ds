@@ -1,0 +1,40 @@
+{
+  "name": "emerald-online-3ds-mobile",
+  "version": "0.9.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-game iOS launcher for Emerald Online 3DS",
+  "license": "GPL-2.0-only",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cap:sync": "npm run build && npx cap sync ios",
+    "ios": "npm run cap:sync && npx cap open ios",
+    "core:fetch": "node tools/fetch-azahar-core.mjs",
+    "runtime:stage": "node tools/stage-runtime.mjs",
+    "audit:ipa": "node tools/audit-ipa.mjs",
+    "verify": "npm test && npm run build && npm run runtime:stage"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.6.0",
+    "@capacitor/ios": "^7.6.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.0",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5",
+    "vitest": "^3.2.4"
+  }
+}

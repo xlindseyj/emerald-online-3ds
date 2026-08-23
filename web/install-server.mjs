@@ -12,6 +12,7 @@ import { MemoryStatsStore, PostgresStatsStore } from '../server/src/stats-store.
 import { createCommunityApp } from './community-app.mjs';
 import { communityPage, communityScript } from './community-page.mjs';
 import { installPage } from './install-page.mjs';
+import { createSideStoreSource } from './sidestore-source.mjs';
 import { statusPage } from './status-page.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -22,6 +23,9 @@ const sourceFilename = `emerald-online-3ds-source-${packageInfo.version}.tar.gz`
 const sourcePath = path.join(root, 'release', sourceFilename);
 const checksumsPath = path.join(root, 'release', 'SHA256SUMS');
 const unistorePath = path.join(root, 'release', 'emerald-online-3ds.unistore');
+const iosIpaPath = process.env.IOS_IPA_PATH
+  ? path.resolve(process.env.IOS_IPA_PATH)
+  : path.join(root, 'release', 'emerald-online-3ds-ios.ipa');
 const desktopDistPath = path.join(root, 'desktop', 'dist');
 const desktopInstallerFilename = `EmeraldOnline3DS-Setup-${packageInfo.version}.exe`;
 const desktopInstallerPath = path.join(desktopDistPath, desktopInstallerFilename);
@@ -48,6 +52,7 @@ const desktopLinuxInstallerFilename = (() => {
 const desktopLinuxInstallerPath = desktopLinuxInstallerFilename ? path.join(desktopDistPath, desktopLinuxInstallerFilename) : null;
 const desktopLinuxArtifactPresent = desktopLinuxInstallerFilename !== null;
 const desktopInstallerPresent = fs.statSync(desktopInstallerPath, { throwIfNoEntry: false })?.isFile() ?? false;
+const iosIpaPresent = fs.statSync(iosIpaPath, { throwIfNoEntry: false })?.isFile() ?? false;
 const logoPath = path.join(root, 'assets', 'emerald-online-3ds-web-logo.png');
 const iconPath = path.join(root, 'assets', 'emerald-online-3ds-icon.png');
 const releaseMediaPath = path.join(root, 'assets', 'release-media');
@@ -188,10 +193,12 @@ function readReleaseInfo() {
     threedsx_url: `${publicBase}/emerald-online-3ds.3dsx`,
     desktop_url: desktopInstallerPresent ? `${publicBase}/download/desktop` : null,
     desktop_linux_url: desktopLinuxArtifactPresent ? `${publicBase}/download/desktop-linux` : null,
+    ios_url: iosIpaPresent ? `${publicBase}/download/ios` : null,
     sha256_cia: checksums['emerald-online-3ds.cia'] ?? null,
     sha256_threedsx: checksums['emerald-online-3ds.3dsx'] ?? null,
     sha256_desktop: checksums[desktopInstallerFilename] ?? null,
     sha256_desktop_linux: desktopLinuxInstallerFilename ? checksums[desktopLinuxInstallerFilename] ?? null : null,
+    sha256_ios: iosIpaPresent ? checksums['emerald-online-3ds-ios.ipa'] ?? null : null,
     release_notes_url: `${publicBase}/`
   };
 }
@@ -233,6 +240,16 @@ if (databaseConfig) {
   statsStore = new MemoryStatsStore();
 }
 const community = createCommunityApp({ identityStore, communityStore, statsStore, secureCookies: publicBase.startsWith('https://'), page: communityPage });
+const releaseCatalog = JSON.parse(fs.readFileSync(path.join(root, 'release', 'release-catalog.json'), 'utf8'));
+const currentRelease = releaseCatalog.find(entry => entry.version === packageInfo.version);
+if (!currentRelease) throw new Error(`release catalog missing current version ${packageInfo.version}`);
+const sideStoreSource = createSideStoreSource({
+  publicBase,
+  version: packageInfo.version,
+  releasedAt: currentRelease.releasedAt,
+  releaseSummary: currentRelease.summary,
+  ipaSize: iosIpaPresent ? fs.statSync(iosIpaPath).size : null
+});
 
 const page = installPage({
   version: packageInfo.version,
@@ -240,7 +257,8 @@ const page = installPage({
   gamePublicUrl,
   ciaUrl,
   desktopInstallerPresent,
-  desktopLinuxInstallerPresent: desktopLinuxArtifactPresent
+  desktopLinuxInstallerPresent: desktopLinuxArtifactPresent,
+  iosIpaPresent
 });
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -366,6 +384,22 @@ const server = http.createServer(async (req, res) => {
     fs.createReadStream(desktopLinuxInstallerPath).pipe(res);
     return;
   }
+  if (pathname === '/download/ios') {
+    if (!iosIpaPresent) {
+      res.writeHead(404, securityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));
+      res.end('The signed iOS sideload build is not available in this deployment.');
+      return;
+    }
+    const stat = fs.statSync(iosIpaPath);
+    res.writeHead(200, securityHeaders({
+      'content-type': 'application/octet-stream',
+      'content-length': stat.size,
+      'content-disposition': 'attachment; filename="emerald-online-3ds-ios.ipa"',
+      'cache-control': 'public, max-age=300'
+    }));
+    fs.createReadStream(iosIpaPath).pipe(res);
+    return;
+  }
   if (pathname === '/health') {
     try {
       const presence = await readStatus();
@@ -399,6 +433,11 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/release') {
     res.writeHead(200, securityHeaders({ 'content-type': 'application/json', 'cache-control': 'no-store' }));
     res.end(JSON.stringify(readReleaseInfo()));
+    return;
+  }
+  if (pathname === '/sidecommunity.json') {
+    res.writeHead(200, securityHeaders({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' }));
+    res.end(JSON.stringify(sideStoreSource));
     return;
   }
   res.writeHead(404, securityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));

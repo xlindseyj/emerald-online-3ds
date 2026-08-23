@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 
@@ -45,6 +46,10 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   const hasDesktopDownload = fs.existsSync(path.join(root, 'desktop', 'dist', desktopFile));
   const desktopLinuxFile = findDesktopLinuxDownload(path.join(root, 'desktop', 'dist'), releaseVersion);
   const hasDesktopLinuxDownload = Boolean(desktopLinuxFile);
+  const iosFixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'emerald-ios-web-test-'));
+  const iosFixturePath = path.join(iosFixtureDirectory, 'emerald-online-3ds-ios.ipa');
+  const iosFixture = Buffer.from('synthetic signed IPA fixture');
+  fs.writeFileSync(iosFixturePath, iosFixture);
   const installPort = 18080;
   const gamePort = 18210;
   const statusPort = 18211;
@@ -67,10 +72,15 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
       GAME_UPSTREAM_PORT: String(gamePort),
       STATUS_UPSTREAM_PORT: String(statusPort),
       PUBLIC_BASE_URL: 'https://emeraldonline3ds.com',
-      GAME_PUBLIC_URL: 'wss://live.emeraldonline3ds.com/game'
+      GAME_PUBLIC_URL: 'wss://live.emeraldonline3ds.com/game',
+      IOS_IPA_PATH: iosFixturePath
     }
   });
-  t.after(() => { web.kill(); presence.kill(); });
+  t.after(() => {
+    web.kill();
+    presence.kill();
+    fs.rmSync(iosFixtureDirectory, { recursive: true, force: true });
+  });
 
   const base = `http://127.0.0.1:${installPort}`;
   const health = await waitFor(`${base}/health`);
@@ -97,8 +107,11 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.match(pageBody, /role="tablist"/);
   assert.match(pageBody, /data-install-tab="windows"/);
   assert.match(pageBody, /data-install-tab="linux"/);
+  assert.match(pageBody, /data-install-tab="ios"/);
   assert.match(pageBody, /data-install-tab="cia"/);
   assert.match(pageBody, /data-install-tab="3dsx"/);
+  assert.match(pageBody, /sidestore:\/\/source\?url=https%3A%2F%2Femeraldonline3ds\.com%2Fsidecommunity\.json/);
+  assert.match(pageBody, /href="\/download\/ios"/);
   if (hasDesktopLinuxDownload) {
     assert.match(pageBody, /href="\/download\/desktop-linux"/);
   }
@@ -253,8 +266,10 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(releaseBody.threedsx_url, 'https://emeraldonline3ds.com/emerald-online-3ds.3dsx');
   assert.equal(releaseBody.desktop_url, hasDesktopDownload ? 'https://emeraldonline3ds.com/download/desktop' : null);
   assert.equal(releaseBody.desktop_linux_url, hasDesktopLinuxDownload ? 'https://emeraldonline3ds.com/download/desktop-linux' : null);
+  assert.equal(releaseBody.ios_url, 'https://emeraldonline3ds.com/download/ios');
   assert.match(releaseBody.sha256_cia, /^[a-f0-9]{64}$/);
   assert.match(releaseBody.sha256_threedsx, /^[a-f0-9]{64}$/);
+  assert.equal(releaseBody.sha256_ios, null);
   if (hasDesktopLinuxDownload) {
     const linuxHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'desktop', 'dist', desktopLinuxFile))).digest('hex');
     if (checksumsHaveLinuxDownload) {
@@ -270,6 +285,26 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
     ? crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'desktop', 'dist', desktopFile))).digest('hex')
     : manifestDesktopHash);
   assert.equal(releaseBody.release_notes_url, 'https://emeraldonline3ds.com/');
+
+  const sideStore = await fetch(`${base}/sidecommunity.json`);
+  assert.equal(sideStore.status, 200);
+  assert.match(sideStore.headers.get('content-type'), /^application\/json/);
+  const sideStoreBody = await sideStore.json();
+  assert.equal(sideStoreBody.name, 'Emerald Online 3DS');
+  assert.equal(sideStoreBody.identifier, 'com.emeraldonline3ds.sidestore');
+  assert.equal(sideStoreBody.sourceURL, 'https://emeraldonline3ds.com/sidecommunity.json');
+  assert.equal(sideStoreBody.apps.length, 1);
+  assert.equal(sideStoreBody.apps[0].bundleIdentifier, 'com.emeraldonline3ds.mobile');
+  assert.equal(sideStoreBody.apps[0].versions[0].version, releaseVersion);
+  assert.equal(sideStoreBody.apps[0].versions[0].downloadURL, 'https://emeraldonline3ds.com/download/ios');
+  assert.equal(sideStoreBody.apps[0].versions[0].size, iosFixture.length);
+  assert.equal(sideStoreBody.apps[0].versions[0].minOSVersion, '15.0');
+
+  const iosDownload = await fetch(`${base}/download/ios`);
+  assert.equal(iosDownload.status, 200);
+  assert.equal(iosDownload.headers.get('content-type'), 'application/octet-stream');
+  assert.match(iosDownload.headers.get('content-disposition'), /emerald-online-3ds-ios\.ipa/);
+  assert.deepEqual(Buffer.from(await iosDownload.arrayBuffer()), iosFixture);
 
   const welcome = await new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${installPort}/game`);

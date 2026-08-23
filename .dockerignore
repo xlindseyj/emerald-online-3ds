@@ -23,6 +23,7 @@
 !release/release-catalog.json
 !release/known-issues.json
 !release/community-pages.json
+!release/emerald-online-3ds-ios.ipa
 !desktop/dist/
 desktop/dist/**
 !desktop/dist/EmeraldOnline3DS-Setup-*.exe

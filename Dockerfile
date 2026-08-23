@@ -28,6 +28,12 @@ COPY release/SHA256SUMS ./release/SHA256SUMS
 COPY release/release-catalog.json ./release/release-catalog.json
 COPY release/known-issues.json ./release/known-issues.json
 COPY release/community-pages.json ./release/community-pages.json
+# Optional signed iOS build. Staging the audited Codemagic artifact here enables
+# /download/ios and adds the app to /sidecommunity.json.
+RUN --mount=type=bind,source=release,target=/tmp/release \
+    if [ -f /tmp/release/emerald-online-3ds-ios.ipa ]; then \
+      cp /tmp/release/emerald-online-3ds-ios.ipa /app/release/; \
+    fi
 # Optional Windows desktop installer. The file is built by the Windows CI job;
 # when present it enables the homepage download button and /download/desktop.
 RUN --mount=type=bind,source=desktop/dist,target=/tmp/desktop-dist \

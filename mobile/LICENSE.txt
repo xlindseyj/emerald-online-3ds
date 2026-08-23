@@ -1,0 +1,5 @@
+Emerald Online 3DS Mobile is distributed under the GNU General Public License,
+version 2 only. The complete license text is included in source packages at
+`third_party/gpsp/COPYING`.
+
+Copyright holders retain copyright in their respective contributions.

@@ -21,7 +21,7 @@
       selectInstall(tabs[next].dataset.installTab, true);
     });
   });
-  const requested = location.hash.match(/^#install-(windows|linux|cia|3dsx)$/)?.[1];
+  const requested = location.hash.match(/^#install-(windows|linux|ios|cia|3dsx)$/)?.[1];
   if (requested) selectInstall(requested);
   document.getElementById('copy-cia')?.addEventListener('click', async event => {
     try {

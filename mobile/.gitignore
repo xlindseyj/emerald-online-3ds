@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+ios/App/Pods/
+ios/App/Podfile.lock
+ios/App/App/public/
+ios/App/App/Frameworks/*.dylib
+ios/App/App/Runtime/*.3dsx
+ios/App/App/Runtime/manifest.json
+*.xcarchive
+*.ipa
+DerivedData/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

@@ -33,6 +33,7 @@ desktop/node_modules/
 desktop/dist/
 desktop/build/
 desktop/out/
+release/*.ipa
 desktop/resources/azahar/
 .tools/
 third_party/*/build*/

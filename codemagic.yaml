@@ -1,0 +1,256 @@
+workflows:
+  emerald-ios-compile-check:
+    name: Emerald Online 3DS iOS Compile Check
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      vars:
+        XCODE_WORKSPACE: "mobile/ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+      node: 22
+      xcode: latest
+      cocoapods: default
+
+    cache:
+      cache_paths:
+        - $HOME/.npm
+        - $HOME/Library/Caches/CocoaPods
+        - mobile/node_modules
+
+    scripts:
+      - name: Install and test mobile launcher
+        script: |
+          npm ci --prefix mobile
+          npm test --prefix mobile
+          npm run build --prefix mobile
+
+      - name: Stage verified emulator components
+        script: |
+          npm run runtime:stage --prefix mobile
+          npm run core:fetch --prefix mobile
+          cd mobile
+          npx cap copy ios
+
+      - name: Install CocoaPods
+        script: |
+          cd mobile/ios/App
+          pod install --repo-update
+
+      - name: Compile unsigned iPhone device app
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$CM_BUILD_DIR/build/ios/compile" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee "$CM_BUILD_DIR/build/ios/compile.log"
+
+    artifacts:
+      - build/ios/compile/Build/Products/Release-iphoneos/App.app/**
+      - build/ios/compile.log
+      - /tmp/xcodebuild_logs/*.log
+
+  emerald-ios-sideload:
+    name: Emerald Online 3DS iOS Sideload
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    when:
+      changeset:
+        includes:
+          - "mobile/**"
+          - "release/emerald-online-3ds.3dsx"
+          - "package.json"
+          - "codemagic.yaml"
+
+    integrations:
+      app_store_connect: Emerald Online ASC
+
+    environment:
+      groups:
+        - appstore_signing
+      vars:
+        BUNDLE_ID: "com.emeraldonline3ds.mobile"
+        XCODE_WORKSPACE: "mobile/ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+      node: 22
+      xcode: latest
+      cocoapods: default
+
+    cache:
+      cache_paths:
+        - $HOME/.npm
+        - $HOME/Library/Caches/CocoaPods
+        - mobile/node_modules
+
+    scripts:
+      - name: Install mobile dependencies
+        script: npm ci --prefix mobile
+
+      - name: Verify launcher and privacy contracts
+        script: |
+          npm test --prefix mobile
+          npm run build --prefix mobile
+          if git ls-files | grep -E '\.(gba|sav)$|(^|/)(identity|online|stats|display)\.cfg$'; then
+            echo "Tracked ROM, save, or private runtime configuration detected"
+            exit 1
+          fi
+
+      - name: Stage verified runtime and Azahar core
+        script: |
+          npm run runtime:stage --prefix mobile
+          npm run core:fetch --prefix mobile
+          cd mobile
+          npx cap copy ios
+
+      - name: Install CocoaPods
+        script: |
+          cd mobile/ios/App
+          pod install --repo-update
+
+      - name: Ensure the iOS App ID exists
+        script: |
+          set -e
+          ASC_BIN="$(command -v app-store-connect)"
+          PYTHON_BIN="$(head -1 "$ASC_BIN" | sed 's/^#!//' | awk '{print $1}')"
+          "$PYTHON_BIN" <<'PYEOF'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          import jwt
+
+          issuer = os.environ.get("APP_STORE_CONNECT_ISSUER_ID")
+          key_id = os.environ.get("APP_STORE_CONNECT_KEY_IDENTIFIER")
+          private_key = os.environ.get("APP_STORE_CONNECT_PRIVATE_KEY")
+          bundle_id = os.environ["BUNDLE_ID"]
+          if not all((issuer, key_id, private_key)):
+              raise SystemExit("App Store Connect integration credentials are unavailable")
+          if private_key.startswith("@file:"):
+              with open(private_key[6:], encoding="utf-8") as handle:
+                  private_key = handle.read()
+          elif private_key.startswith("@env:"):
+              private_key = os.environ[private_key[5:]]
+          if "\\n" in private_key and "\n" not in private_key:
+              private_key = private_key.replace("\\n", "\n")
+
+          now = int(time.time())
+          token = jwt.encode(
+              {"iss": issuer, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"},
+              private_key.strip() + "\n",
+              algorithm="ES256",
+              headers={"kid": key_id, "typ": "JWT"},
+          )
+          headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+          def request(method, path, body=None):
+              payload = json.dumps(body).encode() if body is not None else None
+              call = urllib.request.Request(
+                  "https://api.appstoreconnect.apple.com" + path,
+                  data=payload,
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(call) as response:
+                      return response.status, json.loads(response.read().decode() or "{}")
+              except urllib.error.HTTPError as error:
+                  return error.code, json.loads(error.read().decode() or "{}")
+
+          query = urllib.parse.quote(bundle_id, safe="")
+          status, result = request("GET", f"/v1/bundleIds?filter[identifier]={query}&limit=10")
+          if status != 200:
+              raise SystemExit(f"Unable to query App IDs: HTTP {status}")
+          if any(item.get("attributes", {}).get("identifier") == bundle_id for item in result.get("data", [])):
+              print(f"App ID already registered: {bundle_id}")
+              raise SystemExit(0)
+          status, _ = request(
+              "POST",
+              "/v1/bundleIds",
+              {
+                  "data": {
+                      "type": "bundleIds",
+                      "attributes": {
+                          "identifier": bundle_id,
+                          "name": "Emerald Online 3DS iOS",
+                          "platform": "IOS",
+                      },
+                  }
+              },
+          )
+          if status not in (200, 201, 409):
+              raise SystemExit(f"Unable to register App ID: HTTP {status}")
+          print(f"App ID registered: {bundle_id}")
+          PYEOF
+
+      - name: Set up ad-hoc code signing
+        script: |
+          set -e
+          if [ -z "$CERTIFICATE_PRIVATE_KEY" ]; then
+            echo "CERTIFICATE_PRIVATE_KEY is required in the appstore_signing group"
+            exit 1
+          fi
+          app-store-connect bundle-ids list --bundle-id-identifier "$BUNDLE_ID"
+          run_with_timeout() {
+            local seconds="$1"
+            shift
+            python3 -c 'import subprocess, sys; raise SystemExit(subprocess.run(sys.argv[2:], timeout=int(sys.argv[1])).returncode)' "$seconds" "$@"
+          }
+          keychain initialize
+          run_with_timeout 180 app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_ADHOC \
+            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
+            --strict-match-identifier \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+
+      - name: Set app version and build number
+        script: |
+          VERSION="$(node -p "require('./package.json').version")"
+          cd mobile/ios/App
+          agvtool new-marketing-version "$VERSION"
+          agvtool new-version -all "$BUILD_NUMBER"
+
+      - name: Build ad-hoc IPA
+        script: |
+          xcode-project build-ipa \
+            --verbose \
+            --disable-xcpretty \
+            --workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+
+      - name: Audit IPA and write checksums
+        script: |
+          IPA_PATH="$(find build/ios/ipa -name '*.ipa' -print -quit)"
+          test -n "$IPA_PATH"
+          PUBLIC_IPA="build/ios/ipa/emerald-online-3ds-ios.ipa"
+          if [ "$IPA_PATH" != "$PUBLIC_IPA" ]; then
+            mv "$IPA_PATH" "$PUBLIC_IPA"
+          fi
+          node mobile/tools/audit-ipa.mjs "$PUBLIC_IPA" | tee build/ios/ipa-audit.json
+          shasum -a 256 "$PUBLIC_IPA" > build/ios/SHA256SUMS
+
+      - name: Package corresponding mobile source
+        script: node mobile/tools/package-source.mjs
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/ipa-audit.json
+      - build/ios/SHA256SUMS
+      - build/ios/source/*.tar.gz
+      - /tmp/xcodebuild_logs/*.log
