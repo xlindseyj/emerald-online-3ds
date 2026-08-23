@@ -271,7 +271,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(releaseBody.ios_version, mobileReleaseVersion);
   assert.match(releaseBody.sha256_cia, /^[a-f0-9]{64}$/);
   assert.match(releaseBody.sha256_threedsx, /^[a-f0-9]{64}$/);
-  assert.equal(releaseBody.sha256_ios, null);
+  assert.equal(releaseBody.sha256_ios, crypto.createHash('sha256').update(iosFixture).digest('hex'));
   if (hasDesktopLinuxDownload) {
     const linuxHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'desktop', 'dist', desktopLinuxFile))).digest('hex');
     if (checksumsHaveLinuxDownload) {
@@ -301,6 +301,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(sideStoreBody.apps[0].versions[0].downloadURL, 'https://emeraldonline3ds.com/download/ios');
   assert.equal(sideStoreBody.apps[0].versions[0].size, iosFixture.length);
   assert.equal(sideStoreBody.apps[0].versions[0].minOSVersion, '15.0');
+  assert.equal(sideStoreBody.apps[0].versions[0].sha256, crypto.createHash('sha256').update(iosFixture).digest('hex'));
 
   const iosDownload = await fetch(`${base}/download/ios`);
   assert.equal(iosDownload.status, 200);

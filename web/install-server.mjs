@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
@@ -54,6 +55,9 @@ const desktopLinuxInstallerPath = desktopLinuxInstallerFilename ? path.join(desk
 const desktopLinuxArtifactPresent = desktopLinuxInstallerFilename !== null;
 const desktopInstallerPresent = fs.statSync(desktopInstallerPath, { throwIfNoEntry: false })?.isFile() ?? false;
 const iosIpaPresent = fs.statSync(iosIpaPath, { throwIfNoEntry: false })?.isFile() ?? false;
+const iosIpaSha256 = iosIpaPresent
+  ? crypto.createHash('sha256').update(fs.readFileSync(iosIpaPath)).digest('hex')
+  : null;
 const logoPath = path.join(root, 'assets', 'emerald-online-3ds-web-logo.png');
 const iconPath = path.join(root, 'assets', 'emerald-online-3ds-icon.png');
 const releaseMediaPath = path.join(root, 'assets', 'release-media');
@@ -200,7 +204,7 @@ function readReleaseInfo() {
     sha256_threedsx: checksums['emerald-online-3ds.3dsx'] ?? null,
     sha256_desktop: checksums[desktopInstallerFilename] ?? null,
     sha256_desktop_linux: desktopLinuxInstallerFilename ? checksums[desktopLinuxInstallerFilename] ?? null : null,
-    sha256_ios: iosIpaPresent ? checksums['emerald-online-3ds-ios.ipa'] ?? null : null,
+    sha256_ios: iosIpaSha256,
     release_notes_url: `${publicBase}/`
   };
 }
@@ -251,7 +255,7 @@ const sideStoreSource = createSideStoreSource({
   releasedAt: mobilePackageInfo.releaseDate,
   releaseSummary: mobilePackageInfo.releaseSummary,
   ipaSize: iosIpaPresent ? fs.statSync(iosIpaPath).size : null,
-  ipaSha256: iosIpaPresent ? readReleaseChecksums()['emerald-online-3ds-ios.ipa'] ?? null : null
+  ipaSha256: iosIpaSha256
 });
 
 const page = installPage({
