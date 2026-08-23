@@ -40,6 +40,7 @@ workflows:
       - name: Compile unsigned iPhone device app
         script: |
           set -o pipefail
+          mkdir -p "$CM_BUILD_DIR/build/ios"
           xcodebuild \
             -workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
