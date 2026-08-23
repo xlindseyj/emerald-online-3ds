@@ -40,10 +40,10 @@ The audited Codemagic artifact is named `emerald-online-3ds-ios.ipa`. Before a
 website image build, stage that file at `release/emerald-online-3ds-ios.ipa` and
 add its SHA-256 line to `release/SHA256SUMS`. The website then exposes it at
 `/download/ios` and lists it, with its exact byte size, at
-`/sidecommunity.json`. Add the source directly in SideStore with:
+`/source.json`. Add the source directly in SideStore with:
 
 ```text
-sidestore://source?url=https%3A%2F%2Femeraldonline3ds.com%2Fsidecommunity.json
+sidestore://source?url=https%3A%2F%2Femeraldonline3ds.com%2Fsource.json
 ```
 
 ## Runtime layout

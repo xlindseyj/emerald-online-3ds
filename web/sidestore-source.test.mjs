@@ -16,7 +16,7 @@ test("SideStore source uses the app bundle identifier and exact IPA metadata", (
   assert.equal(source.identifier, sideStoreIdentifiers.source);
   assert.equal(
     source.sourceURL,
-    "https://emeraldonline3ds.com/sidecommunity.json",
+    "https://emeraldonline3ds.com/source.json",
   );
   assert.equal(source.apps.length, 1);
   const app = source.apps[0];

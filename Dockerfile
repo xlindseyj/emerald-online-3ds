@@ -31,7 +31,7 @@ COPY release/community-pages.json ./release/community-pages.json
 # The mobile release metadata is separate from the 3DS/server release version.
 COPY mobile/package.json ./mobile/package.json
 # Optional SideStore build. Staging the audited Codemagic artifact here enables
-# /download/ios and adds the app to /sidecommunity.json.
+# /download/ios and adds the app to /source.json.
 RUN --mount=type=bind,source=release,target=/tmp/release \
     if [ -f /tmp/release/emerald-online-3ds-ios.ipa ]; then \
       cp /tmp/release/emerald-online-3ds-ios.ipa /app/release/; \

@@ -111,7 +111,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.match(pageBody, /data-install-tab="ios"/);
   assert.match(pageBody, /data-install-tab="cia"/);
   assert.match(pageBody, /data-install-tab="3dsx"/);
-  assert.match(pageBody, /sidestore:\/\/source\?url=https%3A%2F%2Femeraldonline3ds\.com%2Fsidecommunity\.json/);
+  assert.match(pageBody, /sidestore:\/\/source\?url=https%3A%2F%2Femeraldonline3ds\.com%2Fsource\.json/);
   assert.match(pageBody, /href="\/download\/ios"/);
   if (hasDesktopLinuxDownload) {
     assert.match(pageBody, /href="\/download\/desktop-linux"/);
@@ -288,19 +288,23 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
     : manifestDesktopHash);
   assert.equal(releaseBody.release_notes_url, 'https://emeraldonline3ds.com/');
 
-  const sideStore = await fetch(`${base}/sidecommunity.json`);
+  const sideStore = await fetch(`${base}/source.json`);
   assert.equal(sideStore.status, 200);
   assert.match(sideStore.headers.get('content-type'), /^application\/json/);
   const sideStoreBody = await sideStore.json();
   assert.equal(sideStoreBody.name, 'Emerald Online 3DS');
   assert.equal(sideStoreBody.identifier, 'com.emeraldonline3ds.sidestore');
-  assert.equal(sideStoreBody.sourceURL, 'https://emeraldonline3ds.com/sidecommunity.json');
+  assert.equal(sideStoreBody.sourceURL, 'https://emeraldonline3ds.com/source.json');
   assert.equal(sideStoreBody.apps.length, 1);
   assert.equal(sideStoreBody.apps[0].bundleIdentifier, 'com.emeraldonline3ds.mobile');
   assert.equal(sideStoreBody.apps[0].versions[0].version, mobileReleaseVersion);
   assert.equal(sideStoreBody.apps[0].versions[0].downloadURL, 'https://emeraldonline3ds.com/download/ios');
   assert.equal(sideStoreBody.apps[0].versions[0].size, iosFixture.length);
   assert.equal(sideStoreBody.apps[0].versions[0].minOSVersion, '15.0');
+
+  const legacySideStore = await fetch(`${base}/sidecommunity.json`, { redirect: 'manual' });
+  assert.equal(legacySideStore.status, 308);
+  assert.equal(legacySideStore.headers.get('location'), '/source.json');
 
   const iosDownload = await fetch(`${base}/download/ios`);
   assert.equal(iosDownload.status, 200);

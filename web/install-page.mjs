@@ -18,7 +18,7 @@ export function installPage({ version, publicBase, gamePublicUrl, ciaUrl, deskto
   const linuxHref = desktopLinuxInstallerPresent ? '/download/desktop-linux' : '#';
   const linuxDisabled = desktopLinuxInstallerPresent ? '' : ' aria-disabled="true"';
   const linuxLabel = desktopLinuxInstallerPresent ? 'Download Linux desktop' : 'Linux app coming soon';
-  const sideStoreSourceUrl = `${publicBase}/sidecommunity.json`;
+  const sideStoreSourceUrl = `${publicBase}/source.json`;
   const sideStoreDeepLink = `sidestore://source?url=${encodeURIComponent(sideStoreSourceUrl)}`;
   const iosDownload = iosIpaPresent
     ? '<a class="button secondary" href="/download/ios">Download SideStore IPA</a>'

@@ -442,6 +442,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (pathname === '/sidecommunity.json') {
+    res.writeHead(308, securityHeaders({ location: '/source.json', 'cache-control': 'public, max-age=300' }));
+    res.end();
+    return;
+  }
+  if (pathname === '/source.json') {
     res.writeHead(200, securityHeaders({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' }));
     res.end(JSON.stringify(sideStoreSource));
     return;

@@ -8,7 +8,7 @@ export function createSideStoreSource({
   releaseSummary,
   ipaSize = null,
 }) {
-  const sourceURL = `${publicBase}/sidecommunity.json`;
+  const sourceURL = `${publicBase}/source.json`;
   const source = {
     name: "Emerald Online 3DS",
     identifier: SOURCE_IDENTIFIER,
