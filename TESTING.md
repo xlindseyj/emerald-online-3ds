@@ -4,6 +4,18 @@ The current public release is 0.8.10 and defaults to `wss://live.emeraldonline3d
 
 Verify every public artifact against `release/SHA256SUMS`; it is the authoritative checksum manifest generated for this release. The ignored private avatar atlas is not a public artifact and must never be copied into `release/`.
 
+## iOS sideload preview (2026-08-23)
+
+The iOS preview is documented in [IOS_SIDELOAD_HANDOFF.md](IOS_SIDELOAD_HANDOFF.md).
+Before publishing, run the mobile tests and build, verify the Codemagic checksum,
+audit the exact staged IPA, validate `/source.json` against the official
+SideStore schema, and compare the live `/download/ios` bytes to the approved
+artifact. An ARM64 IPA, green Codemagic build, and successful WSS handshake do
+not prove emulation on an iPhone. Complete the handoff's physical checklist,
+including invalid-ROM rejection, supported-ROM gameplay, both orientations,
+touch/controller/audio, WSS, background/resume, backup/restore, save integrity,
+and a 15-minute performance/thermal run.
+
 ## Release 0.8.7 native RFU trade (2026-08-16)
 
 - Runtime link path: an explicitly configured private link room now selects gpSP's Emerald RFU backend. The frontend drains packets inside gpSP wait callbacks and once per emulated frame during a live session, preserves temporary RFU host-scan transitions, clears explicit withdrawal/disconnect state, requests New 3DS CPU/L2 acceleration where available, and suppresses external overlays on native multiplayer maps.

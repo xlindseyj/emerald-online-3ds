@@ -30,7 +30,7 @@ fi
 # must be checksummed and pass the ROM/private-data IPA audit.
 ios_ipa="${release_dir}/emerald-online-3ds-ios.ipa"
 expected_ios_sha="$(awk '$2 == "emerald-online-3ds-ios.ipa" {print $1}' "${release_dir}/SHA256SUMS")"
-if [[ -e "${ios_ipa}" || -n "${expected_ios_sha}" ]]; then
+if [[ -e "${ios_ipa}" ]]; then
   [[ -s "${ios_ipa}" ]] || { echo "missing or empty iOS IPA: ${ios_ipa}" >&2; exit 1; }
   [[ -n "${expected_ios_sha}" ]] || { echo "iOS IPA is missing from release/SHA256SUMS" >&2; exit 1; }
   actual_ios_sha="$(sha256sum "${ios_ipa}" | cut -d' ' -f1)"

@@ -37,14 +37,18 @@ gpSP source, and the complete GPLv2 text. Azahar's matching 2126.0 source is
 linked in `THIRD_PARTY_NOTICES.md`.
 
 The audited Codemagic artifact is named `emerald-online-3ds-ios.ipa`. Before a
-website image build, stage that file at `release/emerald-online-3ds-ios.ipa` and
-add its SHA-256 line to `release/SHA256SUMS`. The website then exposes it at
+website image build, verify it against Codemagic's `SHA256SUMS`, stage it at
+`release/emerald-online-3ds-ios.ipa`, and add or update its SHA-256 line in the
+repository `release/SHA256SUMS`. The website then exposes it at
 `/download/ios` and lists it, with its exact byte size, at
 `/source.json`. Add the source directly in SideStore with:
 
 ```text
 sidestore://source?url=https%3A%2F%2Femeraldonline3ds.com%2Fsource.json
 ```
+
+The full implementation and release handoff is
+[`IOS_SIDELOAD_HANDOFF.md`](../IOS_SIDELOAD_HANDOFF.md).
 
 ## Runtime layout
 

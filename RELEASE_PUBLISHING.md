@@ -13,6 +13,29 @@ Every deployed Emerald Online 3DS release is published to the public Releases bo
 
 The homepage reads the version from `package.json` and displays it as `vX.Y.Z`. Catalog validation requires that value to match the newest release entry, so the website, artifacts, and official release post advance together.
 
+## iOS and SideStore publishing
+
+The iOS launcher has an independent version in `mobile/package.json`. Codemagic
+produces an audited `emerald-online-3ds-ios.ipa`, an IPA `SHA256SUMS`, audit JSON,
+and corresponding-source archive. Verify the downloaded artifact against that
+build manifest, stage it at `release/emerald-online-3ds-ios.ipa`, and add or
+update the same filename and digest in `release/SHA256SUMS`. The IPA stays
+ignored and must never be committed.
+
+Run `node mobile/tools/audit-ipa.mjs release/emerald-online-3ds-ios.ipa`, the
+mobile tests, the repository tests, and `npm run audit:release` before building
+the website image. The audit requires any locally staged IPA to match its
+manifest entry and contain the runtime, pinned core, and license notice without
+a ROM, save, private runtime configuration, credential, or private address.
+
+The website advertises the app only when the IPA exists in the image. It serves
+the bytes from `/download/ios`, reports their computed checksum through
+`/api/release`, and constructs the official SideStore document at `/source.json`
+from `mobile/package.json` plus the file's exact size. `/sidecommunity.json` is a
+permanent compatibility redirect. Validate the live source against SideStore's
+official schema and confirm the downloaded IPA hash before declaring delivery
+complete. See [IOS_SIDELOAD_HANDOFF.md](IOS_SIDELOAD_HANDOFF.md).
+
 `npm run release:publish` is also available for an authorized operator with the normal database environment. It is safe to rerun: release versions, known-issue keys, and community-page keys are unique; existing official topics are updated in place; soft-deleted official topics are restored; and the publisher pins only the newest catalog entry. It creates no player identity or long-lived browser credential.
 
 ## Formatting and media
