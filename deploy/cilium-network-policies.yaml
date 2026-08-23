@@ -1,0 +1,30 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-node-health-probes
+  namespace: pokemonemeraldonline3ds
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+        - kube-apiserver
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cnpg-kubernetes-api
+  namespace: pokemonemeraldonline3ds
+spec:
+  endpointSelector:
+    matchLabels:
+      cnpg.io/cluster: emerald-pg
+  # CNPG's instance manager must reach the host-network Kubernetes API. In
+  # Cilium/Flannel chaining mode, host traffic is classified by Cilium identity
+  # (host / kube-apiserver) rather than by DNAT'd destination IP, so we allow
+  # those entities explicitly instead of using an unrestricted egress rule.
+  egress:
+    - toEntities:
+        - host
+        - kube-apiserver
