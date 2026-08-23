@@ -254,8 +254,7 @@ const sideStoreSource = createSideStoreSource({
   version: mobilePackageInfo.version,
   releasedAt: mobilePackageInfo.releaseDate,
   releaseSummary: mobilePackageInfo.releaseSummary,
-  ipaSize: iosIpaPresent ? fs.statSync(iosIpaPath).size : null,
-  ipaSha256: iosIpaSha256
+  ipaSize: iosIpaPresent ? fs.statSync(iosIpaPath).size : null
 });
 
 const page = installPage({

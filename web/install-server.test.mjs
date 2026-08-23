@@ -301,7 +301,6 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(sideStoreBody.apps[0].versions[0].downloadURL, 'https://emeraldonline3ds.com/download/ios');
   assert.equal(sideStoreBody.apps[0].versions[0].size, iosFixture.length);
   assert.equal(sideStoreBody.apps[0].versions[0].minOSVersion, '15.0');
-  assert.equal(sideStoreBody.apps[0].versions[0].sha256, crypto.createHash('sha256').update(iosFixture).digest('hex'));
 
   const iosDownload = await fetch(`${base}/download/ios`);
   assert.equal(iosDownload.status, 200);
