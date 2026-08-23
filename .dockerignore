@@ -10,6 +10,8 @@
 !server/tools/**
 !web/
 !web/**
+!mobile/
+!mobile/package.json
 !assets/
 !assets/emerald-online-3ds-icon.png
 !assets/emerald-online-3ds-web-logo.png
