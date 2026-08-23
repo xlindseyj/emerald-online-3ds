@@ -48,13 +48,33 @@ workflows:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -derivedDataPath "$CM_BUILD_DIR/build/ios/compile" \
+            MARKETING_VERSION="$(node -p "require('./mobile/package.json').version")" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build | tee "$CM_BUILD_DIR/build/ios/compile.log"
 
+      - name: Package SideStore re-signable IPA
+        script: |
+          set -e
+          APP_PATH="$CM_BUILD_DIR/build/ios/compile/Build/Products/Release-iphoneos/App.app"
+          OUTPUT_DIR="$CM_BUILD_DIR/build/ios/sidestore"
+          test -d "$APP_PATH"
+          mkdir -p "$OUTPUT_DIR/Payload"
+          ditto "$APP_PATH" "$OUTPUT_DIR/Payload/App.app"
+          (cd "$OUTPUT_DIR" && zip -qry emerald-online-3ds-ios.ipa Payload)
+          rm -rf "$OUTPUT_DIR/Payload"
+          node mobile/tools/audit-ipa.mjs "$OUTPUT_DIR/emerald-online-3ds-ios.ipa" | tee "$OUTPUT_DIR/ipa-audit.json"
+          shasum -a 256 "$OUTPUT_DIR/emerald-online-3ds-ios.ipa" > "$OUTPUT_DIR/SHA256SUMS"
+          node mobile/tools/package-source.mjs
+
     artifacts:
       - build/ios/compile/Build/Products/Release-iphoneos/App.app/**
       - build/ios/compile.log
+      - build/ios/sidestore/*.ipa
+      - build/ios/sidestore/ipa-audit.json
+      - build/ios/sidestore/SHA256SUMS
+      - build/ios/source/*.tar.gz
       - /tmp/xcodebuild_logs/*.log
 
   emerald-ios-sideload:
@@ -222,7 +242,7 @@ workflows:
 
       - name: Set app version and build number
         script: |
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="$(node -p "require('./mobile/package.json').version")"
           cd mobile/ios/App
           agvtool new-marketing-version "$VERSION"
           agvtool new-version -all "$BUILD_NUMBER"

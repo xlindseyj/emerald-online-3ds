@@ -1,6 +1,8 @@
 {
   "name": "emerald-online-3ds-mobile",
   "version": "0.9.0",
+  "releaseDate": "2026-08-23",
+  "releaseSummary": "First iOS sideload preview with a dedicated single-game launcher, portrait and landscape controls, private sandboxed ROM storage, and the Emerald Online launch experience.",
   "private": true,
   "type": "module",
   "description": "Single-game iOS launcher for Emerald Online 3DS",

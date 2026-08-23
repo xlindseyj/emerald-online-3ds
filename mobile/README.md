@@ -21,16 +21,17 @@ npm run cap:sync
 
 The final four commands that touch Xcode require macOS, except the artifact
 staging commands. Build and signing are automated by the root
-`codemagic.yaml`. The target device must be registered in the Apple developer
-team used by the `Emerald Online ASC` Codemagic integration. The app uses its
-own bundle ID and provisioning profile.
+`codemagic.yaml`. Only the separate ad-hoc acceptance build requires the target
+device to be registered in the Apple developer team used by the
+`Emerald Online ASC` Codemagic integration. The app uses its own bundle ID.
 
 The `emerald-ios-compile-check` workflow compiles the device target without
-signing so a new native change can be verified before Apple credentials are
-available. The `emerald-ios-sideload` workflow is the authoritative ad-hoc IPA
-build.
+Apple credentials and packages a privacy-audited IPA for SideStore, whose
+install pipeline re-signs the app for the user's device. The
+`emerald-ios-sideload` workflow remains the authoritative ad-hoc build for
+registered-device acceptance testing.
 
-Codemagic emits both the ad-hoc IPA and a corresponding source archive. The
+Codemagic emits both the SideStore IPA and a corresponding source archive. The
 archive includes this launcher, the embedded 3DS runtime source, the modified
 gpSP source, and the complete GPLv2 text. Azahar's matching 2126.0 source is
 linked in `THIRD_PARTY_NOTICES.md`.

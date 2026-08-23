@@ -28,7 +28,9 @@ COPY release/SHA256SUMS ./release/SHA256SUMS
 COPY release/release-catalog.json ./release/release-catalog.json
 COPY release/known-issues.json ./release/known-issues.json
 COPY release/community-pages.json ./release/community-pages.json
-# Optional signed iOS build. Staging the audited Codemagic artifact here enables
+# The mobile release metadata is separate from the 3DS/server release version.
+COPY mobile/package.json ./mobile/package.json
+# Optional SideStore build. Staging the audited Codemagic artifact here enables
 # /download/ios and adds the app to /sidecommunity.json.
 RUN --mount=type=bind,source=release,target=/tmp/release \
     if [ -f /tmp/release/emerald-online-3ds-ios.ipa ]; then \

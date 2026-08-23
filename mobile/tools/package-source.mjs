@@ -9,7 +9,7 @@ const mobileRoot = path.resolve(
 );
 const repositoryRoot = path.resolve(mobileRoot, "..");
 const packageInfo = JSON.parse(
-  fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
+  fs.readFileSync(path.join(mobileRoot, "package.json"), "utf8"),
 );
 const output = path.join(repositoryRoot, "build", "ios", "source");
 fs.mkdirSync(output, { recursive: true });

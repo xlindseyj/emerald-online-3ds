@@ -12,6 +12,7 @@ test("SideStore source uses the app bundle identifier and exact IPA metadata", (
     releasedAt: "2026-08-24T00:00:00Z",
     releaseSummary: "Dedicated iOS sideload test build.",
     ipaSize: 42_424_242,
+    ipaSha256: "a".repeat(64),
   });
   assert.equal(source.identifier, sideStoreIdentifiers.source);
   assert.equal(
@@ -29,11 +30,12 @@ test("SideStore source uses the app bundle identifier and exact IPA metadata", (
     localizedDescription: "Dedicated iOS sideload test build.",
     size: 42_424_242,
     minOSVersion: "15.0",
+    sha256: "a".repeat(64),
   });
   assert.equal(source.news[0].appID, sideStoreIdentifiers.bundle);
 });
 
-test("SideStore source stays valid and empty until a signed IPA is staged", () => {
+test("SideStore source stays valid and empty until an IPA is staged", () => {
   const source = createSideStoreSource({
     publicBase: "https://emeraldonline3ds.com",
     version: "0.9.0",

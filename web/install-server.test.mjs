@@ -42,13 +42,14 @@ async function waitFor(url) {
 test('public page exposes the CIA and bridges WebSocket gameplay to the presence server', async t => {
   const root = path.resolve(import.meta.dirname, '..');
   const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  const mobileReleaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'mobile', 'package.json'), 'utf8')).version;
   const desktopFile = `EmeraldOnline3DS-Setup-${releaseVersion}.exe`;
   const hasDesktopDownload = fs.existsSync(path.join(root, 'desktop', 'dist', desktopFile));
   const desktopLinuxFile = findDesktopLinuxDownload(path.join(root, 'desktop', 'dist'), releaseVersion);
   const hasDesktopLinuxDownload = Boolean(desktopLinuxFile);
   const iosFixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'emerald-ios-web-test-'));
   const iosFixturePath = path.join(iosFixtureDirectory, 'emerald-online-3ds-ios.ipa');
-  const iosFixture = Buffer.from('synthetic signed IPA fixture');
+  const iosFixture = Buffer.from('synthetic SideStore IPA fixture');
   fs.writeFileSync(iosFixturePath, iosFixture);
   const installPort = 18080;
   const gamePort = 18210;
@@ -267,6 +268,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(releaseBody.desktop_url, hasDesktopDownload ? 'https://emeraldonline3ds.com/download/desktop' : null);
   assert.equal(releaseBody.desktop_linux_url, hasDesktopLinuxDownload ? 'https://emeraldonline3ds.com/download/desktop-linux' : null);
   assert.equal(releaseBody.ios_url, 'https://emeraldonline3ds.com/download/ios');
+  assert.equal(releaseBody.ios_version, mobileReleaseVersion);
   assert.match(releaseBody.sha256_cia, /^[a-f0-9]{64}$/);
   assert.match(releaseBody.sha256_threedsx, /^[a-f0-9]{64}$/);
   assert.equal(releaseBody.sha256_ios, null);
@@ -295,7 +297,7 @@ test('public page exposes the CIA and bridges WebSocket gameplay to the presence
   assert.equal(sideStoreBody.sourceURL, 'https://emeraldonline3ds.com/sidecommunity.json');
   assert.equal(sideStoreBody.apps.length, 1);
   assert.equal(sideStoreBody.apps[0].bundleIdentifier, 'com.emeraldonline3ds.mobile');
-  assert.equal(sideStoreBody.apps[0].versions[0].version, releaseVersion);
+  assert.equal(sideStoreBody.apps[0].versions[0].version, mobileReleaseVersion);
   assert.equal(sideStoreBody.apps[0].versions[0].downloadURL, 'https://emeraldonline3ds.com/download/ios');
   assert.equal(sideStoreBody.apps[0].versions[0].size, iosFixture.length);
   assert.equal(sideStoreBody.apps[0].versions[0].minOSVersion, '15.0');

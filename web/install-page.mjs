@@ -21,8 +21,8 @@ export function installPage({ version, publicBase, gamePublicUrl, ciaUrl, deskto
   const sideStoreSourceUrl = `${publicBase}/sidecommunity.json`;
   const sideStoreDeepLink = `sidestore://source?url=${encodeURIComponent(sideStoreSourceUrl)}`;
   const iosDownload = iosIpaPresent
-    ? '<a class="button secondary" href="/download/ios">Download signed IPA</a>'
-    : '<span class="button secondary disabled" aria-disabled="true">Signed IPA coming soon</span>';
+    ? '<a class="button secondary" href="/download/ios">Download SideStore IPA</a>'
+    : '<span class="button secondary disabled" aria-disabled="true">SideStore IPA coming soon</span>';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/png" href="/favicon.png"><link rel="stylesheet" href="/site.css">

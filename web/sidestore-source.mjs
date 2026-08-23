@@ -7,6 +7,7 @@ export function createSideStoreSource({
   releasedAt,
   releaseSummary,
   ipaSize = null,
+  ipaSha256 = null,
 }) {
   const sourceURL = `${publicBase}/sidecommunity.json`;
   const source = {
@@ -36,16 +37,15 @@ export function createSideStoreSource({
           "Connects to the public Emerald Online 3DS multiplayer and release services.",
       },
     ],
-    versions: [
-      {
-        version,
-        date: releasedAt,
-        downloadURL,
-        localizedDescription: releaseSummary,
-        size: ipaSize,
-        minOSVersion: "15.0",
-      },
-    ],
+    versions: [{
+      version,
+      date: releasedAt,
+      downloadURL,
+      localizedDescription: releaseSummary,
+      size: ipaSize,
+      minOSVersion: "15.0",
+      ...(/^[a-f0-9]{64}$/.test(ipaSha256 ?? "") ? { sha256: ipaSha256 } : {}),
+    }],
   });
   source.news.push({
     title: `Emerald Online 3DS ${version} for iOS`,

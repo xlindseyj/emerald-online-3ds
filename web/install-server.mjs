@@ -17,6 +17,7 @@ import { statusPage } from './status-page.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const packageInfo = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const mobilePackageInfo = JSON.parse(fs.readFileSync(path.join(root, 'mobile', 'package.json'), 'utf8'));
 const ciaPath = path.join(root, 'release', 'emerald-online-3ds.cia');
 const threeDsxPath = path.join(root, 'release', 'emerald-online-3ds.3dsx');
 const sourceFilename = `emerald-online-3ds-source-${packageInfo.version}.tar.gz`;
@@ -194,6 +195,7 @@ function readReleaseInfo() {
     desktop_url: desktopInstallerPresent ? `${publicBase}/download/desktop` : null,
     desktop_linux_url: desktopLinuxArtifactPresent ? `${publicBase}/download/desktop-linux` : null,
     ios_url: iosIpaPresent ? `${publicBase}/download/ios` : null,
+    ios_version: mobilePackageInfo.version,
     sha256_cia: checksums['emerald-online-3ds.cia'] ?? null,
     sha256_threedsx: checksums['emerald-online-3ds.3dsx'] ?? null,
     sha256_desktop: checksums[desktopInstallerFilename] ?? null,
@@ -245,10 +247,11 @@ const currentRelease = releaseCatalog.find(entry => entry.version === packageInf
 if (!currentRelease) throw new Error(`release catalog missing current version ${packageInfo.version}`);
 const sideStoreSource = createSideStoreSource({
   publicBase,
-  version: packageInfo.version,
-  releasedAt: currentRelease.releasedAt,
-  releaseSummary: currentRelease.summary,
-  ipaSize: iosIpaPresent ? fs.statSync(iosIpaPath).size : null
+  version: mobilePackageInfo.version,
+  releasedAt: mobilePackageInfo.releaseDate,
+  releaseSummary: mobilePackageInfo.releaseSummary,
+  ipaSize: iosIpaPresent ? fs.statSync(iosIpaPath).size : null,
+  ipaSha256: iosIpaPresent ? readReleaseChecksums()['emerald-online-3ds-ios.ipa'] ?? null : null
 });
 
 const page = installPage({
@@ -387,7 +390,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/download/ios') {
     if (!iosIpaPresent) {
       res.writeHead(404, securityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));
-      res.end('The signed iOS sideload build is not available in this deployment.');
+      res.end('The iOS SideStore build is not available in this deployment.');
       return;
     }
     const stat = fs.statSync(iosIpaPath);
