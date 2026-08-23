@@ -403,10 +403,42 @@ metadata:
 spec:
   endpointSelector: {}
   ingress:
+    # Kubelet / node-originated health probes are normally classified as
+    # host / remote-node, but in Cilium-with-Flannel chaining mode cross-node
+    # probe traffic can be seen with the Flannel gateway IP identity
+    # (reserved:world cidr:10.42.<node>.1/32). The fromCIDR fallback covers
+    # both the gateway IPs and the node physical IPs so readiness/liveness
+    # probes are not POLICY_DENIED while the new pod's Cilium identity is still
+    # warming up during cross-node rollouts.
     - fromEntities:
         - host
         - remote-node
         - kube-apiserver
+    - fromCIDR:
+        # Node physical IPs (InternalIP)
+        - 192.168.0.31/32
+        - 192.168.15.5/32
+        - 192.168.15.7/32
+        - 192.168.15.8/32
+        - 192.168.15.9/32
+        - 192.168.15.10/32
+        - 100.115.21.39/32
+        # Flannel per-node gateway IPs (source of node-to-pod traffic)
+        - 10.42.0.1/32
+        - 10.42.1.1/32
+        - 10.42.2.1/32
+        - 10.42.3.1/32
+        - 10.42.4.1/32
+        - 10.42.5.1/32
+        - 10.42.6.1/32
+      toPorts:
+        - ports:
+            - port: "3210"
+              protocol: TCP
+            - port: "3211"
+              protocol: TCP
+            - port: "8080"
+              protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
