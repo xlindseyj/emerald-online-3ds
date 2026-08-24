@@ -66,6 +66,12 @@ describe("native iOS architecture", () => {
     expect(codemagic).toContain("SideStore.entitlements");
     expect(codemagic).toContain("REQUIRE_JIT_ENTITLEMENT=1");
     expect(codemagic).toContain("Print :get-task-allow");
+    for (const stage of codemagic.split("npm run runtime:stage --prefix mobile").slice(1)) {
+      expect(stage.indexOf("npx cap copy ios")).toBeGreaterThanOrEqual(0);
+      expect(stage.indexOf("npm run core:build --prefix mobile")).toBeGreaterThan(
+        stage.indexOf("npx cap copy ios"),
+      );
+    }
   });
 
   it("supports both orientations and locks importing to the supported ROM", () => {

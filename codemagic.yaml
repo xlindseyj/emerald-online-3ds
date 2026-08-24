@@ -29,9 +29,10 @@ workflows:
       - name: Stage verified emulator components
         script: |
           npm run runtime:stage --prefix mobile
-          npm run core:build --prefix mobile
           cd mobile
           npx cap copy ios
+          cd ..
+          npm run core:build --prefix mobile
 
       - name: Install CocoaPods
         script: |
@@ -142,9 +143,10 @@ workflows:
       - name: Stage verified runtime and Azahar core
         script: |
           npm run runtime:stage --prefix mobile
-          npm run core:build --prefix mobile
           cd mobile
           npx cap copy ios
+          cd ..
+          npm run core:build --prefix mobile
 
       - name: Install CocoaPods
         script: |
