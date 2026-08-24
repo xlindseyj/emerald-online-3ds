@@ -9,8 +9,9 @@ legally own.
 The iOS build embeds a source-built Azahar 2126.0 libretro core from
 https://github.com/azahar-emu/azahar. Azahar is licensed under GPL-2.0.
 The build pins Azahar commit `fbd3fb02f71e5f9ed5134037fd59bad96c7d2b8a`,
-Dynarmic commit `e77b1ba0b7da7cbe93021b01a663acfe7c4dd516`, and Oaknut
-commit `94c726ce0338b054eb8cb5ea91de8fe6c19f4392`.
+Dynarmic commit `e77b1ba0b7da7cbe93021b01a663acfe7c4dd516`, Azahar's
+top-level Oaknut commit `6b1d57ea7ed4882d32a91eeaa6557b0ecb4da152`, and
+Dynarmic's Oaknut commit `94c726ce0338b054eb8cb5ea91de8fe6c19f4392`.
 
 The corresponding mobile source archive includes the complete reproducible
 build script and all project modifications as GPL-compatible patch files. The

@@ -31,7 +31,9 @@ describe("native iOS architecture", () => {
     expect(builder).toMatch(/const version = ["']2126\.0["']/);
     expect(builder).toContain("fbd3fb02f71e5f9ed5134037fd59bad96c7d2b8a");
     expect(builder).toContain("e77b1ba0b7da7cbe93021b01a663acfe7c4dd516");
+    expect(builder).toContain("6b1d57ea7ed4882d32a91eeaa6557b0ecb4da152");
     expect(builder).toContain("94c726ce0338b054eb8cb5ea91de8fe6c19f4392");
+    expect(builder.match(/oaknut-94c726c-ios26\.patch/g)).toHaveLength(2);
     expect(host).toContain('jitEnabled ? "enabled" : "disabled"');
     expect(host).toContain("RETRO_ENVIRONMENT_GET_JIT_CAPABLE");
     expect(host).toContain("session->_JITEnabled");

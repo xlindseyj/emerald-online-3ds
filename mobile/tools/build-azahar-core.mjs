@@ -10,6 +10,7 @@ const repositoryRoot = path.resolve(mobileRoot, "..");
 const version = "2126.0";
 const azaharCommit = "fbd3fb02f71e5f9ed5134037fd59bad96c7d2b8a";
 const dynarmicCommit = "e77b1ba0b7da7cbe93021b01a663acfe7c4dd516";
+const azaharOaknutCommit = "6b1d57ea7ed4882d32a91eeaa6557b0ecb4da152";
 const oaknutCommit = "94c726ce0338b054eb8cb5ea91de8fe6c19f4392";
 const source = path.join(
   process.env.EMERALD_AZAHAR_CACHE || path.join(os.homedir(), "Library", "Caches"),
@@ -67,6 +68,7 @@ run("git", ["submodule", "sync", "--recursive"], { cwd: source });
 run("git", ["submodule", "update", "--init", "--recursive", "--force"], { cwd: source });
 verifyCommit(source, azaharCommit, "Azahar");
 verifyCommit(path.join(source, "externals", "dynarmic"), dynarmicCommit, "Dynarmic");
+verifyCommit(path.join(source, "externals", "oaknut"), azaharOaknutCommit, "Azahar Oaknut");
 verifyCommit(
   path.join(source, "externals", "dynarmic", "externals", "oaknut"),
   oaknutCommit,
@@ -75,6 +77,7 @@ verifyCommit(
 
 const patches = [
   [source, path.join(mobileRoot, "patches", "azahar-2126-ios26.patch")],
+  [path.join(source, "externals", "oaknut"), path.join(mobileRoot, "patches", "oaknut-94c726c-ios26.patch")],
   [
     path.join(source, "externals", "dynarmic"),
     path.join(mobileRoot, "patches", "dynarmic-e77b1ba-ios26.patch"),
@@ -149,6 +152,7 @@ fs.writeFileSync(
     version,
     azaharCommit,
     dynarmicCommit,
+    azaharOaknutCommit,
     oaknutCommit,
     sha256: sha256(destination),
     jitProtocol: "stikdebug-universal-f00d-v1",
