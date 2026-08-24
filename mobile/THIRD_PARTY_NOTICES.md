@@ -6,15 +6,18 @@ legally own.
 
 ## Azahar
 
-The iOS build embeds the unmodified Azahar 2126.0 libretro core from
+The iOS build embeds a source-built Azahar 2126.0 libretro core from
 https://github.com/azahar-emu/azahar. Azahar is licensed under GPL-2.0.
-Corresponding source for the pinned release is available at
-https://github.com/azahar-emu/azahar/tree/2126.0.
+The build pins Azahar commit `fbd3fb02f71e5f9ed5134037fd59bad96c7d2b8a`,
+Dynarmic commit `e77b1ba0b7da7cbe93021b01a663acfe7c4dd516`, and Oaknut
+commit `94c726ce0338b054eb8cb5ea91de8fe6c19f4392`.
 
-The build verifies the published archive before embedding it:
-
-- Archive SHA-256: `e7b3e888db0441d6e3463bd6f38a48e84dcb0009ef58376f23781420beccf479`
-- Core SHA-256: `84fa14f88666961f56bc36675018d35e42499ed7410f32d2bb0395bf31855ce6`
+The corresponding mobile source archive includes the complete reproducible
+build script and all project modifications as GPL-compatible patch files. The
+changes implement StikDebug's universal iOS 26 executable-region protocol,
+persistent W^X CPU-code mappings, and an iOS-native Dynarmic spin lock. Shader
+JIT remains disabled on iOS 26 because upstream creates shader code regions
+after the debugger has detached.
 
 ## Capacitor and React
 

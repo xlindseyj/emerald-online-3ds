@@ -2,7 +2,7 @@ workflows:
   emerald-ios-compile-check:
     name: Emerald Online 3DS iOS Compile Check
     instance_type: mac_mini_m2
-    max_build_duration: 60
+    max_build_duration: 120
 
     environment:
       vars:
@@ -16,6 +16,7 @@ workflows:
       cache_paths:
         - $HOME/.npm
         - $HOME/Library/Caches/CocoaPods
+        - $HOME/Library/Caches/emerald-azahar-2126
         - mobile/node_modules
 
     scripts:
@@ -28,7 +29,7 @@ workflows:
       - name: Stage verified emulator components
         script: |
           npm run runtime:stage --prefix mobile
-          npm run core:fetch --prefix mobile
+          npm run core:build --prefix mobile
           cd mobile
           npx cap copy ios
 
@@ -82,6 +83,7 @@ workflows:
       - build/ios/sidestore/SHA256SUMS
       - build/ios/sidestore/audit/entitlements.plist
       - build/ios/source/*.tar.gz
+      - build/ios/azahar-core.json
       - /tmp/xcodebuild_logs/*.log
 
   emerald-ios-sideload:
@@ -121,6 +123,7 @@ workflows:
       cache_paths:
         - $HOME/.npm
         - $HOME/Library/Caches/CocoaPods
+        - $HOME/Library/Caches/emerald-azahar-2126
         - mobile/node_modules
 
     scripts:
@@ -139,7 +142,7 @@ workflows:
       - name: Stage verified runtime and Azahar core
         script: |
           npm run runtime:stage --prefix mobile
-          npm run core:fetch --prefix mobile
+          npm run core:build --prefix mobile
           cd mobile
           npx cap copy ios
 
@@ -281,4 +284,5 @@ workflows:
       - build/ios/ipa-audit.json
       - build/ios/SHA256SUMS
       - build/ios/source/*.tar.gz
+      - build/ios/azahar-core.json
       - /tmp/xcodebuild_logs/*.log

@@ -6,6 +6,7 @@ struct EmeraldJITState {
     let supported: Bool
     let entitled: Bool
     let active: Bool
+    let attached: Bool
     let stikDebugInstalled: Bool
     let reason: String
 
@@ -14,6 +15,7 @@ struct EmeraldJITState {
             "jitSupported": supported,
             "jitEntitled": entitled,
             "jitAvailable": active,
+            "jitAttached": attached,
             "stikDebugInstalled": stikDebugInstalled,
             "jitStatus": reason
         ]
@@ -31,7 +33,7 @@ enum EmeraldJITError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedVersion:
-            return "StikDebug JIT is supported here on iOS 17.4 through iOS 18. Use Compatible Interpreter on this iOS version."
+            return "StikDebug JIT requires iOS 17.4 or later. Use Compatible Interpreter on this iOS version."
         case .missingEntitlement:
             return "This installation is not debug-enabled. Reinstall Emerald Online 3DS through SideStore so get-task-allow is preserved."
         case .missingStikDebug:
@@ -57,18 +59,22 @@ final class EmeraldJITCoordinator {
     var state: EmeraldJITState {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         let supported = (version.majorVersion == 17 && version.minorVersion >= 4) ||
-            (version.majorVersion >= 18 && version.majorVersion < 26)
+            version.majorVersion >= 18
         let entitled = EO3DSHasGetTaskAllow()
         let installed = supported && UIApplication.shared.canOpenURL(URL(string: "\(stikDebugScheme)://")!)
-        let active = supported && entitled && EO3DSIsDebuggerAttached()
+        let attached = supported && entitled && EO3DSIsDebuggerAttached()
+        let protocolReady = version.majorVersion >= 26 && EO3DSIsJIT26ProtocolReady()
+        // On iOS 26, CS_DEBUGGED means universal.js may begin preparation; it
+        // is not JIT-ready until every Azahar RX region is prepared and detached.
+        let active = supported && entitled && (version.majorVersion >= 26 ? protocolReady : attached)
         let reason: String
         if active { reason = "active" }
-        else if !supported && version.majorVersion >= 26 { reason = "ios-26-core-update-required" }
+        else if version.majorVersion >= 26 && attached { reason = "ready-to-prepare" }
         else if !supported { reason = "unsupported-ios-version" }
         else if !entitled { reason = "missing-get-task-allow" }
         else if !installed { reason = "stikdebug-not-installed" }
         else { reason = "ready-to-enable" }
-        return EmeraldJITState(supported: supported, entitled: entitled, active: active, stikDebugInstalled: installed, reason: reason)
+        return EmeraldJITState(supported: supported, entitled: entitled, active: active, attached: attached, stikDebugInstalled: installed, reason: reason)
     }
 
     func requestURL() throws -> URL {
@@ -93,6 +99,6 @@ final class EmeraldJITCoordinator {
         let current = state
         guard current.supported else { throw EmeraldJITError.unsupportedVersion }
         guard current.entitled else { throw EmeraldJITError.missingEntitlement }
-        guard current.active else { throw EmeraldJITError.notActive }
+        guard current.active || current.attached else { throw EmeraldJITError.notActive }
     }
 }

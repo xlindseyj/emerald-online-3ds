@@ -1,0 +1,168 @@
+diff --git a/src/citra_libretro/citra_libretro.cpp b/src/citra_libretro/citra_libretro.cpp
+index bb279fe..db92228 100644
+--- a/src/citra_libretro/citra_libretro.cpp
++++ b/src/citra_libretro/citra_libretro.cpp
+@@ -2,6 +2,7 @@
+ // Licensed under GPLv2 or any later version
+ // Refer to the license.txt file included.
+ 
++#include <atomic>
+ #include <list>
+ #include <numeric>
+ #include <vector>
+@@ -489,6 +490,77 @@ void retro_reset() {
+     emu_instance->game_loaded = do_load_game();
+ }
+ 
++#if defined(IOS) && defined(__aarch64__)
++namespace {
++
++// 0 = legacy debugger JIT, 1 = universal protocol is preparing regions,
++// 2 = universal protocol completed and the debugger detached.
++std::atomic<int> jit26_protocol_state{0};
++std::atomic<unsigned> jit26_prepared_regions{0};
++
++__attribute__((noinline, optnone, naked)) void* JIT26PrepareRegion(void* address,
++                                                                  size_t length) {
++    __asm__("mov x16, #1\n"
++            "brk #0xf00d\n"
++            "ret\n");
++}
++
++__attribute__((noinline, optnone, naked)) void JIT26Detach() {
++    __asm__("mov x16, #0\n"
++            "brk #0xf00d\n"
++            "ret\n");
++}
++
++} // namespace
++
++extern "C" bool azahar_jit26_begin_preparation() {
++    jit26_prepared_regions.store(0, std::memory_order_release);
++    jit26_protocol_state.store(1, std::memory_order_release);
++    return true;
++}
++
++extern "C" int azahar_jit26_protocol_state() {
++    return jit26_protocol_state.load(std::memory_order_acquire);
++}
++
++extern "C" void* azahar_jit26_prepare_region(void* address, size_t length) {
++    if (jit26_protocol_state.load(std::memory_order_acquire) != 1 || address == nullptr ||
++        length == 0) {
++        return nullptr;
++    }
++    void* prepared = JIT26PrepareRegion(address, length);
++    if (prepared == address)
++        jit26_prepared_regions.fetch_add(1, std::memory_order_acq_rel);
++    return prepared;
++}
++
++extern "C" bool azahar_jit26_finish_preparation() {
++    if (jit26_protocol_state.load(std::memory_order_acquire) != 1) {
++        return false;
++    }
++    const bool prepared = jit26_prepared_regions.load(std::memory_order_acquire) > 0;
++    JIT26Detach();
++    jit26_protocol_state.store(2, std::memory_order_release);
++    return prepared;
++}
++#else
++extern "C" bool azahar_jit26_begin_preparation() {
++    return false;
++}
++
++extern "C" int azahar_jit26_protocol_state() {
++    return 0;
++}
++
++extern "C" void* azahar_jit26_prepare_region(void*, size_t) {
++    return nullptr;
++}
++
++extern "C" bool azahar_jit26_finish_preparation() {
++    return false;
++}
++#endif
++
+ /**
+  * libretro callback; Called when a game is to be loaded.
+  */
+diff --git a/src/citra_libretro/libretro.osx.def b/src/citra_libretro/libretro.osx.def
+index 53a556a..7599818 100644
+--- a/src/citra_libretro/libretro.osx.def
++++ b/src/citra_libretro/libretro.osx.def
+@@ -25,3 +25,7 @@ _retro_unload_game
+ _retro_get_region
+ _retro_get_memory_data
+ _retro_get_memory_size
++_azahar_jit26_begin_preparation
++_azahar_jit26_protocol_state
++_azahar_jit26_prepare_region
++_azahar_jit26_finish_preparation
+diff --git a/src/video_core/shader/shader_jit_a64_compiler.cpp b/src/video_core/shader/shader_jit_a64_compiler.cpp
+index e138857..f1a225e 100644
+--- a/src/video_core/shader/shader_jit_a64_compiler.cpp
++++ b/src/video_core/shader/shader_jit_a64_compiler.cpp
+@@ -1016,11 +1016,11 @@ void JitShader::Compile(const std::array<u32, MAX_PROGRAM_CODE_LENGTH>* program_
+     code_mem = std::make_unique<oaknut::CodeBlock>(code_size);
+     code_mem->unprotect();
+ 
+-    program = reinterpret_cast<CompiledShader*>(reinterpret_cast<std::byte*>(code_mem->ptr()) +
++    program = reinterpret_cast<CompiledShader*>(reinterpret_cast<std::byte*>(code_mem->xptr()) +
+                                                 program_offset);
+ 
+     // Copy to executable memory
+-    std::memcpy(code_mem->ptr(), code_vec.data(), code_vec.size() * sizeof(u32));
++    std::memcpy(code_mem->wptr(), code_vec.data(), code_vec.size() * sizeof(u32));
+ 
+     // Memory is ready to execute
+     code_mem->protect();
+diff --git a/src/core/arm/dynarmic/arm_dynarmic.cpp b/src/core/arm/dynarmic/arm_dynarmic.cpp
+index 64b7405..73624a6 100644
+--- a/src/core/arm/dynarmic/arm_dynarmic.cpp
++++ b/src/core/arm/dynarmic/arm_dynarmic.cpp
+@@ -30,6 +30,18 @@ constexpr u32 SIGTRAP = 5;
+ 
+ namespace Core {
+ 
++#if defined(IOS) && defined(HAVE_LIBRETRO)
++extern "C" int azahar_jit26_protocol_state();
++
++static bool UsesJIT26PreparedCache() {
++    return azahar_jit26_protocol_state() > 0;
++}
++#else
++static bool UsesJIT26PreparedCache() {
++    return false;
++}
++#endif
++
+ class DynarmicUserCallbacks final : public Dynarmic::A32::UserCallbacks {
+ public:
+     explicit DynarmicUserCallbacks(ARM_Dynarmic& parent)
+@@ -329,6 +341,15 @@ void ARM_Dynarmic::SetPageTable(const std::shared_ptr<Memory::PageTable>& page_t
+         SaveContext(ctx);
+     }
+ 
++    // universal.js must prepare every RX mapping before it detaches. Keep one
++    // callback-backed cache per emulated CPU core on iOS 26 so later process
++    // page-table switches cannot allocate an unprepared executable region.
++    if (UsesJIT26PreparedCache() && jit) {
++        jit->ClearCache();
++        LoadContext(ctx);
++        return;
++    }
++
+     auto iter = jits.find(current_page_table);
+     if (iter != jits.end()) {
+         jit = iter->second.get();
+@@ -351,7 +372,7 @@ void ARM_Dynarmic::ServeBreak([[maybe_unused]] int signal) {
+ std::unique_ptr<Dynarmic::A32::Jit> ARM_Dynarmic::MakeJit() {
+     Dynarmic::A32::UserConfig config;
+     config.callbacks = cb.get();
+-    if (current_page_table) {
++    if (current_page_table && !UsesJIT26PreparedCache()) {
+         config.page_table = &current_page_table->GetPointerArray();
+     }
+     config.coprocessors[15] = std::make_shared<DynarmicCP15>(cp15_state);

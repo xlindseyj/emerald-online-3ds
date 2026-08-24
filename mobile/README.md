@@ -15,7 +15,7 @@ npm ci
 npm test
 npm run build
 npm run runtime:stage
-npm run core:fetch
+npm run core:build
 npm run cap:sync
 ```
 
@@ -33,8 +33,8 @@ registered-device acceptance testing.
 
 Codemagic emits both the SideStore IPA and a corresponding source archive. The
 archive includes this launcher, the embedded 3DS runtime source, the modified
-gpSP source, and the complete GPLv2 text. Azahar's matching 2126.0 source is
-linked in `THIRD_PARTY_NOTICES.md`.
+gpSP source, the pinned Azahar/Dynarmic/Oaknut build script and patches, and the
+complete GPLv2 text.
 
 The audited Codemagic artifact is named `emerald-online-3ds-ios.ipa`. Before a
 website image build, stage that file at `release/emerald-online-3ds-ios.ipa` and
@@ -69,16 +69,15 @@ because the emulated 3DS does not provide the physical console's Luma cache
 invalidation bootstrap.
 
 The default **Compatible Interpreter** mode works without executable-memory
-permissions. On iOS 17.4 through iOS 18, users can instead select **StikDebug
-JIT**. The app verifies `get-task-allow`, opens the official
+permissions. On iOS 17.4 or later, users can instead select **StikDebug JIT**.
+The app verifies `get-task-allow`, opens the official
 `stikdebug://enable-jit` request for its current PID, confirms `CS_DEBUGGED`
-after returning, and only then enables Azahar CPU and shader JIT. The pairing
-file stays in StikDebug and is never imported, stored, or logged by this app.
-
-iOS 26 remains interpreter-only in 0.9.3. A debugger attachment alone is not
-enough there: Azahar's executable-memory allocator must first implement the
-TXM/SPTM universal region-preparation protocol. The launcher refuses to claim
-JIT readiness on iOS 26 rather than risk executing unprepared pages.
+after returning, and only then enables Azahar JIT. On iOS 26, the source-built
+core issues the `universal.js` prepare breakpoint for every initial CPU RX
+region, creates a separate writable alias, and detaches before the first frame.
+Prepared mappings are reused for in-session title resets. Shader JIT remains
+off on iOS 26 because upstream allocates shader regions lazily after detach;
+iOS 17.4 through iOS 18 retain both CPU and shader JIT.
 
 The launcher Settings page controls audio, equal-width stacked screens, and an
 optional experimental auto-resume point. During play, **Menu** can resume,

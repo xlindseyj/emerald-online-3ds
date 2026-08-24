@@ -8,6 +8,7 @@ typedef void (^EO3DSAudioHandler)(NSData *interleavedInt16, NSUInteger frames, d
 
 FOUNDATION_EXPORT BOOL EO3DSHasGetTaskAllow(void);
 FOUNDATION_EXPORT BOOL EO3DSIsDebuggerAttached(void);
+FOUNDATION_EXPORT BOOL EO3DSIsJIT26ProtocolReady(void);
 
 @interface EO3DSCoreSession : NSObject
 

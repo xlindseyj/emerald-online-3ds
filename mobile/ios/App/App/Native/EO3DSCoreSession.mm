@@ -11,12 +11,14 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <unordered_map>
 #include "libretro.h"
 
 static NSString *const EO3DSCoreErrorDomain = @"com.emeraldonline3ds.mobile.core";
 static EO3DSCoreSession *activeSession = nil;
+static std::atomic_bool jit26ProtocolReady{false};
 
 BOOL EO3DSHasGetTaskAllow(void) {
   using CreateTask = CFTypeRef (*)(CFAllocatorRef);
@@ -49,6 +51,10 @@ BOOL EO3DSIsDebuggerAttached(void) {
 #endif
 }
 
+BOOL EO3DSIsJIT26ProtocolReady(void) {
+  return jit26ProtocolReady.load();
+}
+
 struct CoreAPI {
   void (*set_environment)(retro_environment_t);
   void (*set_video_refresh)(retro_video_refresh_t);
@@ -67,6 +73,9 @@ struct CoreAPI {
   size_t (*serialize_size)(void);
   bool (*serialize)(void *, size_t);
   bool (*unserialize)(const void *, size_t);
+  bool (*jit26_begin_preparation)(void);
+  int (*jit26_protocol_state)(void);
+  bool (*jit26_finish_preparation)(void);
 };
 
 @interface EO3DSCoreSession () {
@@ -94,6 +103,7 @@ struct CoreAPI {
   std::atomic_bool _hasNonBlackVideoFrame;
   std::atomic<NSUInteger> _audioFramesReceived;
   BOOL _JITEnabled;
+  BOOL _JIT26Enabled;
   std::chrono::steady_clock::time_point _fpsWindow;
   NSUInteger _fpsFrames;
   double _sampleRate;
@@ -296,6 +306,8 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _hasNonBlackVideoFrame = false;
     _audioFramesReceived = 0;
     _JITEnabled = jitEnabled;
+    NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
+    _JIT26Enabled = jitEnabled && version.majorVersion >= 26;
     for (auto &button : _buttons) button = false;
     _corePath = coreURL.fileSystemRepresentation;
     _runtimePath = runtimeURL.fileSystemRepresentation;
@@ -304,7 +316,9 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _variables = {
       {"citra_graphics_api", "Software"},
       {"citra_use_cpu_jit", jitEnabled ? "enabled" : "disabled"},
-      {"citra_use_shader_jit", jitEnabled ? "enabled" : "disabled"},
+      // Azahar's shader JIT allocates executable regions lazily. Keep it off on
+      // iOS 26 so universal.js can prepare every executable region before detach.
+      {"citra_use_shader_jit", jitEnabled && !_JIT26Enabled ? "enabled" : "disabled"},
       {"citra_resolution_factor", "1"},
       {"citra_layout_option", "default"},
       {"citra_use_virtual_sd", "enabled"},
@@ -356,6 +370,12 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   LOAD_API(serialize, "retro_serialize");
   LOAD_API(unserialize, "retro_unserialize");
 #undef LOAD_API
+  _api.jit26_begin_preparation = reinterpret_cast<decltype(_api.jit26_begin_preparation)>(
+      loadSymbol(_coreHandle, "azahar_jit26_begin_preparation"));
+  _api.jit26_protocol_state = reinterpret_cast<decltype(_api.jit26_protocol_state)>(
+      loadSymbol(_coreHandle, "azahar_jit26_protocol_state"));
+  _api.jit26_finish_preparation = reinterpret_cast<decltype(_api.jit26_finish_preparation)>(
+      loadSymbol(_coreHandle, "azahar_jit26_finish_preparation"));
   if (!_api.set_environment || !_api.set_video_refresh || !_api.set_audio_sample ||
       !_api.set_audio_sample_batch || !_api.set_input_poll || !_api.set_input_state ||
       !_api.init || !_api.deinit || !_api.load_game || !_api.unload_game || !_api.run ||
@@ -381,12 +401,56 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   _api.init();
   retro_game_info game = {};
   game.path = _runtimePath.c_str();
-  if (!_api.load_game(&game)) {
+  const BOOL needsJIT26Preparation = _JIT26Enabled && !jit26ProtocolReady.load();
+  if (needsJIT26Preparation &&
+      (!_api.jit26_begin_preparation || !_api.jit26_protocol_state ||
+       !_api.jit26_finish_preparation)) {
     _api.deinit();
     activeSession = nil;
     dlclose(_coreHandle);
     _coreHandle = nullptr;
-    if (error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:4 userInfo:@{NSLocalizedDescriptionKey: @"Azahar rejected the bundled Emerald Online 3DS runtime."}];
+    if (error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:8 userInfo:@{NSLocalizedDescriptionKey: @"This Azahar core does not include the iOS 26 universal JIT protocol."}];
+    return NO;
+  }
+  if (needsJIT26Preparation && !EO3DSIsDebuggerAttached()) {
+    _api.deinit();
+    activeSession = nil;
+    dlclose(_coreHandle);
+    _coreHandle = nullptr;
+    if (error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:9 userInfo:@{NSLocalizedDescriptionKey: @"StikDebug detached before Azahar could prepare its iOS 26 JIT cache. Enable JIT again and return directly to Emerald Online 3DS."}];
+    return NO;
+  }
+  if (needsJIT26Preparation && !_api.jit26_begin_preparation()) {
+    _api.deinit();
+    activeSession = nil;
+    dlclose(_coreHandle);
+    _coreHandle = nullptr;
+    if (error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:10 userInfo:@{NSLocalizedDescriptionKey: @"Azahar could not begin iOS 26 JIT preparation."}];
+    return NO;
+  }
+
+  BOOL loaded = NO;
+  try {
+    loaded = _api.load_game(&game);
+  } catch (const std::exception &) {
+    loaded = NO;
+  } catch (...) {
+    loaded = NO;
+  }
+  BOOL protocolFinished = YES;
+  if (needsJIT26Preparation) {
+    protocolFinished = _api.jit26_finish_preparation() && _api.jit26_protocol_state() == 2;
+    if (loaded && protocolFinished) jit26ProtocolReady = true;
+  }
+  if (!loaded || !protocolFinished) {
+    _api.deinit();
+    activeSession = nil;
+    dlclose(_coreHandle);
+    _coreHandle = nullptr;
+    NSString *message = !protocolFinished
+      ? @"StikDebug did not complete Azahar's iOS 26 JIT preparation and detach handshake."
+      : @"Azahar rejected the bundled Emerald Online 3DS runtime.";
+    if (error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:4 userInfo:@{NSLocalizedDescriptionKey: message}];
     return NO;
   }
   retro_system_av_info av = {};
@@ -426,6 +490,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     self->_api.deinit();
     if (self->_coreHandle) dlclose(self->_coreHandle);
     self->_coreHandle = nullptr;
+    if (self->_JIT26Enabled) jit26ProtocolReady = false;
     self->_imageView = nil;
     if (activeSession == self) activeSession = nil;
   });

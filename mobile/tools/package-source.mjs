@@ -37,6 +37,7 @@ const tracked = execFileSync(
   .trim()
   .split("\n")
   .filter(Boolean)
+  .filter((name) => fs.existsSync(path.join(repositoryRoot, name)))
   .filter((name) => !name.startsWith("third_party/gpsp/tools/"))
   .filter((name) => !/\.(?:a|bin|d|o)$/i.test(name));
 if (!tracked.length)
@@ -56,6 +57,10 @@ for (const required of [
   "gpsp-runtime/Makefile",
   "gpsp-runtime/source/main.cpp",
   "third_party/gpsp/COPYING",
+  "mobile/tools/build-azahar-core.mjs",
+  "mobile/patches/azahar-2126-ios26.patch",
+  "mobile/patches/dynarmic-e77b1ba-ios26.patch",
+  "mobile/patches/oaknut-94c726c-ios26.patch",
 ]) {
   if (!tracked.includes(required))
     throw new Error(`Corresponding source is incomplete: missing ${required}.`);

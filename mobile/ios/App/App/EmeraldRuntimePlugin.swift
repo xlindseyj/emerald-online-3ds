@@ -92,7 +92,7 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             guard let self else { call.reject("The app is not ready to request JIT."); return }
             do {
                 let current = self.jitCoordinator.state
-                if current.active { call.resolve(current.dictionary); return }
+                if current.active || current.attached { call.resolve(current.dictionary); return }
                 let url = try self.jitCoordinator.requestURL()
                 self.storage.appendDiagnostic(event: "jit-requested", fields: ["method": "stikdebug"])
                 UIApplication.shared.open(url) { opened in

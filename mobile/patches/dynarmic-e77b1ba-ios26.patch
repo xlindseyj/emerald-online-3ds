@@ -1,0 +1,105 @@
+diff --git a/src/dynarmic/backend/arm64/address_space.cpp b/src/dynarmic/backend/arm64/address_space.cpp
+index 2c7ae77..84df25c 100644
+--- a/src/dynarmic/backend/arm64/address_space.cpp
++++ b/src/dynarmic/backend/arm64/address_space.cpp
+@@ -23,7 +23,7 @@ namespace Dynarmic::Backend::Arm64 {
+ AddressSpace::AddressSpace(size_t code_cache_size)
+         : code_cache_size(code_cache_size)
+         , mem(code_cache_size)
+-        , code(mem.ptr(), mem.ptr())
++        , code(mem.wptr(), mem.xptr())
+         , fastmem_manager(exception_handler) {
+     ASSERT_MSG(code_cache_size <= 128 * 1024 * 1024, "code_cache_size > 128 MiB not currently supported");
+ 
+@@ -98,7 +98,7 @@ void AddressSpace::ClearCache() {
+ }
+ 
+ void AddressSpace::DumpDisassembly() const {
+-    for (u32* ptr = mem.ptr(); ptr < code.xptr<u32*>(); ptr++) {
++    for (u32* ptr = mem.xptr(); ptr < code.xptr<u32*>(); ptr++) {
+         std::printf("%s", Common::DisassembleAArch64(*ptr, mcl::bit_cast<u64>(ptr)).c_str());
+     }
+ }
+@@ -136,7 +136,7 @@ void AddressSpace::Link(EmittedBlockInfo& block_info) {
+     using namespace oaknut::util;
+ 
+     for (auto [ptr_offset, target] : block_info.relocations) {
+-        CodeGenerator c{mem.ptr(), mem.ptr()};
++        CodeGenerator c{mem.wptr(), mem.xptr()};
+         c.set_xptr(reinterpret_cast<u32*>(block_info.entry_point + ptr_offset));
+ 
+         switch (target) {
+@@ -276,7 +276,7 @@ void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr targe
+     using namespace oaknut::util;
+ 
+     for (auto [ptr_offset, type] : block_relocations_list) {
+-        CodeGenerator c{mem.ptr(), mem.ptr()};
++        CodeGenerator c{mem.wptr(), mem.xptr()};
+         c.set_xptr(reinterpret_cast<u32*>(entry_point + ptr_offset));
+ 
+         switch (type) {
+diff --git a/src/dynarmic/backend/exception_handler_macos.cpp b/src/dynarmic/backend/exception_handler_macos.cpp
+index bac8d9c..7984820 100644
+--- a/src/dynarmic/backend/exception_handler_macos.cpp
++++ b/src/dynarmic/backend/exception_handler_macos.cpp
+@@ -274,7 +274,7 @@ void ExceptionHandler::Register(X64::BlockOfCode& code) {
+ }
+ #elif defined(MCL_ARCHITECTURE_ARM64)
+ void ExceptionHandler::Register(oaknut::CodeBlock& mem, std::size_t size) {
+-    const u64 code_begin = mcl::bit_cast<u64>(mem.ptr());
++    const u64 code_begin = mcl::bit_cast<u64>(mem.xptr());
+     const u64 code_end = code_begin + size;
+     impl = std::make_unique<Impl>(code_begin, code_end);
+ }
+diff --git a/src/dynarmic/common/spin_lock_arm64.cpp b/src/dynarmic/common/spin_lock_arm64.cpp
+index ccf807e..5054461 100644
+--- a/src/dynarmic/common/spin_lock_arm64.cpp
++++ b/src/dynarmic/common/spin_lock_arm64.cpp
+@@ -5,6 +5,11 @@
+ 
+ #include <mutex>
+ 
++#if defined(__APPLE__)
++#    include <TargetConditionals.h>
++#    include <sched.h>
++#endif
++
+ #include <oaknut/code_block.hpp>
+ #include <oaknut/oaknut.hpp>
+ 
+@@ -37,6 +42,7 @@ void EmitSpinLockUnlock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
+ 
+ namespace {
+ 
++#if !defined(__APPLE__) || !TARGET_OS_IPHONE
+ struct SpinLockImpl {
+     SpinLockImpl();
+ 
+@@ -70,17 +76,27 @@ void SpinLockImpl::Initialize() {
+     mem.protect();
+     mem.invalidate_all();
+ }
++#endif
+ 
+ }  // namespace
+ 
+ void SpinLock::Lock() {
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    while (__atomic_exchange_n(&storage, 1, __ATOMIC_ACQUIRE) != 0)
++        sched_yield();
++#else
+     std::call_once(flag, &SpinLockImpl::Initialize, impl);
+     impl.lock(&storage);
++#endif
+ }
+ 
+ void SpinLock::Unlock() {
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    __atomic_store_n(&storage, 0, __ATOMIC_RELEASE);
++#else
+     std::call_once(flag, &SpinLockImpl::Initialize, impl);
+     impl.unlock(&storage);
++#endif
+ }
+ 
+ }  // namespace Dynarmic

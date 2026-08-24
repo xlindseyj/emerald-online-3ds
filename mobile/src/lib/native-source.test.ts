@@ -25,13 +25,13 @@ describe("native iOS architecture", () => {
   });
 
   it("pins the trusted core and enables Azahar JIT only after native readiness", () => {
-    const fetch = read("tools/fetch-azahar-core.mjs");
+    const builder = read("tools/build-azahar-core.mjs");
     const host = read("ios/App/App/Native/EO3DSCoreSession.mm");
     const coordinator = read("ios/App/App/EmeraldJITCoordinator.swift");
-    expect(fetch).toMatch(/const version = ["']2126\.0["']/);
-    expect(fetch).toContain(
-      "e7b3e888db0441d6e3463bd6f38a48e84dcb0009ef58376f23781420beccf479",
-    );
+    expect(builder).toMatch(/const version = ["']2126\.0["']/);
+    expect(builder).toContain("fbd3fb02f71e5f9ed5134037fd59bad96c7d2b8a");
+    expect(builder).toContain("e77b1ba0b7da7cbe93021b01a663acfe7c4dd516");
+    expect(builder).toContain("94c726ce0338b054eb8cb5ea91de8fe6c19f4392");
     expect(host).toContain('jitEnabled ? "enabled" : "disabled"');
     expect(host).toContain("RETRO_ENVIRONMENT_GET_JIT_CAPABLE");
     expect(host).toContain("session->_JITEnabled");
@@ -43,7 +43,13 @@ describe("native iOS architecture", () => {
     expect(coordinator).toContain('URLQueryItem(name: "pid"');
     expect(coordinator).toContain('URLQueryItem(name: "script-name", value: scriptName)');
     expect(coordinator).toContain('private let scriptName = "universal.js"');
-    expect(coordinator).toContain("version.majorVersion < 26");
+    expect(coordinator).toContain("EO3DSIsJIT26ProtocolReady()");
+    expect(coordinator).toContain('reason = "ready-to-prepare"');
+    expect(host).toContain("azahar_jit26_begin_preparation");
+    expect(host).toContain("azahar_jit26_finish_preparation");
+    expect(host).toContain("jitEnabled && !_JIT26Enabled");
+    expect(read("patches/azahar-2126-ios26.patch")).toContain("brk #0xf00d");
+    expect(read("patches/oaknut-94c726c-ios26.patch")).toContain("vm_remap");
     expect(coordinator).not.toMatch(/pairingFile|mobiledevicepairing|10\.7\.0\.1/);
     expect(host).toContain("RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER");
     expect(host).toContain('{"citra_use_libretro_save_path", "LibRetro Default"}');

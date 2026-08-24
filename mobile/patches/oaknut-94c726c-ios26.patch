@@ -1,0 +1,214 @@
+diff --git a/include/oaknut/code_block.hpp b/include/oaknut/code_block.hpp
+index bfa87d9..938a45a 100644
+--- a/include/oaknut/code_block.hpp
++++ b/include/oaknut/code_block.hpp
+@@ -6,12 +6,17 @@
+ #include <algorithm>
+ #include <cstddef>
+ #include <cstdint>
++#include <limits>
++#include <mutex>
+ #include <new>
++#include <vector>
+ 
+ #if defined(_WIN32)
+ #    define NOMINMAX
+ #    include <windows.h>
+ #elif defined(__APPLE__)
++#    include <mach/mach.h>
++#    include <mach/vm_map.h>
+ #    include <TargetConditionals.h>
+ #    include <libkern/OSCacheControl.h>
+ #    include <pthread.h>
+@@ -21,8 +26,38 @@
+ #    include <sys/mman.h>
+ #endif
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++extern "C" int azahar_jit26_protocol_state();
++extern "C" void* azahar_jit26_prepare_region(void* address, std::size_t length);
++#endif
++
+ namespace oaknut {
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++namespace detail {
++
++struct PreparedIOSRegion {
++    std::uint32_t* executable = nullptr;
++    std::uint32_t* writable = nullptr;
++    std::size_t size = 0;
++    bool in_use = false;
++};
++
++inline std::mutex& PreparedIOSRegionMutex()
++{
++    static std::mutex mutex;
++    return mutex;
++}
++
++inline std::vector<PreparedIOSRegion>& PreparedIOSRegions()
++{
++    static std::vector<PreparedIOSRegion> regions;
++    return regions;
++}
++
++}  // namespace detail
++#endif
++
+ class CodeBlock {
+ public:
+     explicit CodeBlock(std::size_t size)
+@@ -32,9 +67,63 @@ public:
+         m_memory = (std::uint32_t*)VirtualAlloc(nullptr, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+ #elif defined(__APPLE__)
+ #    if TARGET_OS_IPHONE
+-        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
++        const int protocol_state = azahar_jit26_protocol_state();
++        if (protocol_state > 0) {
++            std::lock_guard<std::mutex> lock(detail::PreparedIOSRegionMutex());
++            auto& regions = detail::PreparedIOSRegions();
++            for (std::size_t index = 0; index < regions.size(); ++index) {
++                auto& region = regions[index];
++                if (!region.in_use && region.size == size) {
++                    region.in_use = true;
++                    m_memory = region.writable;
++                    m_executable_memory = region.executable;
++                    m_prepared_region_index = index;
++                    return;
++                }
++            }
++
++            // After universal.js detaches, only previously prepared mappings are safe.
++            if (protocol_state != 1)
++                throw std::bad_alloc{};
++
++            auto* executable = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC,
++                                                    MAP_ANON | MAP_PRIVATE, -1, 0);
++            if (executable == MAP_FAILED)
++                throw std::bad_alloc{};
++            if (azahar_jit26_prepare_region(executable, size) != executable) {
++                munmap(executable, size);
++                throw std::bad_alloc{};
++            }
++
++            vm_address_t writable_address = 0;
++            vm_prot_t current_protection = 0;
++            vm_prot_t maximum_protection = 0;
++            const kern_return_t remap_result = vm_remap(
++                mach_task_self(), &writable_address, size, 0,
++                VM_FLAGS_ANYWHERE | VM_FLAGS_RANDOM_ADDR, mach_task_self(),
++                reinterpret_cast<vm_address_t>(executable), false, &current_protection,
++                &maximum_protection, VM_INHERIT_NONE);
++            if (remap_result != KERN_SUCCESS ||
++                mprotect(reinterpret_cast<void*>(writable_address), size,
++                         PROT_READ | PROT_WRITE) != 0) {
++                if (remap_result == KERN_SUCCESS)
++                    vm_deallocate(mach_task_self(), writable_address, size);
++                munmap(executable, size);
++                throw std::bad_alloc{};
++            }
++
++            m_memory = reinterpret_cast<std::uint32_t*>(writable_address);
++            m_executable_memory = executable;
++            m_prepared_region_index = regions.size();
++            regions.push_back({executable, m_memory, size, true});
++            return;
++        }
++        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC,
++                                       MAP_ANON | MAP_PRIVATE, -1, 0);
++        m_executable_memory = m_memory;
+ #    else
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
++        m_executable_memory = m_memory;
+ #    endif
+ #elif defined(__NetBSD__)
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_MPROTECT(PROT_READ | PROT_WRITE | PROT_EXEC), MAP_ANON | MAP_PRIVATE, -1, 0);
+@@ -44,8 +133,14 @@ public:
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+ #endif
+ 
+-        if (m_memory == nullptr)
++        if (m_memory == nullptr
++#if !defined(_WIN32)
++            || m_memory == MAP_FAILED
++#endif
++        )
+             throw std::bad_alloc{};
++        if (m_executable_memory == nullptr)
++            m_executable_memory = m_memory;
+     }
+ 
+     ~CodeBlock()
+@@ -55,6 +150,15 @@ public:
+ 
+ #if defined(_WIN32)
+         VirtualFree((void*)m_memory, 0, MEM_RELEASE);
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++        if (m_prepared_region_index != std::numeric_limits<std::size_t>::max()) {
++            std::lock_guard<std::mutex> lock(detail::PreparedIOSRegionMutex());
++            auto& regions = detail::PreparedIOSRegions();
++            if (m_prepared_region_index < regions.size())
++                regions[m_prepared_region_index].in_use = false;
++        } else {
++            munmap(m_memory, m_size);
++        }
+ #else
+         munmap(m_memory, m_size);
+ #endif
+@@ -70,11 +174,24 @@ public:
+         return m_memory;
+     }
+ 
++    std::uint32_t* wptr() const
++    {
++        return m_memory;
++    }
++
++    std::uint32_t* xptr() const
++    {
++        return m_executable_memory;
++    }
++
+     void protect()
+     {
+ #if defined(__APPLE__) && !TARGET_OS_IPHONE
+         pthread_jit_write_protect_np(1);
+-#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++        if (m_prepared_region_index == std::numeric_limits<std::size_t>::max())
++            mprotect(m_memory, m_size, PROT_READ | PROT_EXEC);
++#elif defined(__NetBSD__) || defined(__OpenBSD__)
+         mprotect(m_memory, m_size, PROT_READ | PROT_EXEC);
+ #endif
+     }
+@@ -83,7 +200,10 @@ public:
+     {
+ #if defined(__APPLE__) && !TARGET_OS_IPHONE
+         pthread_jit_write_protect_np(0);
+-#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++        if (m_prepared_region_index == std::numeric_limits<std::size_t>::max())
++            mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
++#elif defined(__NetBSD__) || defined(__OpenBSD__)
+         mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
+ #endif
+     }
+@@ -132,12 +252,16 @@ public:
+ 
+     void invalidate_all()
+     {
+-        invalidate(m_memory, m_size);
++        invalidate(m_executable_memory, m_size);
+     }
+ 
+ protected:
+     std::uint32_t* m_memory;
++    std::uint32_t* m_executable_memory = nullptr;
+     std::size_t m_size = 0;
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    std::size_t m_prepared_region_index = std::numeric_limits<std::size_t>::max();
++#endif
+ };
+ 
+ }  // namespace oaknut

@@ -99,17 +99,20 @@ GBA dump. The website and IPA contain neither the dump nor a save.
 
 `EO3DSCoreSession` implements the libretro environment, video, audio, joypad,
 pointer, timing, and lifecycle callbacks. It uses software rendering and now
-enables Azahar CPU and shader JIT only when the native StikDebug coordinator
-has verified both `get-task-allow` and `CS_DEBUGGED`. Compatible Interpreter is
+enables Azahar JIT only when the native StikDebug coordinator has verified both
+`get-task-allow` and the appropriate readiness state. Compatible Interpreter is
 the default and remains available without JIT.
 
-Version 0.9.3 adds an exact `stikdebug://enable-jit` request containing the app
-bundle ID, current PID, and developer-fixed `universal.js` script. Opening the
-URL is not treated as success: the app waits until it becomes active again and
-checks the process code-signing flags before allowing a JIT launch. The app
-does not accept, persist, or log a pairing file. iOS 26 stays interpreter-only
-until the pinned Azahar/Dynarmic executable-memory allocator implements the
-TXM/SPTM universal region-preparation protocol.
+Version 0.9.4 builds the pinned Azahar 2126.0 core from source and applies the
+project's reviewed Azahar, Dynarmic, and Oaknut patches. On iOS 26, opening the
+StikDebug URL is only an attachment step: Play begins `universal.js`
+preparation, every initial CPU RX cache executes the `brk #0xf00d` prepare
+request, Oaknut creates a separate RW alias with `vm_remap`, and Azahar issues
+the detach request before the first frame. JIT is marked ready only after that
+sequence completes. Prepared CPU mappings are retained for title resets;
+shader JIT stays off on iOS 26 because it allocates regions after detach.
+iOS 17.4 through iOS 18 retain their debugger-enabled CPU and shader JIT path.
+The app does not accept, persist, or log a pairing file.
 
 For `citra_use_libretro_save_path=LibRetro Default`, Azahar appends
 `Azahar/sdmc` to the save directory supplied by the frontend. The frontend must
@@ -274,7 +277,7 @@ npm run runtime:stage --prefix mobile
 The remaining native steps require macOS with Xcode:
 
 ```sh
-npm run core:fetch --prefix mobile
+npm run core:build --prefix mobile
 cd mobile
 npx cap sync ios
 cd ios/App
@@ -389,7 +392,8 @@ and must never be written to generated reports or Git history.
   leave the screens side-by-side, and the player needed clearer in-game exit,
   sizing, and resume controls. Version 0.9.2 became the audio, stable-stacking,
   in-game-menu, equal-width, and optional-auto-resume baseline. Version 0.9.3
-  adds the StikDebug JIT path for the next physical performance retest.
+  added the first StikDebug path. Version 0.9.4 adds the source-built iOS 26
+  universal CPU-JIT protocol for the next physical performance retest.
 
 ## Remaining physical acceptance
 
@@ -400,12 +404,12 @@ accepted, complete all of the following on a physical iPhone:
 1. Add `/source.json` to SideStore and install the re-signed IPA. This passed
    for 0.9.0 and must be repeated after every replacement IPA.
 2. Confirm the launch screen, icon, bundle version, and first-run state. Launch
-   and ROM loading passed through 0.9.1; repeat them on 0.9.3.
+   and ROM loading passed through 0.9.1; repeat them on 0.9.4.
 3. Confirm an unrelated/invalid ROM is rejected without being retained.
 4. Import the legally obtained supported dump and reach Emerald gameplay. This
-   passed on 0.9.1 and must be repeated on 0.9.3.
+   passed on 0.9.1 and must be repeated on 0.9.4.
 5. Verify audio, on-screen controls, touch, and an external controller. Buttons
-   passed on 0.9.1; repeat audio and frame pacing on 0.9.3.
+   passed on 0.9.1; repeat audio and frame pacing on 0.9.4.
 6. Rotate portrait → landscape → portrait → landscape and confirm the screens
    remain stacked. Also test native-width and equal-width modes. Basic rotation
    passed on 0.9.1, but the round trip exposed a stale side-by-side layout.
@@ -414,10 +418,11 @@ accepted, complete all of the following on a physical iPhone:
    Launcher, restart to the game title, and normal battery-save integrity.
 9. Create and restore an `.eobackup`, inspect redacted diagnostics, and test
    scoped local deletion only after preserving the test save.
-10. On iOS 17.4 through iOS 18, install the official sideloaded StikDebug and
+10. On iOS 17.4 or later, install the official sideloaded StikDebug and
     LocalDevVPN, import the device pairing file into StikDebug, mount the DDI,
-    select **StikDebug JIT**, and confirm the launcher reports **JIT active**
-    before Play. Verify that Compatible Interpreter still launches without it.
+    select **StikDebug JIT**, and confirm the launcher reports attachment. On
+    iOS 26, tap Play and confirm it reports JIT active only after Azahar's
+    prepare/detach handshake. Verify Compatible Interpreter still launches.
 11. Terminate and reopen the app to confirm JIT must be reacquired for the new
     PID. Reboot once to exercise the DDI setup requirement. Do not import the
     pairing file into Emerald Online 3DS.

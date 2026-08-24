@@ -12,6 +12,7 @@ export interface RuntimeStatus {
   running: boolean;
   previousUncleanExit: boolean;
   jitAvailable: boolean;
+  jitAttached: boolean;
   jitSupported: boolean;
   jitEntitled: boolean;
   stikDebugInstalled: boolean;
@@ -21,6 +22,7 @@ export interface RuntimeStatus {
 
 export interface JITState {
   jitAvailable: boolean;
+  jitAttached: boolean;
   jitSupported: boolean;
   jitEntitled: boolean;
   stikDebugInstalled: boolean;

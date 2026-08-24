@@ -10,7 +10,7 @@ import { EmeraldRuntime, type RuntimeStatus } from "../lib/emerald-runtime";
 type Panel = "settings" | "controls" | "data" | "updates" | null;
 
 const EMPTY_STATUS: RuntimeStatus = {
-  appVersion: "0.9.3",
+  appVersion: "0.9.4",
   runtimeVersion: "unknown",
   coreVersion: "2126.0",
   runtimeReady: false,
@@ -20,6 +20,7 @@ const EMPTY_STATUS: RuntimeStatus = {
   running: false,
   previousUncleanExit: false,
   jitAvailable: false,
+  jitAttached: false,
   jitSupported: false,
   jitEntitled: false,
   stikDebugInstalled: false,
@@ -75,6 +76,8 @@ export function App() {
       );
     else if (nextConfig.jitMode === "stikdebug" && nextStatus.jitAvailable)
       setMessage("ROM ready with StikDebug JIT. Tap Play to launch.");
+    else if (nextConfig.jitMode === "stikdebug" && nextStatus.jitAttached)
+      setMessage("StikDebug attached. Tap Play to prepare Azahar JIT and launch.");
     else if (nextConfig.jitMode === "stikdebug")
       setMessage("ROM ready. Enable StikDebug JIT in Settings before Play.");
     else setMessage("ROM ready. Tap Play to launch in compatible interpreter mode.");
@@ -106,6 +109,8 @@ export function App() {
       setStatus((current) => ({ ...current, ...event }));
       if (event.jitAvailable)
         setMessage("StikDebug JIT is active. Tap Play for faster emulation.");
+      else if (event.jitAttached)
+        setMessage("StikDebug attached. Tap Play to prepare Azahar JIT and launch.");
       refresh().catch(() => undefined);
     })
       .then((handle) => {
@@ -170,6 +175,8 @@ export function App() {
       setMessage(
         result.jitAvailable
           ? "StikDebug JIT is active. Tap Play for faster emulation."
+          : result.jitAttached
+            ? "StikDebug attached. Tap Play to prepare Azahar JIT and launch."
           : "Complete the JIT request in StikDebug, then return here.",
       );
     });
@@ -408,15 +415,15 @@ export function App() {
                 <p className="fine-print">
                   {status.jitAvailable
                     ? "JIT is active for this app process. It will be used when StikDebug JIT is selected."
-                    : status.jitStatus === "ios-26-core-update-required"
-                      ? "This Azahar core needs the iOS 26 executable-memory update. Use Compatible Interpreter for now."
+                    : status.jitStatus === "ready-to-prepare"
+                      ? "StikDebug is attached. Tap Play so Azahar can prepare its iOS 26 executable regions before StikDebug detaches."
                       : status.jitStatus === "missing-get-task-allow"
                         ? "This installation is missing get-task-allow. Reinstall it through SideStore."
                         : status.jitStatus === "stikdebug-not-installed"
                           ? "Install the official sideloaded StikDebug app and LocalDevVPN first."
                           : status.jitSupported
                             ? "StikDebug is ready to receive a JIT request. Its pairing file stays outside Emerald Online 3DS."
-                            : "StikDebug requires iOS 17.4 through iOS 18 for this build."
+                            : "StikDebug requires iOS 17.4 or later."
                   }
                 </p>
                 {config.jitMode === "stikdebug" && (
@@ -425,6 +432,7 @@ export function App() {
                     disabled={
                       busy ||
                       status.jitAvailable ||
+                      status.jitAttached ||
                       !status.jitSupported ||
                       !status.jitEntitled ||
                       !status.stikDebugInstalled
@@ -433,6 +441,8 @@ export function App() {
                   >
                     {status.jitAvailable
                       ? "StikDebug JIT active"
+                      : status.jitAttached
+                        ? "StikDebug attached — tap Play"
                       : "Enable JIT with StikDebug"}
                   </button>
                 )}

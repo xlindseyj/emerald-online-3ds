@@ -1,8 +1,8 @@
 {
   "name": "emerald-online-3ds-mobile",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "releaseDate": "2026-08-24",
-  "releaseSummary": "Adds safe StikDebug JIT activation for iOS 17.4 through iOS 18, runtime entitlement and debugger checks, and a compatible interpreter fallback while retaining the audio, layout, and resume improvements.",
+  "releaseSummary": "Adds a source-built Azahar 2126 core with StikDebug universal executable-region preparation for iOS 26, reusable W^X CPU JIT mappings, and safe interpreter fallback.",
   "private": true,
   "type": "module",
   "description": "Single-game iOS launcher for Emerald Online 3DS",
@@ -14,7 +14,7 @@
     "test:watch": "vitest",
     "cap:sync": "npm run build && npx cap sync ios",
     "ios": "npm run cap:sync && npx cap open ios",
-    "core:fetch": "node tools/fetch-azahar-core.mjs",
+    "core:build": "node tools/build-azahar-core.mjs",
     "runtime:stage": "node tools/stage-runtime.mjs",
     "audit:ipa": "node tools/audit-ipa.mjs",
     "verify": "npm test && npm run build && npm run runtime:stage"
