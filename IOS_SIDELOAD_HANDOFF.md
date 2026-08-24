@@ -1,4 +1,4 @@
-# iOS Sideload Handoff — 2026-08-23
+# iOS Sideload Handoff — 2026-08-24
 
 This document records the complete iOS sideloading vertical slice added on
 2026-08-23: the mobile application, native emulator bridge, ROM and local-data
@@ -98,10 +98,18 @@ desktop launcher and 3DS hardware, and gpSP inside that 3DSX runs the supported
 GBA dump. The website and IPA contain neither the dump nor a save.
 
 `EO3DSCoreSession` implements the libretro environment, video, audio, joypad,
-pointer, timing, and lifecycle callbacks. It uses software rendering and
-disables CPU and shader JIT. The no-JIT policy avoids executable-memory and
-sideload entitlement assumptions, but performance depends on the iPhone model
-and must be measured on hardware.
+pointer, timing, and lifecycle callbacks. It uses software rendering and now
+enables Azahar CPU and shader JIT only when the native StikDebug coordinator
+has verified both `get-task-allow` and `CS_DEBUGGED`. Compatible Interpreter is
+the default and remains available without JIT.
+
+Version 0.9.3 adds an exact `stikdebug://enable-jit` request containing the app
+bundle ID, current PID, and developer-fixed `universal.js` script. Opening the
+URL is not treated as success: the app waits until it becomes active again and
+checks the process code-signing flags before allowing a JIT launch. The app
+does not accept, persist, or log a pairing file. iOS 26 stays interpreter-only
+until the pinned Azahar/Dynarmic executable-memory allocator implements the
+TXM/SPTM universal region-preparation protocol.
 
 For `citra_use_libretro_save_path=LibRetro Default`, Azahar appends
 `Azahar/sdmc` to the save directory supplied by the frontend. The frontend must
@@ -229,12 +237,16 @@ credentials. On a Codemagic Apple-silicon macOS worker it:
 4. downloads the pinned Azahar 2126.0 iOS libretro build and verifies its hash;
 5. synchronizes Capacitor and installs CocoaPods;
 6. compiles a Release `iphoneos` ARM64 app with code signing disabled;
-7. packages `Payload/App.app` as `emerald-online-3ds-ios.ipa`;
+7. ad-hoc signs the unsigned main executable with the SideStore request
+   entitlement, verifies `get-task-allow=true`, and packages `Payload/App.app`
+   as `emerald-online-3ds-ios.ipa`;
 8. audits the IPA and writes its SHA-256 manifest; and
 9. packages corresponding GPL source.
 
-The resulting unsigned IPA is expected: SideStore re-signs it for the user's
-device during installation.
+The resulting IPA carries only a local ad-hoc signature so SideStore can see
+the requested debug entitlement. SideStore replaces that signature for the
+user's device during installation. The installed app performs the
+authoritative runtime entitlement check before it offers JIT.
 
 ### `emerald-ios-sideload`
 
@@ -375,8 +387,9 @@ and must never be written to generated reports or Git history.
   gameplay on the physical phone. Buttons and rotation worked, but audio was
   silent, FPS was below the desired level, a portrait/landscape round trip could
   leave the screens side-by-side, and the player needed clearer in-game exit,
-  sizing, and resume controls. Version 0.9.2 is the active audio, performance,
-  stable-stacking, in-game-menu, equal-width, and optional-auto-resume retest.
+  sizing, and resume controls. Version 0.9.2 became the audio, stable-stacking,
+  in-game-menu, equal-width, and optional-auto-resume baseline. Version 0.9.3
+  adds the StikDebug JIT path for the next physical performance retest.
 
 ## Remaining physical acceptance
 
@@ -387,12 +400,12 @@ accepted, complete all of the following on a physical iPhone:
 1. Add `/source.json` to SideStore and install the re-signed IPA. This passed
    for 0.9.0 and must be repeated after every replacement IPA.
 2. Confirm the launch screen, icon, bundle version, and first-run state. Launch
-   and ROM loading passed through 0.9.1; repeat them on 0.9.2.
+   and ROM loading passed through 0.9.1; repeat them on 0.9.3.
 3. Confirm an unrelated/invalid ROM is rejected without being retained.
 4. Import the legally obtained supported dump and reach Emerald gameplay. This
-   passed on 0.9.1 and must be repeated on 0.9.2.
+   passed on 0.9.1 and must be repeated on 0.9.3.
 5. Verify audio, on-screen controls, touch, and an external controller. Buttons
-   passed on 0.9.1; audio failed and remains the primary 0.9.2 retest.
+   passed on 0.9.1; repeat audio and frame pacing on 0.9.3.
 6. Rotate portrait → landscape → portrait → landscape and confirm the screens
    remain stacked. Also test native-width and equal-width modes. Basic rotation
    passed on 0.9.1, but the round trip exposed a stale side-by-side layout.
@@ -401,8 +414,15 @@ accepted, complete all of the following on a physical iPhone:
    Launcher, restart to the game title, and normal battery-save integrity.
 9. Create and restore an `.eobackup`, inspect redacted diagnostics, and test
    scoped local deletion only after preserving the test save.
-10. Run for at least 15 minutes while recording FPS, thermal state, audio
-    behavior, crashes, and device/iOS model.
+10. On iOS 17.4 through iOS 18, install the official sideloaded StikDebug and
+    LocalDevVPN, import the device pairing file into StikDebug, mount the DDI,
+    select **StikDebug JIT**, and confirm the launcher reports **JIT active**
+    before Play. Verify that Compatible Interpreter still launches without it.
+11. Terminate and reopen the app to confirm JIT must be reacquired for the new
+    PID. Reboot once to exercise the DDI setup requirement. Do not import the
+    pairing file into Emerald Online 3DS.
+12. Run both modes for at least 15 minutes in the same scene while recording
+    FPS, thermal state, audio behavior, crashes, and device/iOS model.
 
 Do not describe physical installation, performance, gameplay, online behavior,
 or save safety as passed until this checklist has been completed on the device.
@@ -412,13 +432,17 @@ or save safety as passed until this checklist has been completed on the device.
 - `mobile/src/ui/` — launcher interface and responsive styling.
 - `mobile/src/lib/` — TypeScript domain rules and Capacitor contract.
 - `mobile/ios/App/App/EmeraldRuntimePlugin.swift` — narrow web/native API.
+- `mobile/ios/App/App/EmeraldJITCoordinator.swift` — StikDebug compatibility,
+  entitlement, deep-link, PID, and debugger-readiness checks.
 - `mobile/ios/App/App/EmeraldStorage.swift` — ROM, configuration, recovery,
   diagnostics, and deletion boundaries.
 - `mobile/ios/App/App/EmeraldEmulationViewController.swift` — video, audio,
   touch controls, game controllers, orientation, and lifecycle.
 - `mobile/ios/App/App/Native/EO3DSCoreSession.mm` — Azahar/libretro host.
 - `mobile/tools/` — core/runtime staging, IPA audit, and source packaging.
-- `codemagic.yaml` — unsigned SideStore and ad-hoc acceptance workflows.
+- `codemagic.yaml` — SideStore request-signature and ad-hoc acceptance
+  workflows.
 - `web/sidestore-source.mjs` — standards-conforming SideStore JSON.
 - `web/install-server.mjs` — download, metadata, source, and redirect routes.
 - `Dockerfile` and `.dockerignore` — production artifact staging rules.
+

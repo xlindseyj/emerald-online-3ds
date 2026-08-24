@@ -63,8 +63,22 @@ Azahar/
     link-backups/
 ```
 
-The launcher writes `dynarec=disabled`. The bundled no-JIT build is intended
-for compatibility testing; performance depends on the iPhone model.
+The launcher always writes `dynarec=disabled` for the nested gpSP runtime. That
+setting is independent of Azahar's outer iPhone-side JIT and must remain off
+because the emulated 3DS does not provide the physical console's Luma cache
+invalidation bootstrap.
+
+The default **Compatible Interpreter** mode works without executable-memory
+permissions. On iOS 17.4 through iOS 18, users can instead select **StikDebug
+JIT**. The app verifies `get-task-allow`, opens the official
+`stikdebug://enable-jit` request for its current PID, confirms `CS_DEBUGGED`
+after returning, and only then enables Azahar CPU and shader JIT. The pairing
+file stays in StikDebug and is never imported, stored, or logged by this app.
+
+iOS 26 remains interpreter-only in 0.9.3. A debugger attachment alone is not
+enough there: Azahar's executable-memory allocator must first implement the
+TXM/SPTM universal region-preparation protocol. The launcher refuses to claim
+JIT readiness on iOS 26 rather than risk executing unprepared pages.
 
 The launcher Settings page controls audio, equal-width stacked screens, and an
 optional experimental auto-resume point. During play, **Menu** can resume,

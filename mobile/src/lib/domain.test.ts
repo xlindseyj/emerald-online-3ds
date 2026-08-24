@@ -17,6 +17,7 @@ describe("launcher configuration", () => {
       audioEnabled: true,
       autoSaveState: false,
       equalWidthScreens: false,
+      jitMode: "interpreter",
     });
   });
 
@@ -29,6 +30,7 @@ describe("launcher configuration", () => {
       audioEnabled: true,
       autoSaveState: false,
       equalWidthScreens: false,
+      jitMode: "interpreter",
     });
     expect(() => sanitizeTrainerName('bad"name')).toThrow(/without quotes/);
     expect(() => normalizeConfig({ server: "https://evil.example" })).toThrow(
@@ -39,6 +41,9 @@ describe("launcher configuration", () => {
     );
     expect(() => normalizeConfig({ port: 70000 })).toThrow(
       /between 1 and 65535/,
+    );
+    expect(() => normalizeConfig({ jitMode: "always" as never })).toThrow(
+      /Invalid JIT method/,
     );
   });
 });

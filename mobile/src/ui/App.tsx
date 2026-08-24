@@ -10,7 +10,7 @@ import { EmeraldRuntime, type RuntimeStatus } from "../lib/emerald-runtime";
 type Panel = "settings" | "controls" | "data" | "updates" | null;
 
 const EMPTY_STATUS: RuntimeStatus = {
-  appVersion: "0.9.2",
+  appVersion: "0.9.3",
   runtimeVersion: "unknown",
   coreVersion: "2126.0",
   runtimeReady: false,
@@ -20,6 +20,10 @@ const EMPTY_STATUS: RuntimeStatus = {
   running: false,
   previousUncleanExit: false,
   jitAvailable: false,
+  jitSupported: false,
+  jitEntitled: false,
+  stikDebugInstalled: false,
+  jitStatus: "unknown",
   autoSaveAvailable: false,
 };
 
@@ -69,7 +73,11 @@ export function App() {
       setMessage(
         "The configured ROM is invalid or has changed. Select it again.",
       );
-    else setMessage("ROM ready. Tap Play to launch.");
+    else if (nextConfig.jitMode === "stikdebug" && nextStatus.jitAvailable)
+      setMessage("ROM ready with StikDebug JIT. Tap Play to launch.");
+    else if (nextConfig.jitMode === "stikdebug")
+      setMessage("ROM ready. Enable StikDebug JIT in Settings before Play.");
+    else setMessage("ROM ready. Tap Play to launch in compatible interpreter mode.");
   }, []);
 
   useEffect(() => {
@@ -83,6 +91,7 @@ export function App() {
       .finally(() => setBusy(false));
 
     let removeState: (() => Promise<void>) | undefined;
+    let removeJIT: (() => Promise<void>) | undefined;
     EmeraldRuntime.addListener("runtimeState", (event) => {
       if (event.message) setMessage(event.message);
       if (event.state === "failed")
@@ -93,8 +102,19 @@ export function App() {
         removeState = () => handle.remove();
       })
       .catch(() => undefined);
+    EmeraldRuntime.addListener("jitState", (event) => {
+      setStatus((current) => ({ ...current, ...event }));
+      if (event.jitAvailable)
+        setMessage("StikDebug JIT is active. Tap Play for faster emulation.");
+      refresh().catch(() => undefined);
+    })
+      .then((handle) => {
+        removeJIT = () => handle.remove();
+      })
+      .catch(() => undefined);
     return () => {
       removeState?.();
+      removeJIT?.();
     };
   }, [refresh]);
 
@@ -141,6 +161,19 @@ export function App() {
       setMessage("Settings saved. They will apply on the next launch.");
     });
 
+  const enableJIT = () =>
+    perform(async () => {
+      const normalized = normalizeConfig({ ...config, jitMode: "stikdebug" });
+      setConfig(await EmeraldRuntime.saveConfig({ config: normalized }));
+      const result = await EmeraldRuntime.enableJit();
+      setStatus((current) => ({ ...current, ...result }));
+      setMessage(
+        result.jitAvailable
+          ? "StikDebug JIT is active. Tap Play for faster emulation."
+          : "Complete the JIT request in StikDebug, then return here.",
+      );
+    });
+
   const open = (url: string) =>
     perform(() => EmeraldRuntime.openExternal({ url }));
 
@@ -156,7 +189,7 @@ export function App() {
       </div>
       <img className="logo" src="/assets/banner.png" alt="Emerald Online 3DS" />
       <p className="version">
-        v{status.appVersion} · Azahar {status.coreVersion} · No-JIT
+        v{status.appVersion} · Azahar {status.coreVersion} · {status.jitAvailable ? "JIT active" : "Interpreter"}
       </p>
 
       <div
@@ -357,6 +390,52 @@ export function App() {
                   />{" "}
                   Experimental auto-resume point
                 </label>
+                <label>
+                  Performance mode
+                  <select
+                    value={config.jitMode}
+                    onChange={(event) =>
+                      setConfig({
+                        ...config,
+                        jitMode: event.target.value as LauncherConfig["jitMode"],
+                      })
+                    }
+                  >
+                    <option value="interpreter">Compatible Interpreter</option>
+                    <option value="stikdebug">StikDebug JIT</option>
+                  </select>
+                </label>
+                <p className="fine-print">
+                  {status.jitAvailable
+                    ? "JIT is active for this app process. It will be used when StikDebug JIT is selected."
+                    : status.jitStatus === "ios-26-core-update-required"
+                      ? "This Azahar core needs the iOS 26 executable-memory update. Use Compatible Interpreter for now."
+                      : status.jitStatus === "missing-get-task-allow"
+                        ? "This installation is missing get-task-allow. Reinstall it through SideStore."
+                        : status.jitStatus === "stikdebug-not-installed"
+                          ? "Install the official sideloaded StikDebug app and LocalDevVPN first."
+                          : status.jitSupported
+                            ? "StikDebug is ready to receive a JIT request. Its pairing file stays outside Emerald Online 3DS."
+                            : "StikDebug requires iOS 17.4 through iOS 18 for this build."
+                  }
+                </p>
+                {config.jitMode === "stikdebug" && (
+                  <button
+                    className="secondary full"
+                    disabled={
+                      busy ||
+                      status.jitAvailable ||
+                      !status.jitSupported ||
+                      !status.jitEntitled ||
+                      !status.stikDebugInstalled
+                    }
+                    onClick={enableJIT}
+                  >
+                    {status.jitAvailable
+                      ? "StikDebug JIT active"
+                      : "Enable JIT with StikDebug"}
+                  </button>
+                )}
                 <p className="fine-print">
                   Auto-resume saves state when you exit or background the app.
                   Keep using Emerald's normal in-game save; save states are an
@@ -406,8 +485,9 @@ export function App() {
                   Save Resume Point, display/audio toggles, or Exit to Launcher.
                 </p>
                 <p className="fine-print">
-                  This baseline disables CPU and shader JIT. Performance depends
-                  on the iPhone model.
+                  Compatible Interpreter works without JIT. StikDebug mode
+                  enables Azahar CPU and shader JIT only after the native
+                  debugger-readiness check succeeds.
                 </p>
                 <button
                   className="secondary full"

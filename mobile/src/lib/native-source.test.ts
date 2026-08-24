@@ -14,6 +14,7 @@ describe("native iOS architecture", () => {
       "EmeraldStorage.swift",
       "EmeraldRuntimePlugin.swift",
       "EmeraldEmulationViewController.swift",
+      "EmeraldJITCoordinator.swift",
       "EO3DSCoreSession.mm",
     ]) {
       expect(project).toContain(`${source} in Sources`);
@@ -23,16 +24,27 @@ describe("native iOS architecture", () => {
     );
   });
 
-  it("pins the trusted core and disables every JIT route", () => {
+  it("pins the trusted core and enables Azahar JIT only after native readiness", () => {
     const fetch = read("tools/fetch-azahar-core.mjs");
     const host = read("ios/App/App/Native/EO3DSCoreSession.mm");
+    const coordinator = read("ios/App/App/EmeraldJITCoordinator.swift");
     expect(fetch).toMatch(/const version = ["']2126\.0["']/);
     expect(fetch).toContain(
       "e7b3e888db0441d6e3463bd6f38a48e84dcb0009ef58376f23781420beccf479",
     );
-    expect(host).toContain('{"citra_use_cpu_jit", "disabled"}');
-    expect(host).toContain('{"citra_use_shader_jit", "disabled"}');
+    expect(host).toContain('jitEnabled ? "enabled" : "disabled"');
     expect(host).toContain("RETRO_ENVIRONMENT_GET_JIT_CAPABLE");
+    expect(host).toContain("session->_JITEnabled");
+    expect(host).toContain('dlsym(RTLD_DEFAULT, "csops")');
+    expect(host).toContain('CFSTR("get-task-allow")');
+    expect(coordinator).toContain('components.scheme = stikDebugScheme');
+    expect(coordinator).toContain('components.host = "enable-jit"');
+    expect(coordinator).toContain('URLQueryItem(name: "bundle-id"');
+    expect(coordinator).toContain('URLQueryItem(name: "pid"');
+    expect(coordinator).toContain('URLQueryItem(name: "script-name", value: scriptName)');
+    expect(coordinator).toContain('private let scriptName = "universal.js"');
+    expect(coordinator).toContain("version.majorVersion < 26");
+    expect(coordinator).not.toMatch(/pairingFile|mobiledevicepairing|10\.7\.0\.1/);
     expect(host).toContain("RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER");
     expect(host).toContain('{"citra_use_libretro_save_path", "LibRetro Default"}');
     expect(host).not.toContain('{"citra_use_libretro_save_path", "disabled"}');
@@ -42,6 +54,12 @@ describe("native iOS architecture", () => {
     expect(read("ios/App/App/EmeraldStorage.swift")).toContain(
       "dynarec=disabled",
     );
+    expect(read("ios/App/App/Info.plist")).toContain("stikdebug");
+    expect(read("ios/App/App/SideStore.entitlements")).toContain("get-task-allow");
+    const codemagic = read("../codemagic.yaml");
+    expect(codemagic).toContain("SideStore.entitlements");
+    expect(codemagic).toContain("REQUIRE_JIT_ENTITLEMENT=1");
+    expect(codemagic).toContain("Print :get-task-allow");
   });
 
   it("supports both orientations and locks importing to the supported ROM", () => {

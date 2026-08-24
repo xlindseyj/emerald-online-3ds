@@ -12,7 +12,19 @@ export interface RuntimeStatus {
   running: boolean;
   previousUncleanExit: boolean;
   jitAvailable: boolean;
+  jitSupported: boolean;
+  jitEntitled: boolean;
+  stikDebugInstalled: boolean;
+  jitStatus: string;
   autoSaveAvailable: boolean;
+}
+
+export interface JITState {
+  jitAvailable: boolean;
+  jitSupported: boolean;
+  jitEntitled: boolean;
+  stikDebugInstalled: boolean;
+  jitStatus: string;
 }
 
 export interface RuntimeEvent {
@@ -33,6 +45,7 @@ export interface EmeraldRuntimePlugin {
     title?: string;
     gameCode?: string;
   }>;
+  enableJit(): Promise<JITState>;
   start(): Promise<{ started: boolean }>;
   stop(): Promise<void>;
   getConfig(): Promise<LauncherConfig>;
@@ -62,6 +75,10 @@ export interface EmeraldRuntimePlugin {
   addListener(
     eventName: "performance",
     listener: (event: PerformanceEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "jitState",
+    listener: (event: JITState) => void,
   ): Promise<PluginListenerHandle>;
 }
 

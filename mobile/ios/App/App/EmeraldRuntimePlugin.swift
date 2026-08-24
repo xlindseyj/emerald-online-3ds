@@ -10,6 +10,7 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "importRom", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "enableJit", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getConfig", returnType: CAPPluginReturnPromise),
@@ -24,10 +25,24 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
 
     private enum PickerMode { case rom, restore }
     private let storage = EmeraldStorage.shared
+    private let jitCoordinator = EmeraldJITCoordinator.shared
     private var pickerCall: CAPPluginCall?
     private var pickerMode: PickerMode?
     private weak var emulationController: EmeraldEmulationViewController?
     private var lastFPS = 0.0
+    private var lastJITActive = false
+
+    public override func load() {
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    private func addingJITState(to values: [String: Any]) -> [String: Any] {
+        var result = values
+        result.merge(jitCoordinator.state.dictionary) { _, latest in latest }
+        return result
+    }
 
     @objc public func getStatus(_ call: CAPPluginCall) {
         do {
@@ -36,7 +51,7 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             // The build verifies the upstream hash before Xcode signs the dylib.
             // Signing changes its bytes; iOS validates the installed code signature.
             let coreReady = storage.bundledCoreURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-            call.resolve([
+            call.resolve(addingJITState(to: [
                 "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
                 "runtimeVersion": manifest.version,
                 "coreVersion": "2126.0",
@@ -46,18 +61,17 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 "romValid": rom.valid,
                 "running": emulationController != nil,
                 "previousUncleanExit": storage.previousSessionWasUnclean(),
-                "jitAvailable": false,
                 "autoSaveAvailable": storage.autoSaveAvailable
-            ])
+            ]))
         } catch {
-            call.resolve([
+            call.resolve(addingJITState(to: [
                 "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
                 "runtimeVersion": "missing", "coreVersion": "2126.0", "runtimeReady": false,
                 "coreReady": storage.bundledCoreURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
                 "romPresent": storage.romStatus().present, "romValid": false, "running": false,
-                "previousUncleanExit": storage.previousSessionWasUnclean(), "jitAvailable": false,
+                "previousUncleanExit": storage.previousSessionWasUnclean(),
                 "autoSaveAvailable": storage.autoSaveAvailable
-            ])
+            ]))
         }
     }
 
@@ -73,6 +87,22 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
+    @objc public func enableJit(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { call.reject("The app is not ready to request JIT."); return }
+            do {
+                let current = self.jitCoordinator.state
+                if current.active { call.resolve(current.dictionary); return }
+                let url = try self.jitCoordinator.requestURL()
+                self.storage.appendDiagnostic(event: "jit-requested", fields: ["method": "stikdebug"])
+                UIApplication.shared.open(url) { opened in
+                    if opened { call.resolve(self.jitCoordinator.state.dictionary) }
+                    else { call.reject(EmeraldJITError.openFailed.localizedDescription) }
+                }
+            } catch { call.reject(error.localizedDescription) }
+        }
+    }
+
     @objc public func start(_ call: CAPPluginCall) {
         guard emulationController == nil else { call.reject("The emulator is already running."); return }
         do {
@@ -80,10 +110,18 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             let rom = storage.romStatus()
             guard rom.present && rom.valid else { throw EmeraldStorageError.invalidROM("Select the supported Pokémon Emerald ROM before playing.") }
             guard let core = storage.bundledCoreURL, FileManager.default.fileExists(atPath: core.path) else { throw EmeraldStorageError.missingRuntime }
-            let controller = EmeraldEmulationViewController(storage: storage, coreURL: core, runtimeURL: storage.installedRuntimeURL, config: storage.readConfig())
+            let config = storage.readConfig()
+            let jitEnabled: Bool
+            if config.jitMode == "stikdebug" {
+                try jitCoordinator.requireActive()
+                jitEnabled = true
+            } else {
+                jitEnabled = false
+            }
+            let controller = EmeraldEmulationViewController(storage: storage, coreURL: core, runtimeURL: storage.installedRuntimeURL, config: config, jitEnabled: jitEnabled)
             controller.delegate = self
             emulationController = controller
-            notifyListeners("runtimeState", data: ["state": "starting", "message": "Launching Emerald Online 3DS…"])
+            notifyListeners("runtimeState", data: ["state": "starting", "message": jitEnabled ? "Launching Emerald Online 3DS with JIT…" : "Launching Emerald Online 3DS in compatible interpreter mode…"])
             DispatchQueue.main.async { [weak self] in
                 self?.bridge?.viewController?.present(controller, animated: true)
                 self?.notifyListeners("runtimeState", data: ["state": "running", "message": "Emerald Online 3DS is running."])
@@ -112,7 +150,8 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 page: object["page"] as? String ?? "",
                 audioEnabled: object["audioEnabled"] as? Bool ?? true,
                 autoSaveState: object["autoSaveState"] as? Bool ?? false,
-                equalWidthScreens: object["equalWidthScreens"] as? Bool ?? false
+                equalWidthScreens: object["equalWidthScreens"] as? Bool ?? false,
+                jitMode: object["jitMode"] as? String ?? "interpreter"
             )
             call.resolve(try storage.saveConfig(config).dictionary)
         } catch { call.reject(error.localizedDescription) }
@@ -167,6 +206,13 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let allowed = Set(["https://emeraldonline3ds.com/", "https://emeraldonline3ds.com/community", "https://emeraldonline3ds.com/status"])
         guard let raw = call.getString("url"), allowed.contains(raw), let url = URL(string: raw) else { call.reject("Rejected an untrusted external URL."); return }
         DispatchQueue.main.async { UIApplication.shared.open(url) { opened in opened ? call.resolve() : call.reject("Unable to open the URL.") } }
+    }
+
+    @objc private func applicationDidBecomeActive() {
+        let current = jitCoordinator.state
+        if current.active && !lastJITActive { storage.appendDiagnostic(event: "jit-active", fields: ["method": "stikdebug"]) }
+        lastJITActive = current.active
+        notifyListeners("jitState", data: current.dictionary, retainUntilConsumed: true)
     }
 
     public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {

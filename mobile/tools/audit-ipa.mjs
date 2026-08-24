@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const ipa = process.argv[2];
 if (!ipa || !fs.existsSync(ipa))
@@ -52,6 +52,21 @@ try {
     /(?:192\.168\.|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.)/.test(strings)
   )
     throw new Error("IPA contains a private IPv4 address.");
+  let jitEntitlement = "not-inspected";
+  if (process.platform === "darwin") {
+    const executable = files.find((file) => file.endsWith("/Payload/App.app/App"));
+    if (!executable) throw new Error("IPA is missing its main executable.");
+    const inspection = spawnSync(
+      "codesign",
+      ["-d", "--entitlements", ":-", executable],
+      { encoding: "utf8" },
+    );
+    const entitlements = `${inspection.stdout ?? ""}\n${inspection.stderr ?? ""}`;
+    const enabled = /<key>get-task-allow<\/key>\s*<true\s*\/>/.test(entitlements);
+    jitEntitlement = enabled ? "enabled" : "disabled";
+    if (process.env.REQUIRE_JIT_ENTITLEMENT === "1" && !enabled)
+      throw new Error("SideStore IPA is missing get-task-allow=true.");
+  }
   const hash = (file) =>
     crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   console.log(
@@ -63,6 +78,7 @@ try {
         coreSha256: hash(core),
         files: files.length,
         privacyAudit: "passed",
+        jitEntitlement,
       },
       null,
       2,

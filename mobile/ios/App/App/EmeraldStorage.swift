@@ -27,13 +27,14 @@ struct EmeraldLauncherConfig: Codable {
     var audioEnabled = true
     var autoSaveState = false
     var equalWidthScreens = false
+    var jitMode = "interpreter"
 
     private enum CodingKeys: String, CodingKey {
         case server, port, transport, path, name, online, page
-        case audioEnabled, autoSaveState, equalWidthScreens
+        case audioEnabled, autoSaveState, equalWidthScreens, jitMode
     }
 
-    init(server: String = "live.emeraldonline3ds.com", port: Int = 443, transport: String = "wss", path: String = "/game", name: String = "Trainer", online: Bool = true, page: String = "online", audioEnabled: Bool = true, autoSaveState: Bool = false, equalWidthScreens: Bool = false) {
+    init(server: String = "live.emeraldonline3ds.com", port: Int = 443, transport: String = "wss", path: String = "/game", name: String = "Trainer", online: Bool = true, page: String = "online", audioEnabled: Bool = true, autoSaveState: Bool = false, equalWidthScreens: Bool = false, jitMode: String = "interpreter") {
         self.server = server
         self.port = port
         self.transport = transport
@@ -44,6 +45,7 @@ struct EmeraldLauncherConfig: Codable {
         self.audioEnabled = audioEnabled
         self.autoSaveState = autoSaveState
         self.equalWidthScreens = equalWidthScreens
+        self.jitMode = jitMode
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +60,7 @@ struct EmeraldLauncherConfig: Codable {
         audioEnabled = try values.decodeIfPresent(Bool.self, forKey: .audioEnabled) ?? true
         autoSaveState = try values.decodeIfPresent(Bool.self, forKey: .autoSaveState) ?? false
         equalWidthScreens = try values.decodeIfPresent(Bool.self, forKey: .equalWidthScreens) ?? false
+        jitMode = try values.decodeIfPresent(String.self, forKey: .jitMode) ?? "interpreter"
     }
 
     static let allowedPages = Set(["online", "users", "chat", "party", "bag", "map", "stats", "quest", "titles", "friends", "guild", "teleport", "update"])
@@ -79,11 +82,12 @@ struct EmeraldLauncherConfig: Codable {
             throw EmeraldStorageError.invalidConfig("Trainer name must be 1-12 printable ASCII characters without quotes or backslashes.")
         }
         guard Self.allowedPages.contains(copy.page) else { throw EmeraldStorageError.invalidConfig("Invalid starting page.") }
+        guard copy.jitMode == "interpreter" || copy.jitMode == "stikdebug" else { throw EmeraldStorageError.invalidConfig("Invalid JIT method.") }
         return copy
     }
 
     var dictionary: [String: Any] {
-        ["server": server, "port": port, "transport": transport, "path": path, "name": name, "online": online, "page": page, "audioEnabled": audioEnabled, "autoSaveState": autoSaveState, "equalWidthScreens": equalWidthScreens]
+        ["server": server, "port": port, "transport": transport, "path": path, "name": name, "online": online, "page": page, "audioEnabled": audioEnabled, "autoSaveState": autoSaveState, "equalWidthScreens": equalWidthScreens, "jitMode": jitMode]
     }
 }
 

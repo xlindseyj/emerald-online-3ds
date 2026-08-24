@@ -4,6 +4,9 @@
 #import <dlfcn.h>
 #import <os/lock.h>
 
+#include <sys/types.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -14,6 +17,37 @@
 
 static NSString *const EO3DSCoreErrorDomain = @"com.emeraldonline3ds.mobile.core";
 static EO3DSCoreSession *activeSession = nil;
+
+BOOL EO3DSHasGetTaskAllow(void) {
+  using CreateTask = CFTypeRef (*)(CFAllocatorRef);
+  using CopyEntitlement = CFTypeRef (*)(CFTypeRef, CFStringRef, CFErrorRef *);
+  static void *security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY | RTLD_LOCAL);
+  void *symbols = security ? security : RTLD_DEFAULT;
+  auto createTask = reinterpret_cast<CreateTask>(dlsym(symbols, "SecTaskCreateFromSelf"));
+  auto copyEntitlement = reinterpret_cast<CopyEntitlement>(dlsym(symbols, "SecTaskCopyValueForEntitlement"));
+  if (!createTask || !copyEntitlement) return NO;
+  CFTypeRef task = createTask(kCFAllocatorDefault);
+  if (!task) return NO;
+  CFTypeRef value = copyEntitlement(task, CFSTR("get-task-allow"), nullptr);
+  const BOOL allowed = value == kCFBooleanTrue;
+  if (value) CFRelease(value);
+  CFRelease(task);
+  return allowed;
+}
+
+BOOL EO3DSIsDebuggerAttached(void) {
+#if TARGET_OS_SIMULATOR
+  return NO;
+#else
+  using CodeSigningStatus = int (*)(pid_t, unsigned int, void *, size_t);
+  auto status = reinterpret_cast<CodeSigningStatus>(dlsym(RTLD_DEFAULT, "csops"));
+  if (!status) return NO;
+  constexpr unsigned int operation = 0;
+  constexpr int debugged = 0x10000000;
+  int flags = 0;
+  return status(getpid(), operation, &flags, sizeof(flags)) == 0 && (flags & debugged) != 0;
+#endif
+}
 
 struct CoreAPI {
   void (*set_environment)(retro_environment_t);
@@ -59,6 +93,7 @@ struct CoreAPI {
   std::atomic<NSUInteger> _videoFramesReceived;
   std::atomic_bool _hasNonBlackVideoFrame;
   std::atomic<NSUInteger> _audioFramesReceived;
+  BOOL _JITEnabled;
   std::chrono::steady_clock::time_point _fpsWindow;
   NSUInteger _fpsFrames;
   double _sampleRate;
@@ -141,7 +176,7 @@ static bool environmentCallback(unsigned command, void *data) {
     case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
       return true;
     case RETRO_ENVIRONMENT_GET_JIT_CAPABLE:
-      *(bool *)data = false;
+      if (data) *(bool *)data = session->_JITEnabled;
       return true;
     case RETRO_ENVIRONMENT_SET_GEOMETRY:
       return true;
@@ -240,7 +275,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
 
 @implementation EO3DSCoreSession
 
-- (instancetype)initWithCoreURL:(NSURL *)coreURL runtimeURL:(NSURL *)runtimeURL userRootURL:(NSURL *)userRootURL {
+- (instancetype)initWithCoreURL:(NSURL *)coreURL runtimeURL:(NSURL *)runtimeURL userRootURL:(NSURL *)userRootURL jitEnabled:(BOOL)jitEnabled {
   self = [super init];
   if (self) {
     _coreURL = coreURL;
@@ -260,6 +295,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _videoFramesReceived = 0;
     _hasNonBlackVideoFrame = false;
     _audioFramesReceived = 0;
+    _JITEnabled = jitEnabled;
     for (auto &button : _buttons) button = false;
     _corePath = coreURL.fileSystemRepresentation;
     _runtimePath = runtimeURL.fileSystemRepresentation;
@@ -267,8 +303,8 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _savePath = userRootURL.fileSystemRepresentation;
     _variables = {
       {"citra_graphics_api", "Software"},
-      {"citra_use_cpu_jit", "disabled"},
-      {"citra_use_shader_jit", "disabled"},
+      {"citra_use_cpu_jit", jitEnabled ? "enabled" : "disabled"},
+      {"citra_use_shader_jit", jitEnabled ? "enabled" : "disabled"},
       {"citra_resolution_factor", "1"},
       {"citra_layout_option", "default"},
       {"citra_use_virtual_sd", "enabled"},
@@ -288,6 +324,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
 - (NSUInteger)videoFramesReceived { return _videoFramesReceived.load(); }
 - (BOOL)hasNonBlackVideoFrame { return _hasNonBlackVideoFrame.load(); }
 - (NSUInteger)audioFramesReceived { return _audioFramesReceived.load(); }
+- (BOOL)isJITEnabled { return _JITEnabled; }
 
 - (BOOL)startInImageView:(UIImageView *)imageView error:(NSError **)error {
   if (_running.load()) return YES;

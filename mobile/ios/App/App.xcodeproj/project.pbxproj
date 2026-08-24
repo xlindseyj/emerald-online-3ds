@@ -17,6 +17,7 @@
 		A10000000000000000000005 /* Runtime in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* Runtime */; };
 		A10000000000000000000006 /* Licenses in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* Licenses */; };
 		A10000000000000000000008 /* azahar_libretro.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* azahar_libretro.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A10000000000000000000009 /* EmeraldJITCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* EmeraldJITCoordinator.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -56,6 +57,7 @@
 		A20000000000000000000007 /* azahar_libretro.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; path = Frameworks/azahar_libretro.dylib; sourceTree = "<group>"; };
 		A20000000000000000000008 /* Runtime */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Runtime; sourceTree = "<group>"; };
 		A20000000000000000000009 /* Licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Licenses; sourceTree = "<group>"; };
+		A2000000000000000000000A /* EmeraldJITCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmeraldJITCoordinator.swift; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_App.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.release.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.release.xcconfig"; sourceTree = "<group>"; };
@@ -118,6 +120,7 @@
 				A20000000000000000000001 /* EmeraldStorage.swift */,
 				A20000000000000000000002 /* EmeraldRuntimePlugin.swift */,
 				A20000000000000000000003 /* EmeraldEmulationViewController.swift */,
+				A2000000000000000000000A /* EmeraldJITCoordinator.swift */,
 				A30000000000000000000001 /* Native */,
 				A20000000000000000000007 /* azahar_libretro.dylib */,
 				A20000000000000000000008 /* Runtime */,
@@ -264,6 +267,7 @@
 				A10000000000000000000002 /* EmeraldRuntimePlugin.swift in Sources */,
 				A10000000000000000000003 /* EmeraldEmulationViewController.swift in Sources */,
 				A10000000000000000000004 /* EO3DSCoreSession.mm in Sources */,
+				A10000000000000000000009 /* EmeraldJITCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -407,7 +411,7 @@
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 0.9.0;
+				MARKETING_VERSION = 0.9.3;
 				SWIFT_OBJC_BRIDGING_HEADER = "App/App-Bridging-Header.h";
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.emeraldonline3ds.mobile;
@@ -429,7 +433,7 @@
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 0.9.0;
+				MARKETING_VERSION = 0.9.3;
 				SWIFT_OBJC_BRIDGING_HEADER = "App/App-Bridging-Header.h";
 				PRODUCT_BUNDLE_IDENTIFIER = com.emeraldonline3ds.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";

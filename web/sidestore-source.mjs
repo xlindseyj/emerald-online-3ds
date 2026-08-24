@@ -26,7 +26,7 @@ export function createSideStoreSource({
     developerName: "Emerald Online 3DS",
     subtitle: "Single-game Emerald Online launcher for iOS.",
     localizedDescription:
-      "Play a legally obtained supported Pokémon Emerald cartridge dump through the dedicated Emerald Online 3DS launcher. The app includes no ROM, save, Nintendo system file, game library, or general-purpose emulator browser. Your imported ROM and save remain in the iOS app sandbox.",
+      "Play a legally obtained supported Pokémon Emerald cartridge dump through the dedicated Emerald Online 3DS launcher. The app includes no ROM, save, Nintendo system file, game library, or general-purpose emulator browser. Your imported ROM and save remain in the iOS app sandbox. Optional StikDebug JIT improves Azahar performance on supported iOS versions without giving this app the device pairing file.",
     iconURL: `${publicBase}/favicon.png`,
     tintColor: "#087f55",
     permissions: [

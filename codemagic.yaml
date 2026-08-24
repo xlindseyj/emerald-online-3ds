@@ -60,11 +60,17 @@ workflows:
           APP_PATH="$CM_BUILD_DIR/build/ios/compile/Build/Products/Release-iphoneos/App.app"
           OUTPUT_DIR="$CM_BUILD_DIR/build/ios/sidestore"
           test -d "$APP_PATH"
-          mkdir -p "$OUTPUT_DIR/Payload"
+          mkdir -p "$OUTPUT_DIR/Payload" "$OUTPUT_DIR/audit"
+          codesign --force --sign - --timestamp=none \
+            --entitlements "$CM_BUILD_DIR/mobile/ios/App/App/SideStore.entitlements" \
+            "$APP_PATH/App"
+          codesign -d --entitlements :- "$APP_PATH/App" \
+            > "$OUTPUT_DIR/audit/entitlements.plist" 2>/dev/null
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$OUTPUT_DIR/audit/entitlements.plist")" = "true"
           ditto "$APP_PATH" "$OUTPUT_DIR/Payload/App.app"
           (cd "$OUTPUT_DIR" && zip -qry emerald-online-3ds-ios.ipa Payload)
           rm -rf "$OUTPUT_DIR/Payload"
-          node mobile/tools/audit-ipa.mjs "$OUTPUT_DIR/emerald-online-3ds-ios.ipa" | tee "$OUTPUT_DIR/ipa-audit.json"
+          REQUIRE_JIT_ENTITLEMENT=1 node mobile/tools/audit-ipa.mjs "$OUTPUT_DIR/emerald-online-3ds-ios.ipa" | tee "$OUTPUT_DIR/ipa-audit.json"
           shasum -a 256 "$OUTPUT_DIR/emerald-online-3ds-ios.ipa" > "$OUTPUT_DIR/SHA256SUMS"
           node mobile/tools/package-source.mjs
 
@@ -74,6 +80,7 @@ workflows:
       - build/ios/sidestore/*.ipa
       - build/ios/sidestore/ipa-audit.json
       - build/ios/sidestore/SHA256SUMS
+      - build/ios/sidestore/audit/entitlements.plist
       - build/ios/source/*.tar.gz
       - /tmp/xcodebuild_logs/*.log
 

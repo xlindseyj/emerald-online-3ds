@@ -114,11 +114,11 @@ final class EmeraldEmulationViewController: UIViewController {
     private var videoReadyLogged = false
     private var audioReadyLogged = false
 
-    init(storage: EmeraldStorage, coreURL: URL, runtimeURL: URL, config: EmeraldLauncherConfig) {
+    init(storage: EmeraldStorage, coreURL: URL, runtimeURL: URL, config: EmeraldLauncherConfig, jitEnabled: Bool) {
         self.storage = storage
         self.config = config
         // Azahar's LibRetro Default policy appends Azahar/sdmc to this root.
-        session = EO3DSCoreSession(coreURL: coreURL, runtimeURL: runtimeURL, userRootURL: storage.appRoot)
+        session = EO3DSCoreSession(coreURL: coreURL, runtimeURL: runtimeURL, userRootURL: storage.appRoot, jitEnabled: jitEnabled)
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
     }

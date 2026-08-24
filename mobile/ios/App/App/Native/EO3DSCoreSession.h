@@ -6,6 +6,9 @@ NS_ASSUME_NONNULL_BEGIN
 typedef void (^EO3DSRuntimeMessageHandler)(NSString *message);
 typedef void (^EO3DSAudioHandler)(NSData *interleavedInt16, NSUInteger frames, double sampleRate);
 
+FOUNDATION_EXPORT BOOL EO3DSHasGetTaskAllow(void);
+FOUNDATION_EXPORT BOOL EO3DSIsDebuggerAttached(void);
+
 @interface EO3DSCoreSession : NSObject
 
 @property(nonatomic, readonly, getter=isRunning) BOOL running;
@@ -15,10 +18,12 @@ typedef void (^EO3DSAudioHandler)(NSData *interleavedInt16, NSUInteger frames, d
 @property(nonatomic, readonly) NSUInteger videoFramesReceived;
 @property(nonatomic, readonly) BOOL hasNonBlackVideoFrame;
 @property(nonatomic, readonly) NSUInteger audioFramesReceived;
+@property(nonatomic, readonly, getter=isJITEnabled) BOOL JITEnabled;
 
 - (instancetype)initWithCoreURL:(NSURL *)coreURL
                       runtimeURL:(NSURL *)runtimeURL
-                       userRootURL:(NSURL *)userRootURL NS_DESIGNATED_INITIALIZER;
+                       userRootURL:(NSURL *)userRootURL
+                        jitEnabled:(BOOL)jitEnabled NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
 - (BOOL)startInImageView:(UIImageView *)imageView error:(NSError **)error;

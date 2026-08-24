@@ -18,6 +18,7 @@ export const SUPPORTED_PAGES = [
 ] as const;
 
 export type StartingPage = (typeof SUPPORTED_PAGES)[number];
+export type JITMode = "interpreter" | "stikdebug";
 
 export interface LauncherConfig {
   server: string;
@@ -30,6 +31,7 @@ export interface LauncherConfig {
   audioEnabled: boolean;
   autoSaveState: boolean;
   equalWidthScreens: boolean;
+  jitMode: JITMode;
 }
 
 export const DEFAULT_CONFIG: LauncherConfig = {
@@ -43,6 +45,7 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   audioEnabled: true,
   autoSaveState: false,
   equalWidthScreens: false,
+  jitMode: "interpreter",
 };
 
 export function sanitizeTrainerName(value: unknown): string {
@@ -108,6 +111,9 @@ export function normalizeConfig(
   const page = String(value.page ?? DEFAULT_CONFIG.page).toLowerCase();
   if (!SUPPORTED_PAGES.includes(page as StartingPage))
     throw new Error("Invalid starting page.");
+  const jitMode = String(value.jitMode ?? DEFAULT_CONFIG.jitMode).toLowerCase();
+  if (jitMode !== "interpreter" && jitMode !== "stikdebug")
+    throw new Error("Invalid JIT method.");
   return {
     server: sanitizeServerHost(value.server ?? DEFAULT_CONFIG.server),
     port,
@@ -131,6 +137,7 @@ export function normalizeConfig(
       value.equalWidthScreens === undefined
         ? DEFAULT_CONFIG.equalWidthScreens
         : Boolean(value.equalWidthScreens),
+    jitMode: jitMode as JITMode,
   };
 }
 
