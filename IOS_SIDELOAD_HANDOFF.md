@@ -17,12 +17,12 @@ verification, and production rollout.
   `https://emeraldonline3ds.com/download/ios`.
 - `https://emeraldonline3ds.com/sidecommunity.json` returns a permanent `308`
   redirect to `/source.json` so previously added sources continue working.
-- The published preview is version `0.9.2`, build `9`, bundle identifier
+- The published preview is version `0.9.4`, build `13`, bundle identifier
   `com.emeraldonline3ds.mobile`, and requires iOS 15 or newer.
 - The live IPA is a real 64-bit ARM iPhone application. Its SHA-256 is
-  `ac04399b55d8909f2ef60044cc4fafc9ed6e2171a63a92d608bc63d4a306299e`
-  and its size is `13,672,969` bytes.
-- Codemagic build `6a8b9c7eda4d90b41adfdb66` produced the published
+  `28b56719d3bdd8bd626df43a2f574cdb1dc4c15238a8480d184273543a595c8f`
+  and its size is `12,853,897` bytes.
+- Codemagic build `6a8ccb472ee7a9f5fa208b80` produced the published
   SideStore-re-signable IPA.
 - Automated compilation, package, schema, privacy, website, and live-service
   checks pass. Physical installation, launch, ROM loading, gameplay, buttons,
@@ -361,17 +361,19 @@ release trigger and leave device acceptance to a human tester. Signing tokens,
 profiles, and registry credentials must remain in their existing secret stores
 and must never be written to generated reports or Git history.
 
-## Verification completed on 2026-08-23
+## Verification completed on 2026-08-24
 
 - Mobile tests: 12 passed.
-- Repository suite: 148 passed and 5 environment-dependent tests skipped.
+- Repository suite: 173 passed and 6 environment-dependent tests skipped.
 - Website route and SideStore-source tests passed.
 - The live `/source.json` passed the official SideStore JSON schema.
 - The legacy source returned `308` with `Location: /source.json`.
 - The homepage contained only the canonical SideStore deep link.
 - The live IPA matched the Codemagic SHA-256 and reported size.
 - IPA inspection found a real ARM64 Mach-O app, the expected bundle/version,
-  the bundled 3DSX, the pinned Azahar core, and licensing notices.
+  the bundled 3DSX, the source-built pinned Azahar core, all four universal-JIT
+  exports, and licensing notices. The core SHA-256 is
+  `f44e9456f38fefa2528a14974d3c0513e98b71b62dfa706858a45a1f3355452c`.
 - The IPA privacy audit found no ROM, save, private configuration, credentials,
   or private address.
 - The release/source-package audit passed independently.
@@ -450,4 +452,3 @@ or save safety as passed until this checklist has been completed on the device.
 - `web/sidestore-source.mjs` — standards-conforming SideStore JSON.
 - `web/install-server.mjs` — download, metadata, source, and redirect routes.
 - `Dockerfile` and `.dockerignore` — production artifact staging rules.
-
