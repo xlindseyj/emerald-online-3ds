@@ -100,7 +100,7 @@ final class EmeraldEmulationViewController: UIViewController {
     weak var delegate: EmeraldEmulationViewControllerDelegate?
     private let storage: EmeraldStorage
     private let session: EO3DSCoreSession
-    private let imageView = EmeraldScreenView()
+    private let imageView = EmeraldScreenView(frame: .zero)
     private let controls = UIView()
     private let audioEngine = AVAudioEngine()
     private let audioPlayer = AVAudioPlayerNode()
