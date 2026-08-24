@@ -96,4 +96,27 @@ describe("native iOS architecture", () => {
       'writeDefaultFileIfMissing(gameRoot.appendingPathComponent("emerald.sav")',
     );
   });
+
+  it("keeps rotation stacked and offers equal-width screens through the in-game menu", () => {
+    const host = read("ios/App/App/Native/EO3DSCoreSession.mm");
+    const controller = read("ios/App/App/EmeraldEmulationViewController.swift");
+    expect(host).toContain('_variables["citra_layout_option"] = "default"');
+    expect(host).not.toContain('landscape ? "side_by_side" : "default"');
+    expect(controller).toContain("class EmeraldScreenView");
+    expect(controller).toContain("Make both screens equal width");
+    expect(controller).toContain("Restart to Game Title");
+    expect(controller).toContain("Exit to Launcher");
+  });
+
+  it("uses a compatible audio session and moves presentation work off the emulation queue", () => {
+    const controller = read("ios/App/App/EmeraldEmulationViewController.swift");
+    const host = read("ios/App/App/Native/EO3DSCoreSession.mm");
+    expect(controller).toContain("setCategory(.playback, mode: .default");
+    expect(controller).toContain("standardFormatWithSampleRate: 32_768");
+    expect(controller).toContain("emulator-no-audio-frames");
+    expect(host).toContain("com.emeraldonline3ds.mobile.video");
+    expect(host).toContain("QOS_CLASS_USER_INTERACTIVE");
+    expect(host).toContain("retro_serialize_size");
+    expect(host).toContain("512 * 1024 * 1024");
+  });
 });

@@ -12,6 +12,7 @@ export interface RuntimeStatus {
   running: boolean;
   previousUncleanExit: boolean;
   jitAvailable: boolean;
+  autoSaveAvailable: boolean;
 }
 
 export interface RuntimeEvent {

@@ -13,12 +13,23 @@ describe("launcher configuration", () => {
       "server=live.emeraldonline3ds.com\nport=443\ntransport=wss\npath=/game",
     );
     expect(encodeOnlineConfig(DEFAULT_CONFIG)).toContain("dynarec=disabled");
+    expect(DEFAULT_CONFIG).toMatchObject({
+      audioEnabled: true,
+      autoSaveState: false,
+      equalWidthScreens: false,
+    });
   });
 
   it("normalizes safe values and rejects untrusted settings", () => {
     expect(
       normalizeConfig({ name: "  May  ", server: "LIVE.EMERALDONLINE3DS.COM" }),
-    ).toMatchObject({ name: "May", server: "live.emeraldonline3ds.com" });
+    ).toMatchObject({
+      name: "May",
+      server: "live.emeraldonline3ds.com",
+      audioEnabled: true,
+      autoSaveState: false,
+      equalWidthScreens: false,
+    });
     expect(() => sanitizeTrainerName('bad"name')).toThrow(/without quotes/);
     expect(() => normalizeConfig({ server: "https://evil.example" })).toThrow(
       /without a scheme/,

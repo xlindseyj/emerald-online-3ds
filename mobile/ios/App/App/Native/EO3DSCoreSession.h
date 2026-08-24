@@ -14,6 +14,7 @@ typedef void (^EO3DSAudioHandler)(NSData *interleavedInt16, NSUInteger frames, d
 @property(nonatomic, readonly) double framesPerSecond;
 @property(nonatomic, readonly) NSUInteger videoFramesReceived;
 @property(nonatomic, readonly) BOOL hasNonBlackVideoFrame;
+@property(nonatomic, readonly) NSUInteger audioFramesReceived;
 
 - (instancetype)initWithCoreURL:(NSURL *)coreURL
                       runtimeURL:(NSURL *)runtimeURL
@@ -26,6 +27,9 @@ typedef void (^EO3DSAudioHandler)(NSData *interleavedInt16, NSUInteger frames, d
 - (void)setLandscape:(BOOL)landscape;
 - (void)setButton:(NSInteger)button pressed:(BOOL)pressed;
 - (void)setTouchX:(CGFloat)x y:(CGFloat)y pressed:(BOOL)pressed;
+- (void)resetGame;
+- (BOOL)saveStateToURL:(NSURL *)url error:(NSError **)error NS_SWIFT_NAME(saveState(to:));
+- (BOOL)loadStateFromURL:(NSURL *)url error:(NSError **)error NS_SWIFT_NAME(loadState(from:));
 
 @end
 

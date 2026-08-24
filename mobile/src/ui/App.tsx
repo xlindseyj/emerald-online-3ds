@@ -10,7 +10,7 @@ import { EmeraldRuntime, type RuntimeStatus } from "../lib/emerald-runtime";
 type Panel = "settings" | "controls" | "data" | "updates" | null;
 
 const EMPTY_STATUS: RuntimeStatus = {
-  appVersion: "0.9.0",
+  appVersion: "0.9.2",
   runtimeVersion: "unknown",
   coreVersion: "2126.0",
   runtimeReady: false,
@@ -20,6 +20,7 @@ const EMPTY_STATUS: RuntimeStatus = {
   running: false,
   previousUncleanExit: false,
   jitAvailable: false,
+  autoSaveAvailable: false,
 };
 
 const pageLabels: Record<string, string> = {
@@ -323,6 +324,44 @@ export function App() {
                   />{" "}
                   Enable online
                 </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.audioEnabled}
+                    onChange={(event) =>
+                      setConfig({ ...config, audioEnabled: event.target.checked })
+                    }
+                  />{" "}
+                  Enable game audio
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.equalWidthScreens}
+                    onChange={(event) =>
+                      setConfig({
+                        ...config,
+                        equalWidthScreens: event.target.checked,
+                      })
+                    }
+                  />{" "}
+                  Make both stacked screens the same width
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={config.autoSaveState}
+                    onChange={(event) =>
+                      setConfig({ ...config, autoSaveState: event.target.checked })
+                    }
+                  />{" "}
+                  Experimental auto-resume point
+                </label>
+                <p className="fine-print">
+                  Auto-resume saves state when you exit or background the app.
+                  Keep using Emerald's normal in-game save; save states are an
+                  optional convenience and are not included in backups.
+                </p>
                 <div className="panel-actions">
                   <button
                     className="primary"
@@ -358,8 +397,13 @@ export function App() {
                   <dd>Touch dashboard actions</dd>
                 </dl>
                 <p>
-                  Portrait stacks both screens. Landscape places them
-                  side-by-side. Bluetooth controllers are supported.
+                  Both orientations keep the screens stacked. Enable equal-width
+                  screens in Settings to enlarge the lower screen. Bluetooth
+                  controllers are supported.
+                </p>
+                <p>
+                  Use the in-game Menu for Resume, Restart to the game title,
+                  Save Resume Point, display/audio toggles, or Exit to Launcher.
                 </p>
                 <p className="fine-print">
                   This baseline disables CPU and shader JIT. Performance depends

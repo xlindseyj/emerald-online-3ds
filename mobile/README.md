@@ -37,18 +37,14 @@ gpSP source, and the complete GPLv2 text. Azahar's matching 2126.0 source is
 linked in `THIRD_PARTY_NOTICES.md`.
 
 The audited Codemagic artifact is named `emerald-online-3ds-ios.ipa`. Before a
-website image build, verify it against Codemagic's `SHA256SUMS`, stage it at
-`release/emerald-online-3ds-ios.ipa`, and add or update its SHA-256 line in the
-repository `release/SHA256SUMS`. The website then exposes it at
+website image build, stage that file at `release/emerald-online-3ds-ios.ipa` and
+add its SHA-256 line to `release/SHA256SUMS`. The website then exposes it at
 `/download/ios` and lists it, with its exact byte size, at
 `/source.json`. Add the source directly in SideStore with:
 
 ```text
 sidestore://source?url=https%3A%2F%2Femeraldonline3ds.com%2Fsource.json
 ```
-
-The full implementation and release handoff is
-[`IOS_SIDELOAD_HANDOFF.md`](../IOS_SIDELOAD_HANDOFF.md).
 
 ## Runtime layout
 
@@ -65,25 +61,19 @@ Azahar/
     stats.cfg
     display.cfg
     link-backups/
-    update/
 ```
-
-Before launch the app creates the Azahar `nand/`, `sysdata/`, and `log/`
-directories, the complete virtual-SD directory tree, default `online.cfg`,
-opted-out `stats.cfg`, and default `display.cfg`, then stages the verified
-3DSX. It deliberately does not fabricate `emerald.gba`, `emerald.sav`, or
-`identity.cfg`: the user import creates the ROM, gpSP creates a genuine save,
-and the server issues the identity only after authenticated enrollment.
 
 The launcher writes `dynarec=disabled`. The bundled no-JIT build is intended
 for compatibility testing; performance depends on the iPhone model.
 
-Azahar's `LibRetro Default` storage policy appends `Azahar/sdmc` to the save
-root supplied by the native frontend. The app therefore passes its
-`EmeraldOnline3DS/` Application Support directory to the core and stages game
-files under the single `Azahar/sdmc` tree shown above. Do not add a second
-`Azahar` component or use the invalid legacy value `disabled` for the core's
-save-location option.
+The launcher Settings page controls audio, equal-width stacked screens, and an
+optional experimental auto-resume point. During play, **Menu** can resume,
+toggle audio or display sizing, create/delete a resume point, reset to the game
+title, or exit to the launcher. Rotation always keeps the screens stacked.
+
+Auto-resume state is app-private, excluded from `.eobackup` exports, and never
+replaces Emerald's normal battery save. It is disabled by default because core
+states are larger and less portable than in-game saves.
 
 ## Physical acceptance
 
@@ -92,11 +82,3 @@ registered physical iPhone installs the IPA, rejects an invalid ROM, imports a
 legal supported dump, reaches gameplay, exercises portrait and landscape touch
 controls, connects to the production WSS service, resumes safely, and runs for
 at least 15 minutes with diagnostics captured.
-
-The first 0.9.0 physical run installed and launched. It exposed an incorrect
-Azahar SD-root contract; after manually correcting the visible path, the ROM
-error cleared but both emulated screens stayed black while native controls
-remained visible. Version 0.9.1 fixes the root contract, provides a persistent
-software framebuffer, and records no-frame versus black-frame state plus
-allowlisted gpSP runtime stages. Gameplay acceptance remains open until the new
-IPA passes on the device.

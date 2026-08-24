@@ -7,22 +7,116 @@ protocol EmeraldEmulationViewControllerDelegate: AnyObject {
     func emulationViewController(_ controller: EmeraldEmulationViewController, didMeasureFPS fps: Double)
 }
 
+private final class EmeraldScreenView: UIImageView {
+    private let topScreen = UIImageView()
+    private let bottomScreen = UIImageView()
+    private var sourceImage: UIImage?
+    private(set) var bottomScreenFrame = CGRect.zero
+    var equalWidthScreens = false {
+        didSet { updatePresentation(); setNeedsLayout() }
+    }
+
+    override var image: UIImage? {
+        get { sourceImage }
+        set { sourceImage = newValue; updatePresentation() }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        contentMode = .scaleAspectFit
+        clipsToBounds = true
+        for screen in [topScreen, bottomScreen] {
+            screen.contentMode = .scaleToFill
+            screen.clipsToBounds = true
+            screen.isHidden = true
+            addSubview(screen)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func updatePresentation() {
+        guard equalWidthScreens, let cgImage = sourceImage?.cgImage,
+              cgImage.width * 6 == cgImage.height * 5 else {
+            super.image = sourceImage
+            topScreen.isHidden = true
+            bottomScreen.isHidden = true
+            return
+        }
+        let scale = CGFloat(cgImage.width) / 400
+        let topRect = CGRect(x: 0, y: 0, width: 400 * scale, height: 240 * scale)
+        let bottomRect = CGRect(x: 40 * scale, y: 240 * scale, width: 320 * scale, height: 240 * scale)
+        guard let top = cgImage.cropping(to: topRect), let bottom = cgImage.cropping(to: bottomRect) else {
+            super.image = sourceImage
+            topScreen.isHidden = true
+            bottomScreen.isHidden = true
+            return
+        }
+        super.image = nil
+        topScreen.image = UIImage(cgImage: top)
+        bottomScreen.image = UIImage(cgImage: bottom)
+        topScreen.isHidden = false
+        bottomScreen.isHidden = false
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard equalWidthScreens, !topScreen.isHidden else { bottomScreenFrame = .zero; return }
+        let scale = min(bounds.width / 400, bounds.height / 540)
+        let width = 400 * scale
+        let topHeight = 240 * scale
+        let bottomHeight = 300 * scale
+        let originX = (bounds.width - width) / 2
+        let originY = (bounds.height - topHeight - bottomHeight) / 2
+        topScreen.frame = CGRect(x: originX, y: originY, width: width, height: topHeight)
+        bottomScreen.frame = CGRect(x: originX, y: originY + topHeight, width: width, height: bottomHeight)
+        bottomScreenFrame = bottomScreen.frame
+    }
+
+    func normalizedTouch(at point: CGPoint) -> CGPoint? {
+        if equalWidthScreens, !bottomScreenFrame.isEmpty {
+            guard bottomScreenFrame.contains(point) else { return nil }
+            let localX = (point.x - bottomScreenFrame.minX) / bottomScreenFrame.width
+            let localY = (point.y - bottomScreenFrame.minY) / bottomScreenFrame.height
+            return CGPoint(x: (40 + 320 * localX) / 400, y: (240 + 240 * localY) / 480)
+        }
+        guard let sourceImage else { return nil }
+        let imageRatio = sourceImage.size.width / sourceImage.size.height
+        let viewRatio = bounds.width / bounds.height
+        let rendered: CGRect
+        if imageRatio > viewRatio {
+            let height = bounds.width / imageRatio
+            rendered = CGRect(x: 0, y: (bounds.height - height) / 2, width: bounds.width, height: height)
+        } else {
+            let width = bounds.height * imageRatio
+            rendered = CGRect(x: (bounds.width - width) / 2, y: 0, width: width, height: bounds.height)
+        }
+        guard rendered.contains(point) else { return nil }
+        return CGPoint(x: (point.x - rendered.minX) / rendered.width, y: (point.y - rendered.minY) / rendered.height)
+    }
+}
+
 final class EmeraldEmulationViewController: UIViewController {
     weak var delegate: EmeraldEmulationViewControllerDelegate?
     private let storage: EmeraldStorage
     private let session: EO3DSCoreSession
-    private let imageView = UIImageView()
+    private let imageView = EmeraldScreenView()
     private let controls = UIView()
     private let audioEngine = AVAudioEngine()
     private let audioPlayer = AVAudioPlayerNode()
     private let audioQueue = DispatchQueue(label: "com.emeraldonline3ds.mobile.audio", qos: .userInteractive)
+    private let audioFormat = AVAudioFormat(standardFormatWithSampleRate: 32_768, channels: 2)!
+    private var config: EmeraldLauncherConfig
+    private var audioConfigured = false
     private var fpsTimer: Timer?
     private var stopping = false
     private var startupSeconds = 0
     private var videoReadyLogged = false
+    private var audioReadyLogged = false
 
-    init(storage: EmeraldStorage, coreURL: URL, runtimeURL: URL) {
+    init(storage: EmeraldStorage, coreURL: URL, runtimeURL: URL, config: EmeraldLauncherConfig) {
         self.storage = storage
+        self.config = config
         // Azahar's LibRetro Default policy appends Azahar/sdmc to this root.
         session = EO3DSCoreSession(coreURL: coreURL, runtimeURL: runtimeURL, userRootURL: storage.appRoot)
         super.init(nibName: nil, bundle: nil)
@@ -35,6 +129,7 @@ final class EmeraldEmulationViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .black
         imageView.contentMode = .scaleAspectFit
+        imageView.equalWidthScreens = config.equalWidthScreens
         imageView.backgroundColor = UIColor(red: 0.02, green: 0.08, blue: 0.055, alpha: 1)
         imageView.isUserInteractionEnabled = true
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -58,14 +153,27 @@ final class EmeraldEmulationViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        configureAudio()
+        if config.audioEnabled { configureAudio() }
         session.messageHandler = { [weak self] message in DispatchQueue.main.async { self?.showMessage(message) } }
         session.audioHandler = { [weak self] data, frames, sampleRate in self?.enqueueAudio(data: data, frames: Int(frames), sampleRate: sampleRate) }
         do {
             try storage.writeOnlineConfig(storage.readConfig())
+            session.setPaused(true)
             try session.start(in: imageView)
+            if config.autoSaveState && storage.autoSaveAvailable {
+                do {
+                    try session.loadState(from: storage.autoSaveURL)
+                    storage.appendDiagnostic(event: "autosave-restored")
+                    showMessage("Previous resume point restored.")
+                } catch {
+                    storage.removeAutoSave()
+                    storage.appendDiagnostic(event: "autosave-restore-failed", fields: ["message": error.localizedDescription])
+                    showMessage("The old resume point was incompatible and was removed. Your normal game save is unchanged.")
+                }
+            }
+            session.setPaused(false)
             storage.markSessionStarted()
-            storage.appendDiagnostic(event: "emulator-started", fields: ["jit": false])
+            storage.appendDiagnostic(event: "emulator-started", fields: ["jit": false, "audio": config.audioEnabled, "equalWidthScreens": config.equalWidthScreens, "autoSaveState": config.autoSaveState])
             fpsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 self.delegate?.emulationViewController(self, didMeasureFPS: self.session.framesPerSecond)
@@ -80,6 +188,13 @@ final class EmeraldEmulationViewController: UIViewController {
                     self.storage.appendDiagnostic(event: "emulator-black-video", fields: ["seconds": self.startupSeconds, "frames": self.session.videoFramesReceived, "coreFPS": self.session.framesPerSecond])
                     self.showMessage("Azahar is running but has not produced a visible frame. Export diagnostics after closing.")
                 }
+                if self.session.audioFramesReceived > 0 && !self.audioReadyLogged {
+                    self.audioReadyLogged = true
+                    self.storage.appendDiagnostic(event: "emulator-audio-ready", fields: ["seconds": self.startupSeconds, "frames": self.session.audioFramesReceived])
+                } else if self.startupSeconds == 10 && self.config.audioEnabled && self.session.audioFramesReceived == 0 {
+                    self.storage.appendDiagnostic(event: "emulator-no-audio-frames", fields: ["seconds": self.startupSeconds])
+                    self.showMessage("Azahar has not produced audio yet. Export diagnostics after closing.")
+                }
             }
         } catch {
             stop(error: error)
@@ -89,45 +204,63 @@ final class EmeraldEmulationViewController: UIViewController {
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
         session.setLandscape(size.width > size.height)
+        coordinator.animate(alongsideTransition: { [weak self] _ in self?.imageView.setNeedsLayout() })
     }
 
     private func configureAudio() {
+        guard !audioConfigured else {
+            audioPlayer.volume = config.audioEnabled ? 1 : 0
+            if config.audioEnabled && !audioPlayer.isPlaying { audioPlayer.play() }
+            return
+        }
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .gameChat, options: [.mixWithOthers])
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try audioSession.setPreferredSampleRate(audioFormat.sampleRate)
+            try audioSession.setPreferredIOBufferDuration(0.01)
             try audioSession.setActive(true)
             audioEngine.attach(audioPlayer)
-            audioEngine.connect(audioPlayer, to: audioEngine.mainMixerNode, format: nil)
+            audioEngine.connect(audioPlayer, to: audioEngine.mainMixerNode, format: audioFormat)
+            audioEngine.prepare()
             try audioEngine.start()
             audioPlayer.play()
+            audioConfigured = true
+            storage.appendDiagnostic(event: "audio-session-ready", fields: ["coreSampleRate": audioFormat.sampleRate, "outputSampleRate": audioSession.sampleRate])
         } catch {
             storage.appendDiagnostic(event: "audio-start-failed", fields: ["message": error.localizedDescription])
+            showMessage("Audio could not start. Export diagnostics after closing.")
         }
     }
 
     private func enqueueAudio(data: Data, frames: Int, sampleRate: Double) {
-        guard frames > 0, let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 2, interleaved: false),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)), let channels = buffer.floatChannelData else { return }
-        buffer.frameLength = AVAudioFrameCount(frames)
-        data.withUnsafeBytes { raw in
-            let samples = raw.bindMemory(to: Int16.self)
-            for frame in 0..<frames {
-                channels[0][frame] = Float(samples[frame * 2]) / Float(Int16.max)
-                channels[1][frame] = Float(samples[frame * 2 + 1]) / Float(Int16.max)
+        guard frames > 0 else { return }
+        audioQueue.async { [weak self] in
+            guard let self, self.config.audioEnabled,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: self.audioFormat, frameCapacity: AVAudioFrameCount(frames)),
+                  let channels = buffer.floatChannelData else { return }
+            buffer.frameLength = AVAudioFrameCount(frames)
+            data.withUnsafeBytes { raw in
+                let samples = raw.bindMemory(to: Int16.self)
+                guard samples.count >= frames * 2 else { return }
+                for frame in 0..<frames {
+                    channels[0][frame] = Float(samples[frame * 2]) / 32_768
+                    channels[1][frame] = Float(samples[frame * 2 + 1]) / 32_768
+                }
             }
+            self.audioPlayer.scheduleBuffer(buffer, completionHandler: nil)
+            if !self.audioPlayer.isPlaying { self.audioPlayer.play() }
         }
-        audioQueue.async { [weak self] in self?.audioPlayer.scheduleBuffer(buffer, completionHandler: nil) }
     }
 
     private func buildControls() {
-        let close = UIButton(type: .system)
-        close.setTitle("Done", for: .normal)
-        close.setTitleColor(.white, for: .normal)
-        close.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        close.layer.cornerRadius = 10
-        close.addTarget(self, action: #selector(done), for: .touchUpInside)
-        close.translatesAutoresizingMaskIntoConstraints = false
-        controls.addSubview(close)
+        let menu = UIButton(type: .system)
+        menu.setTitle("☰ Menu", for: .normal)
+        menu.setTitleColor(.white, for: .normal)
+        menu.backgroundColor = UIColor.black.withAlphaComponent(0.68)
+        menu.layer.cornerRadius = 10
+        menu.addTarget(self, action: #selector(openMenu(_:)), for: .touchUpInside)
+        menu.translatesAutoresizingMaskIntoConstraints = false
+        controls.addSubview(menu)
 
         let dpad = UIStackView()
         dpad.axis = .vertical; dpad.spacing = 3; dpad.alignment = .center
@@ -154,9 +287,9 @@ final class EmeraldEmulationViewController: UIViewController {
         let rightShoulder = holdButton("R", 11, compact: true); rightShoulder.translatesAutoresizingMaskIntoConstraints = false; controls.addSubview(rightShoulder)
 
         NSLayoutConstraint.activate([
-            close.topAnchor.constraint(equalTo: controls.topAnchor, constant: 8), close.trailingAnchor.constraint(equalTo: controls.trailingAnchor, constant: -8), close.widthAnchor.constraint(equalToConstant: 64), close.heightAnchor.constraint(equalToConstant: 38),
+            menu.topAnchor.constraint(equalTo: controls.topAnchor, constant: 8), menu.trailingAnchor.constraint(equalTo: controls.trailingAnchor, constant: -8), menu.widthAnchor.constraint(equalToConstant: 88), menu.heightAnchor.constraint(equalToConstant: 38),
             leftShoulder.topAnchor.constraint(equalTo: controls.topAnchor, constant: 8), leftShoulder.leadingAnchor.constraint(equalTo: controls.leadingAnchor, constant: 8),
-            rightShoulder.topAnchor.constraint(equalTo: controls.topAnchor, constant: 8), rightShoulder.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -8),
+            rightShoulder.topAnchor.constraint(equalTo: controls.topAnchor, constant: 8), rightShoulder.trailingAnchor.constraint(equalTo: menu.leadingAnchor, constant: -8),
             dpad.leadingAnchor.constraint(equalTo: controls.leadingAnchor, constant: 10), dpad.bottomAnchor.constraint(equalTo: controls.bottomAnchor, constant: -10),
             face.trailingAnchor.constraint(equalTo: controls.trailingAnchor, constant: -10), face.bottomAnchor.constraint(equalTo: controls.bottomAnchor, constant: -10),
             center.centerXAnchor.constraint(equalTo: controls.centerXAnchor), center.bottomAnchor.constraint(equalTo: controls.bottomAnchor, constant: -12)
@@ -182,20 +315,13 @@ final class EmeraldEmulationViewController: UIViewController {
     }
 
     @objc private func handleTouch(_ recognizer: UIGestureRecognizer) {
-        guard let image = imageView.image else { return }
         let point = recognizer.location(in: imageView)
-        let imageRatio = image.size.width / image.size.height
-        let viewRatio = imageView.bounds.width / imageView.bounds.height
-        let rendered: CGRect
-        if imageRatio > viewRatio {
-            let height = imageView.bounds.width / imageRatio
-            rendered = CGRect(x: 0, y: (imageView.bounds.height - height) / 2, width: imageView.bounds.width, height: height)
-        } else {
-            let width = imageView.bounds.height * imageRatio
-            rendered = CGRect(x: (imageView.bounds.width - width) / 2, y: 0, width: width, height: imageView.bounds.height)
+        guard let normalized = imageView.normalizedTouch(at: point) else {
+            session.setTouchX(0, y: 0, pressed: false)
+            return
         }
-        let x = min(1, max(0, (point.x - rendered.minX) / rendered.width))
-        let y = min(1, max(0, (point.y - rendered.minY) / rendered.height))
+        let x = min(1, max(0, normalized.x))
+        let y = min(1, max(0, normalized.y))
         let pressed = recognizer.state == .began || recognizer.state == .changed
         session.setTouchX(x, y: y, pressed: pressed)
         if recognizer.state == .ended || recognizer.state == .cancelled { session.setTouchX(x, y: y, pressed: false) }
@@ -220,9 +346,81 @@ final class EmeraldEmulationViewController: UIViewController {
         UIView.animate(withDuration: 0.25, delay: 3, options: [], animations: { label.alpha = 0 }, completion: { _ in label.removeFromSuperview() })
     }
 
-    @objc private func pause() { session.setPaused(true); audioPlayer.pause() }
-    @objc private func resume() { if session.isRunning { session.setPaused(false); audioPlayer.play() } }
-    @objc private func done() { stop(error: nil) }
+    private func persistPreferences() {
+        do { config = try storage.saveConfig(config) }
+        catch { storage.appendDiagnostic(event: "settings-save-failed", fields: ["message": error.localizedDescription]) }
+    }
+
+    private func resumeEmulation() {
+        session.setPaused(false)
+        if config.audioEnabled {
+            configureAudio()
+            audioPlayer.volume = 1
+            if !audioPlayer.isPlaying { audioPlayer.play() }
+        }
+    }
+
+    private func saveResumePoint(manual: Bool) {
+        do {
+            try session.saveState(to: storage.autoSaveURL)
+            storage.appendDiagnostic(event: manual ? "autosave-created-manually" : "autosave-created")
+            if manual { showMessage("Resume point saved. Keep using Emerald's normal in-game save too.") }
+        } catch {
+            storage.appendDiagnostic(event: "autosave-create-failed", fields: ["message": error.localizedDescription])
+            if manual { showMessage("Could not create a resume point. Your normal game save is unchanged.") }
+        }
+    }
+
+    @objc private func openMenu(_ sender: UIButton) {
+        session.setPaused(true)
+        audioPlayer.pause()
+        let menu = UIAlertController(title: "Emerald Online 3DS", message: "Game paused", preferredStyle: .actionSheet)
+        menu.addAction(UIAlertAction(title: "Resume", style: .cancel) { [weak self] _ in self?.resumeEmulation() })
+        menu.addAction(UIAlertAction(title: config.equalWidthScreens ? "Use native-width stacked screens" : "Make both screens equal width", style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.config.equalWidthScreens.toggle()
+            self.imageView.equalWidthScreens = self.config.equalWidthScreens
+            self.persistPreferences()
+            self.resumeEmulation()
+        })
+        menu.addAction(UIAlertAction(title: config.audioEnabled ? "Mute audio" : "Enable audio", style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.config.audioEnabled.toggle()
+            self.persistPreferences()
+            if self.config.audioEnabled { self.configureAudio() }
+            else { self.audioPlayer.volume = 0; self.audioPlayer.pause() }
+            self.resumeEmulation()
+        })
+        menu.addAction(UIAlertAction(title: "Save Resume Point", style: .default) { [weak self] _ in
+            self?.saveResumePoint(manual: true)
+            self?.resumeEmulation()
+        })
+        if storage.autoSaveAvailable {
+            menu.addAction(UIAlertAction(title: "Delete Resume Point", style: .destructive) { [weak self] _ in
+                self?.storage.removeAutoSave()
+                self?.showMessage("Resume point deleted. Your normal game save is unchanged.")
+                self?.resumeEmulation()
+            })
+        }
+        menu.addAction(UIAlertAction(title: "Restart to Game Title", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            self.storage.removeAutoSave()
+            self.session.resetGame()
+            self.resumeEmulation()
+        })
+        menu.addAction(UIAlertAction(title: "Exit to Launcher", style: .destructive) { [weak self] _ in self?.stop(error: nil) })
+        menu.popoverPresentationController?.sourceView = sender
+        menu.popoverPresentationController?.sourceRect = sender.bounds
+        present(menu, animated: true)
+    }
+
+    @objc private func pause() {
+        session.setPaused(true)
+        audioPlayer.pause()
+        guard config.autoSaveState, session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.saveResumePoint(manual: false) }
+    }
+    @objc private func resume() { if session.isRunning { resumeEmulation() } }
 
     func requestStop() { stop(error: nil) }
 
@@ -230,6 +428,7 @@ final class EmeraldEmulationViewController: UIViewController {
         guard !stopping else { return }
         stopping = true
         fpsTimer?.invalidate()
+        if error == nil && config.autoSaveState && session.isRunning { saveResumePoint(manual: false) }
         session.stop()
         audioPlayer.stop(); audioEngine.stop(); try? AVAudioSession.sharedInstance().setActive(false)
         storage.markSessionClean()

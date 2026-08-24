@@ -111,10 +111,25 @@ string option and make the core silently retain its unrelated platform default.
 
 The native controller converts Azahar's XRGB8888 video frames into iOS images,
 feeds stereo PCM to `AVAudioEngine`, forwards touch coordinates, and maps both
-on-screen controls and `GameController` inputs. Rotating to landscape changes
-the Azahar layout to side-by-side; portrait uses its default stacked layout.
-Leaving the foreground pauses the core and audio, returning resumes them, and
-closing the emulator flushes a clean-session marker.
+on-screen controls and `GameController` inputs. Both orientations keep Azahar's
+default stacked layout. An optional equal-width presentation enlarges the lower
+screen while preserving its core-visible touch coordinates. Leaving the
+foreground pauses the core and audio, returning resumes them, and closing the
+emulator flushes a clean-session marker.
+
+The 0.9.2 audio path uses a `.playback`/`.default` `AVAudioSession`, connects the
+player node with Azahar's 32,768 Hz stereo format so `AVAudioEngine` can perform
+the hardware-rate conversion, and moves PCM conversion onto a dedicated audio
+queue. Frame-to-image construction likewise runs on a separate presentation
+queue; the emulation queue retains user-interactive QoS and only performs the
+bounded framebuffer copy before returning to Azahar.
+
+The in-game Menu exposes Resume, audio and equal-width display toggles, a
+manual resume point, restart to the game title, and Exit to Launcher. Optional
+auto-resume serializes through Azahar's libretro state API on background/exit,
+is disabled by default, is capped at 512 MiB, is removed when the ROM changes,
+and is excluded from private backups. Emerald's normal battery save remains the
+authoritative durable save.
 
 ## Single-game and ROM boundary
 
@@ -356,7 +371,12 @@ and must never be written to generated reports or Git history.
   content launch path were active. Manually correcting the core-visible SD path
   removed that error, after which the emulated top and bottom screens stayed
   black while native buttons remained responsive. No obvious runtime error was
-  visible in the tester's log. This is the active 0.9.1 retest target.
+  visible in the tester's log. Version 0.9.1 then passed ROM loading and reached
+  gameplay on the physical phone. Buttons and rotation worked, but audio was
+  silent, FPS was below the desired level, a portrait/landscape round trip could
+  leave the screens side-by-side, and the player needed clearer in-game exit,
+  sizing, and resume controls. Version 0.9.2 is the active audio, performance,
+  stable-stacking, in-game-menu, equal-width, and optional-auto-resume retest.
 
 ## Remaining physical acceptance
 
@@ -367,14 +387,18 @@ accepted, complete all of the following on a physical iPhone:
 1. Add `/source.json` to SideStore and install the re-signed IPA. This passed
    for 0.9.0 and must be repeated after every replacement IPA.
 2. Confirm the launch screen, icon, bundle version, and first-run state. Launch
-   passed for 0.9.0; repeat it on 0.9.1.
+   and ROM loading passed through 0.9.1; repeat them on 0.9.2.
 3. Confirm an unrelated/invalid ROM is rejected without being retained.
 4. Import the legally obtained supported dump and reach Emerald gameplay. This
-   remains blocked by the current post-ROM black-screen result.
-5. Verify audio, on-screen controls, touch, and an external controller.
-6. Rotate between portrait and landscape during both launcher and gameplay.
+   passed on 0.9.1 and must be repeated on 0.9.2.
+5. Verify audio, on-screen controls, touch, and an external controller. Buttons
+   passed on 0.9.1; audio failed and remains the primary 0.9.2 retest.
+6. Rotate portrait → landscape → portrait → landscape and confirm the screens
+   remain stacked. Also test native-width and equal-width modes. Basic rotation
+   passed on 0.9.1, but the round trip exposed a stale side-by-side layout.
 7. Connect through production WSS and verify the online lower screen.
-8. Background and resume the app, then close and relaunch with save integrity.
+8. Background and resume the app, then test optional auto-resume, Exit to
+   Launcher, restart to the game title, and normal battery-save integrity.
 9. Create and restore an `.eobackup`, inspect redacted diagnostics, and test
    scoped local deletion only after preserving the test save.
 10. Run for at least 15 minutes while recording FPS, thermal state, audio

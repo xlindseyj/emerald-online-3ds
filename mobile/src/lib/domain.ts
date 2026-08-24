@@ -27,6 +27,9 @@ export interface LauncherConfig {
   name: string;
   online: boolean;
   page: StartingPage;
+  audioEnabled: boolean;
+  autoSaveState: boolean;
+  equalWidthScreens: boolean;
 }
 
 export const DEFAULT_CONFIG: LauncherConfig = {
@@ -37,6 +40,9 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   name: "Trainer",
   online: true,
   page: "online",
+  audioEnabled: true,
+  autoSaveState: false,
+  equalWidthScreens: false,
 };
 
 export function sanitizeTrainerName(value: unknown): string {
@@ -113,6 +119,18 @@ export function normalizeConfig(
         ? DEFAULT_CONFIG.online
         : Boolean(value.online),
     page: page as StartingPage,
+    audioEnabled:
+      value.audioEnabled === undefined
+        ? DEFAULT_CONFIG.audioEnabled
+        : Boolean(value.audioEnabled),
+    autoSaveState:
+      value.autoSaveState === undefined
+        ? DEFAULT_CONFIG.autoSaveState
+        : Boolean(value.autoSaveState),
+    equalWidthScreens:
+      value.equalWidthScreens === undefined
+        ? DEFAULT_CONFIG.equalWidthScreens
+        : Boolean(value.equalWidthScreens),
   };
 }
 

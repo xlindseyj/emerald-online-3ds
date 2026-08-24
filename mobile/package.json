@@ -1,8 +1,8 @@
 {
   "name": "emerald-online-3ds-mobile",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "releaseDate": "2026-08-23",
-  "releaseSummary": "Fixes the iOS Azahar virtual-SD root, supplies a persistent software framebuffer, and adds first-frame and privacy-safe runtime-stage diagnostics for physical sideload testing.",
+  "releaseSummary": "Restores iOS audio, improves frame delivery, keeps screens stacked through rotation, and adds an in-game menu with equal-width screens and optional auto-resume points.",
   "private": true,
   "type": "module",
   "description": "Single-game iOS launcher for Emerald Online 3DS",

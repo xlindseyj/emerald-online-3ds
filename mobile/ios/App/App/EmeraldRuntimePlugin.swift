@@ -46,7 +46,8 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 "romValid": rom.valid,
                 "running": emulationController != nil,
                 "previousUncleanExit": storage.previousSessionWasUnclean(),
-                "jitAvailable": false
+                "jitAvailable": false,
+                "autoSaveAvailable": storage.autoSaveAvailable
             ])
         } catch {
             call.resolve([
@@ -54,7 +55,8 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 "runtimeVersion": "missing", "coreVersion": "2126.0", "runtimeReady": false,
                 "coreReady": storage.bundledCoreURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
                 "romPresent": storage.romStatus().present, "romValid": false, "running": false,
-                "previousUncleanExit": storage.previousSessionWasUnclean(), "jitAvailable": false
+                "previousUncleanExit": storage.previousSessionWasUnclean(), "jitAvailable": false,
+                "autoSaveAvailable": storage.autoSaveAvailable
             ])
         }
     }
@@ -78,7 +80,7 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             let rom = storage.romStatus()
             guard rom.present && rom.valid else { throw EmeraldStorageError.invalidROM("Select the supported Pokémon Emerald ROM before playing.") }
             guard let core = storage.bundledCoreURL, FileManager.default.fileExists(atPath: core.path) else { throw EmeraldStorageError.missingRuntime }
-            let controller = EmeraldEmulationViewController(storage: storage, coreURL: core, runtimeURL: storage.installedRuntimeURL)
+            let controller = EmeraldEmulationViewController(storage: storage, coreURL: core, runtimeURL: storage.installedRuntimeURL, config: storage.readConfig())
             controller.delegate = self
             emulationController = controller
             notifyListeners("runtimeState", data: ["state": "starting", "message": "Launching Emerald Online 3DS…"])
@@ -107,7 +109,10 @@ public final class EmeraldRuntimePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 path: object["path"] as? String ?? "",
                 name: object["name"] as? String ?? "",
                 online: object["online"] as? Bool ?? false,
-                page: object["page"] as? String ?? ""
+                page: object["page"] as? String ?? "",
+                audioEnabled: object["audioEnabled"] as? Bool ?? true,
+                autoSaveState: object["autoSaveState"] as? Bool ?? false,
+                equalWidthScreens: object["equalWidthScreens"] as? Bool ?? false
             )
             call.resolve(try storage.saveConfig(config).dictionary)
         } catch { call.reject(error.localizedDescription) }

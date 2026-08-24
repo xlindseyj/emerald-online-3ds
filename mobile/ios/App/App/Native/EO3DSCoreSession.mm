@@ -30,6 +30,9 @@ struct CoreAPI {
   void (*reset)(void);
   void (*get_system_info)(retro_system_info *);
   void (*get_system_av_info)(retro_system_av_info *);
+  size_t (*serialize_size)(void);
+  bool (*serialize)(void *, size_t);
+  bool (*unserialize)(const void *, size_t);
 };
 
 @interface EO3DSCoreSession () {
@@ -41,6 +44,7 @@ struct CoreAPI {
   void *_coreHandle;
   CoreAPI _api;
   dispatch_queue_t _emulationQueue;
+  dispatch_queue_t _videoQueue;
   dispatch_source_t _timer;
   std::atomic_bool _running;
   std::atomic_bool _paused;
@@ -54,6 +58,7 @@ struct CoreAPI {
   std::atomic<double> _fps;
   std::atomic<NSUInteger> _videoFramesReceived;
   std::atomic_bool _hasNonBlackVideoFrame;
+  std::atomic<NSUInteger> _audioFramesReceived;
   std::chrono::steady_clock::time_point _fpsWindow;
   NSUInteger _fpsFrames;
   double _sampleRate;
@@ -175,25 +180,26 @@ static void videoCallback(const void *data, unsigned width, unsigned height, siz
   NSMutableData *copy = [NSMutableData dataWithLength:width * height * 4];
   uint8_t *destination = static_cast<uint8_t *>(copy.mutableBytes);
   const uint8_t *source = static_cast<const uint8_t *>(data);
-  for (unsigned row = 0; row < height; row++) memcpy(destination + row * width * 4, source + row * pitch, width * 4);
+  if (pitch == width * 4) memcpy(destination, source, width * height * 4);
+  else for (unsigned row = 0; row < height; row++) memcpy(destination + row * width * 4, source + row * pitch, width * 4);
 
-  CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)copy);
-  CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-  CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4, colorSpace,
-                                   kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst,
-                                   provider, nullptr, false, kCGRenderingIntentDefault);
-  UIImage *frame = image ? [UIImage imageWithCGImage:image scale:1 orientation:UIImageOrientationUp] : nil;
-  if (image) CGImageRelease(image);
-  CGColorSpaceRelease(colorSpace);
-  CGDataProviderRelease(provider);
-  if (frame) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      session->_imageView.image = frame;
-      session->_videoFramePending = false;
-    });
-  } else {
-    session->_videoFramePending = false;
-  }
+  dispatch_async(session->_videoQueue, ^{
+    @autoreleasepool {
+      CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)copy);
+      CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+      CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4, colorSpace,
+                                       kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst,
+                                       provider, nullptr, false, kCGRenderingIntentDefault);
+      UIImage *frame = image ? [UIImage imageWithCGImage:image scale:1 orientation:UIImageOrientationUp] : nil;
+      if (image) CGImageRelease(image);
+      CGColorSpaceRelease(colorSpace);
+      CGDataProviderRelease(provider);
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (session->_running.load()) session->_imageView.image = frame;
+        session->_videoFramePending = false;
+      });
+    }
+  });
 }
 
 static void audioSampleCallback(int16_t left, int16_t right) {
@@ -205,6 +211,7 @@ static void audioSampleCallback(int16_t left, int16_t right) {
 static size_t audioBatchCallback(const int16_t *data, size_t frames) {
   EO3DSCoreSession *session = activeSession;
   if (session && data && frames && session.audioHandler) {
+    session->_audioFramesReceived.fetch_add(frames);
     session.audioHandler([NSData dataWithBytes:data length:frames * 2 * sizeof(int16_t)], frames, session->_sampleRate);
   }
   return frames;
@@ -239,7 +246,10 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _coreURL = coreURL;
     _runtimeURL = runtimeURL;
     _userRootURL = userRootURL;
-    _emulationQueue = dispatch_queue_create("com.emeraldonline3ds.mobile.emulation", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_attr_t emulationAttributes = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
+    dispatch_queue_attr_t videoAttributes = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
+    _emulationQueue = dispatch_queue_create("com.emeraldonline3ds.mobile.emulation", emulationAttributes);
+    _videoQueue = dispatch_queue_create("com.emeraldonline3ds.mobile.video", videoAttributes);
     _running = false;
     _paused = false;
     _variablesChanged = false;
@@ -249,6 +259,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
     _fps = 0;
     _videoFramesReceived = 0;
     _hasNonBlackVideoFrame = false;
+    _audioFramesReceived = 0;
     for (auto &button : _buttons) button = false;
     _corePath = coreURL.fileSystemRepresentation;
     _runtimePath = runtimeURL.fileSystemRepresentation;
@@ -276,6 +287,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
 - (double)framesPerSecond { return _fps.load(); }
 - (NSUInteger)videoFramesReceived { return _videoFramesReceived.load(); }
 - (BOOL)hasNonBlackVideoFrame { return _hasNonBlackVideoFrame.load(); }
+- (NSUInteger)audioFramesReceived { return _audioFramesReceived.load(); }
 
 - (BOOL)startInImageView:(UIImageView *)imageView error:(NSError **)error {
   if (_running.load()) return YES;
@@ -303,11 +315,15 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   LOAD_API(reset, "retro_reset");
   LOAD_API(get_system_info, "retro_get_system_info");
   LOAD_API(get_system_av_info, "retro_get_system_av_info");
+  LOAD_API(serialize_size, "retro_serialize_size");
+  LOAD_API(serialize, "retro_serialize");
+  LOAD_API(unserialize, "retro_unserialize");
 #undef LOAD_API
   if (!_api.set_environment || !_api.set_video_refresh || !_api.set_audio_sample ||
       !_api.set_audio_sample_batch || !_api.set_input_poll || !_api.set_input_state ||
       !_api.init || !_api.deinit || !_api.load_game || !_api.unload_game || !_api.run ||
-      !_api.reset || !_api.get_system_info || !_api.get_system_av_info) {
+      !_api.reset || !_api.get_system_info || !_api.get_system_av_info ||
+      !_api.serialize_size || !_api.serialize || !_api.unserialize) {
     if (error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:3 userInfo:@{NSLocalizedDescriptionKey: @"The Azahar core is missing a required libretro symbol."}];
     dlclose(_coreHandle);
     _coreHandle = nullptr;
@@ -317,6 +333,7 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   activeSession = self;
   _videoFramesReceived = 0;
   _hasNonBlackVideoFrame = false;
+  _audioFramesReceived = 0;
   _imageView = imageView;
   _api.set_environment(environmentCallback);
   _api.set_video_refresh(videoCallback);
@@ -348,14 +365,16 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   dispatch_source_set_event_handler(_timer, ^{
     EO3DSCoreSession *strongSelf = weakSelf;
     if (!strongSelf || !strongSelf->_running.load() || strongSelf->_paused.load()) return;
-    strongSelf->_api.run();
-    strongSelf->_fpsFrames += 1;
-    auto now = std::chrono::steady_clock::now();
-    double elapsed = std::chrono::duration<double>(now - strongSelf->_fpsWindow).count();
-    if (elapsed >= 1.0) {
-      strongSelf->_fps = strongSelf->_fpsFrames / elapsed;
-      strongSelf->_fpsFrames = 0;
-      strongSelf->_fpsWindow = now;
+    @autoreleasepool {
+      strongSelf->_api.run();
+      strongSelf->_fpsFrames += 1;
+      auto now = std::chrono::steady_clock::now();
+      double elapsed = std::chrono::duration<double>(now - strongSelf->_fpsWindow).count();
+      if (elapsed >= 1.0) {
+        strongSelf->_fps = strongSelf->_fpsFrames / elapsed;
+        strongSelf->_fpsFrames = 0;
+        strongSelf->_fpsWindow = now;
+      }
     }
   });
   dispatch_resume(_timer);
@@ -378,7 +397,9 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
 - (void)setPaused:(BOOL)paused { _paused = paused; }
 - (void)setLandscape:(BOOL)landscape {
   _landscape = landscape;
-  _variables["citra_layout_option"] = landscape ? "side_by_side" : "default";
+  // Keep the two 3DS screens stacked in both orientations. The prior dynamic
+  // switch could leave Azahar in side-by-side mode after a rotation round trip.
+  _variables["citra_layout_option"] = "default";
   _variablesChanged = true;
 }
 - (void)setButton:(NSInteger)button pressed:(BOOL)pressed { if (button >= 0 && button < (NSInteger)_buttons.size()) _buttons[(size_t)button] = pressed; }
@@ -386,6 +407,40 @@ static int16_t inputStateCallback(unsigned port, unsigned device, unsigned index
   _touchX = (int16_t)MAX(INT16_MIN, MIN(INT16_MAX, lround((x * 2.0 - 1.0) * INT16_MAX)));
   _touchY = (int16_t)MAX(INT16_MIN, MIN(INT16_MAX, lround((y * 2.0 - 1.0) * INT16_MAX)));
   _touchPressed = pressed;
+}
+- (void)resetGame {
+  if (!_running.load()) return;
+  dispatch_async(_emulationQueue, ^{ if (self->_running.load()) self->_api.reset(); });
+}
+
+- (BOOL)saveStateToURL:(NSURL *)url error:(NSError **)error {
+  if (!_running.load()) return NO;
+  __block BOOL saved = NO;
+  __block NSError *stateError = nil;
+  dispatch_sync(_emulationQueue, ^{
+    const size_t size = self->_api.serialize_size();
+    if (size == 0 || size > 512 * 1024 * 1024) {
+      stateError = [NSError errorWithDomain:EO3DSCoreErrorDomain code:5 userInfo:@{NSLocalizedDescriptionKey: @"Azahar could not create a bounded resume point."}];
+      return;
+    }
+    NSMutableData *state = [NSMutableData dataWithLength:size];
+    if (!self->_api.serialize(state.mutableBytes, size)) {
+      stateError = [NSError errorWithDomain:EO3DSCoreErrorDomain code:6 userInfo:@{NSLocalizedDescriptionKey: @"Azahar could not serialize the current session."}];
+      return;
+    }
+    saved = [state writeToURL:url options:NSDataWritingAtomic error:&stateError];
+  });
+  if (!saved && error) *error = stateError;
+  return saved;
+}
+
+- (BOOL)loadStateFromURL:(NSURL *)url error:(NSError **)error {
+  NSData *state = [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:error];
+  if (!state || state.length == 0 || state.length > 512 * 1024 * 1024 || !_running.load()) return NO;
+  __block BOOL loaded = NO;
+  dispatch_sync(_emulationQueue, ^{ loaded = self->_api.unserialize(state.bytes, state.length); });
+  if (!loaded && error) *error = [NSError errorWithDomain:EO3DSCoreErrorDomain code:7 userInfo:@{NSLocalizedDescriptionKey: @"The saved resume point is incompatible or damaged."}];
+  return loaded;
 }
 - (void)dealloc { [self stop]; }
 

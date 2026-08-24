@@ -24,6 +24,41 @@ struct EmeraldLauncherConfig: Codable {
     var name = "Trainer"
     var online = true
     var page = "online"
+    var audioEnabled = true
+    var autoSaveState = false
+    var equalWidthScreens = false
+
+    private enum CodingKeys: String, CodingKey {
+        case server, port, transport, path, name, online, page
+        case audioEnabled, autoSaveState, equalWidthScreens
+    }
+
+    init(server: String = "live.emeraldonline3ds.com", port: Int = 443, transport: String = "wss", path: String = "/game", name: String = "Trainer", online: Bool = true, page: String = "online", audioEnabled: Bool = true, autoSaveState: Bool = false, equalWidthScreens: Bool = false) {
+        self.server = server
+        self.port = port
+        self.transport = transport
+        self.path = path
+        self.name = name
+        self.online = online
+        self.page = page
+        self.audioEnabled = audioEnabled
+        self.autoSaveState = autoSaveState
+        self.equalWidthScreens = equalWidthScreens
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        server = try values.decodeIfPresent(String.self, forKey: .server) ?? "live.emeraldonline3ds.com"
+        port = try values.decodeIfPresent(Int.self, forKey: .port) ?? 443
+        transport = try values.decodeIfPresent(String.self, forKey: .transport) ?? "wss"
+        path = try values.decodeIfPresent(String.self, forKey: .path) ?? "/game"
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? "Trainer"
+        online = try values.decodeIfPresent(Bool.self, forKey: .online) ?? true
+        page = try values.decodeIfPresent(String.self, forKey: .page) ?? "online"
+        audioEnabled = try values.decodeIfPresent(Bool.self, forKey: .audioEnabled) ?? true
+        autoSaveState = try values.decodeIfPresent(Bool.self, forKey: .autoSaveState) ?? false
+        equalWidthScreens = try values.decodeIfPresent(Bool.self, forKey: .equalWidthScreens) ?? false
+    }
 
     static let allowedPages = Set(["online", "users", "chat", "party", "bag", "map", "stats", "quest", "titles", "friends", "guild", "teleport", "update"])
 
@@ -48,7 +83,7 @@ struct EmeraldLauncherConfig: Codable {
     }
 
     var dictionary: [String: Any] {
-        ["server": server, "port": port, "transport": transport, "path": path, "name": name, "online": online, "page": page]
+        ["server": server, "port": port, "transport": transport, "path": path, "name": name, "online": online, "page": page, "audioEnabled": audioEnabled, "autoSaveState": autoSaveState, "equalWidthScreens": equalWidthScreens]
     }
 }
 
@@ -99,6 +134,7 @@ final class EmeraldStorage {
 
     var romURL: URL { gameRoot.appendingPathComponent("emerald.gba") }
     var installedRuntimeURL: URL { gameRoot.appendingPathComponent("emerald-online-3ds.3dsx") }
+    var autoSaveURL: URL { gameRoot.appendingPathComponent("autosave.state") }
     var bundledCoreURL: URL? { Bundle.main.privateFrameworksURL?.appendingPathComponent("azahar_libretro.dylib") }
 
     private func writeDefaultFileIfMissing(_ url: URL, _ contents: String) throws {
@@ -168,6 +204,7 @@ final class EmeraldStorage {
         try manager.copyItem(at: url, to: temporary)
         try? manager.removeItem(at: romURL)
         try manager.moveItem(at: temporary, to: romURL)
+        try? manager.removeItem(at: autoSaveURL)
         try writeOnlineConfig(readConfig())
         appendDiagnostic(event: "rom-imported", fields: ["valid": true])
         return result
@@ -199,6 +236,10 @@ final class EmeraldStorage {
         try manager.createDirectory(at: gameRoot, withIntermediateDirectories: true)
         try lines.joined(separator: "\n").data(using: .utf8)!.write(to: gameRoot.appendingPathComponent("online.cfg"), options: .atomic)
     }
+
+    var autoSaveAvailable: Bool { manager.fileExists(atPath: autoSaveURL.path) }
+
+    func removeAutoSave() { try? manager.removeItem(at: autoSaveURL) }
 
     func previousSessionWasUnclean() -> Bool {
         guard let data = try? Data(contentsOf: sessionURL), let state = try? JSONDecoder().decode(SessionState.self, from: data) else { return false }
@@ -236,7 +277,7 @@ final class EmeraldStorage {
             files.append(BackupFile(path: path, size: data.count, sha256: data.sha256Hex, data: data.base64EncodedString()))
         }
         guard !files.isEmpty, files.count <= 256, total <= maxBackupBytes else { throw EmeraldStorageError.invalidBackup("There is no safe local data to back up, or it is too large.") }
-        let archive = BackupArchive(format: "emerald-online-3ds-local-backup", version: 1, createdAt: ISO8601DateFormatter().string(from: Date()), notice: "Local-only backup. Contains private save/settings data and may contain an online identity. Never upload or share it.", excluded: ["emerald.gba", "emerald-online-3ds.3dsx", "gpsp-debug.log", "update/"], files: files)
+        let archive = BackupArchive(format: "emerald-online-3ds-local-backup", version: 1, createdAt: ISO8601DateFormatter().string(from: Date()), notice: "Local-only backup. Contains private save/settings data and may contain an online identity. Never upload or share it.", excluded: ["emerald.gba", "emerald-online-3ds.3dsx", "autosave.state", "gpsp-debug.log", "update/"], files: files)
         var json = try JSONEncoder().encode(archive)
         json.append(0x0a)
         let compressed = try json.gzipped(level: .bestCompression)
