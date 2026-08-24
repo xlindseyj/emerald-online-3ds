@@ -17,17 +17,17 @@ verification, and production rollout.
   `https://emeraldonline3ds.com/download/ios`.
 - `https://emeraldonline3ds.com/sidecommunity.json` returns a permanent `308`
   redirect to `/source.json` so previously added sources continue working.
-- The published preview is version `0.9.1`, build `6`, bundle identifier
+- The published preview is version `0.9.2`, build `9`, bundle identifier
   `com.emeraldonline3ds.mobile`, and requires iOS 15 or newer.
 - The live IPA is a real 64-bit ARM iPhone application. Its SHA-256 is
-  `9aee7c6355be84877a8b92916e5cc61a445961e90bbd486240cf8f99dd366f92`
-  and its size is `13,656,703` bytes.
-- Codemagic build `6a8b8962387d96d697852e90` produced the published
+  `ac04399b55d8909f2ef60044cc4fafc9ed6e2171a63a92d608bc63d4a306299e`
+  and its size is `13,672,969` bytes.
+- Codemagic build `6a8b9c7eda4d90b41adfdb66` produced the published
   SideStore-re-signable IPA.
 - Automated compilation, package, schema, privacy, website, and live-service
-  checks pass. Physical installation and launch now pass; gameplay remains an
-  explicit acceptance gate because the first device run exposed a black-screen
-  runtime issue after ROM discovery was corrected.
+  checks pass. Physical installation, launch, ROM loading, gameplay, buttons,
+  and basic rotation passed on 0.9.1. Audio, sustained FPS, stable round-trip
+  rotation, equal-width presentation, and resume points are 0.9.2 device gates.
 
 ## What changed
 
@@ -348,7 +348,7 @@ and must never be written to generated reports or Git history.
 
 ## Verification completed on 2026-08-23
 
-- Mobile tests: 10 passed.
+- Mobile tests: 12 passed.
 - Repository suite: 148 passed and 5 environment-dependent tests skipped.
 - Website route and SideStore-source tests passed.
 - The live `/source.json` passed the official SideStore JSON schema.
