@@ -17,12 +17,12 @@ verification, and production rollout.
   `https://emeraldonline3ds.com/download/ios`.
 - `https://emeraldonline3ds.com/sidecommunity.json` returns a permanent `308`
   redirect to `/source.json` so previously added sources continue working.
-- The published preview is version `0.9.0`, build `5`, bundle identifier
+- The published preview is version `0.9.1`, build `6`, bundle identifier
   `com.emeraldonline3ds.mobile`, and requires iOS 15 or newer.
 - The live IPA is a real 64-bit ARM iPhone application. Its SHA-256 is
-  `8b55a8117dfdc7b22c431f08db714fddb4a84ebeaf854b9f6a51b731ad3da57a`
-  and its size is `13,652,874` bytes.
-- Codemagic build `6a8b683c0869a152bc6f2d9c` produced the published
+  `9aee7c6355be84877a8b92916e5cc61a445961e90bbd486240cf8f99dd366f92`
+  and its size is `13,656,703` bytes.
+- Codemagic build `6a8b8962387d96d697852e90` produced the published
   SideStore-re-signable IPA.
 - Automated compilation, package, schema, privacy, website, and live-service
   checks pass. Physical installation and launch now pass; gameplay remains an
