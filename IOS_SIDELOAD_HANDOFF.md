@@ -365,7 +365,10 @@ and must never be written to generated reports or Git history.
 ## Verification completed on 2026-08-24
 
 - Mobile tests: 12 passed.
-- Repository suite: 173 passed and 6 environment-dependent tests skipped.
+- Private integration suite: 173 passed and 6 environment-dependent tests
+  skipped, with the private ROM-backed package test enabled.
+- Sanitized public-mirror suite: 148 passed and 5 environment-dependent tests
+  skipped.
 - Website route and SideStore-source tests passed.
 - The live `/source.json` passed the official SideStore JSON schema.
 - The legacy source returned `308` with `Location: /source.json`.
