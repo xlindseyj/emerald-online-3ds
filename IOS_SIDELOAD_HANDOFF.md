@@ -1,9 +1,9 @@
 # iOS Sideload Handoff — 2026-08-24
 
 This document records the complete iOS sideloading vertical slice added on
-2026-08-23: the mobile application, native emulator bridge, ROM and local-data
-boundaries, Codemagic workflows, SideStore source, website delivery, release
-verification, and production rollout.
+2026-08-23 and 2026-08-24: the mobile application, native emulator bridge, ROM
+and local-data boundaries, Codemagic workflows, SideStore source, website
+delivery, release verification, and production rollout.
 
 ## Current status
 
@@ -26,8 +26,9 @@ verification, and production rollout.
   SideStore-re-signable IPA.
 - Automated compilation, package, schema, privacy, website, and live-service
   checks pass. Physical installation, launch, ROM loading, gameplay, buttons,
-  and basic rotation passed on 0.9.1. Audio, sustained FPS, stable round-trip
-  rotation, equal-width presentation, and resume points are 0.9.2 device gates.
+  and basic rotation passed on 0.9.1. Version 0.9.4 requires repeat physical
+  acceptance for audio, sustained JIT FPS, stable round-trip rotation,
+  equal-width presentation, resume points, and interpreter fallback.
 
 ## What changed
 
