@@ -301,9 +301,39 @@ digest, and then verify the public bytes. Public examples must use placeholders
 such as `<your-registry>` and `<namespace>`; real infrastructure values belong
 only in the private Gitea mirror.
 
+### Repeatable release playbook
+
+Treat this as a gated release pipeline rather than a single opaque action:
+
+1. Trigger `emerald-ios-compile-check` for the intended public commit and wait
+   for every Codemagic step to succeed.
+2. Download the IPA and checksum artifact through the authenticated Codemagic
+   API. Record the build ID, commit, app version, build number, byte size, and
+   SHA-256 in this handoff.
+3. Run the IPA privacy/structure audit, mobile tests, repository tests, and
+   release audit before publishing any metadata.
+4. Stage the ignored IPA at `release/emerald-online-3ds-ios.ipa`, update only
+   its checksum line, and publish sanitized metadata to GitHub using the project
+   author identity. Never copy private operator values into that commit.
+5. Build and push the website for `linux/amd64` and `linux/arm64`, deploy its
+   immutable manifest-list digest, and record real deployment values only in
+   Gitea.
+6. Verify the live health endpoint, `/source.json`, legacy redirect,
+   `/api/release`, homepage deep link, and `/download/ios` hash and size.
+7. Stop at the physical acceptance gate. A successful build, deployment, or
+   simulator run cannot mark gameplay, controls, audio, rotation, online play,
+   resume, or save integrity as passed on an iPhone.
+
+Most of this should be implemented as deterministic scripts and CI checks. An
+agent can orchestrate the commands, summarize evidence, maintain the two-mirror
+privacy boundary, and diagnose failures, but it should require an explicit
+release trigger and leave device acceptance to a human tester. Signing tokens,
+profiles, and registry credentials must remain in their existing secret stores
+and must never be written to generated reports or Git history.
+
 ## Verification completed on 2026-08-23
 
-- Mobile tests: 8 passed.
+- Mobile tests: 10 passed.
 - Repository suite: 148 passed and 5 environment-dependent tests skipped.
 - Website route and SideStore-source tests passed.
 - The live `/source.json` passed the official SideStore JSON schema.
