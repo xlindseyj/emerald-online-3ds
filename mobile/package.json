@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^7.6.0",
-    "@capacitor/ios": "^7.6.0",
+    "@capacitor/ios": "^7.6.9",
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.0",
     "react": "^19.1.1",
