@@ -25,7 +25,7 @@
     "smoke:windows": "node tools/desktop-smoke.mjs --platform=windows --duration=12000"
   },
   "devDependencies": {
-    "electron": "43.4.1",
+    "electron": "43.8.1",
     "electron-builder": "26.15.3"
   },
   "build": {
